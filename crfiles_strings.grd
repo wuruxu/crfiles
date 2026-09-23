@@ -1,0 +1,194 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<grit latest_public_release="0" current_release="1" source_lang_id="en" enc_check="möl">
+  <outputs>
+    <output filename="grit/crfiles_strings.h" type="rc_header"><emit emit_type="prepend"></emit></output>
+    <output filename="crfiles_strings_en-US.pak" type="data_package" lang="en" />
+    <output filename="crfiles_strings_zh-CN.pak" type="data_package" lang="zh-CN" />
+    <output filename="crfiles_strings_zh-HK.pak" type="data_package" lang="zh-HK" />
+    <output filename="crfiles_strings_zh-TW.pak" type="data_package" lang="zh-TW" />
+    <output filename="crfiles_strings_ar.pak" type="data_package" lang="ar" />
+    <output filename="crfiles_strings_fr.pak" type="data_package" lang="fr" />
+    <output filename="crfiles_strings_fr-CA.pak" type="data_package" lang="fr-CA" />
+    <output filename="crfiles_strings_ru.pak" type="data_package" lang="ru" />
+    <output filename="crfiles_strings_es.pak" type="data_package" lang="es" />
+    <output filename="crfiles_strings_es-419.pak" type="data_package" lang="es-419" />
+    <output filename="crfiles_strings_pt-BR.pak" type="data_package" lang="pt-BR" />
+    <output filename="crfiles_strings_pt-PT.pak" type="data_package" lang="pt-PT" />
+  </outputs>
+  <translations>
+    <file path="translations/crfiles_strings_zh-CN.xtb" lang="zh-CN" />
+    <file path="translations/crfiles_strings_zh-HK.xtb" lang="zh-HK" />
+    <file path="translations/crfiles_strings_zh-TW.xtb" lang="zh-TW" />
+    <file path="translations/crfiles_strings_ar.xtb" lang="ar" />
+    <file path="translations/crfiles_strings_fr.xtb" lang="fr" />
+    <file path="translations/crfiles_strings_fr-CA.xtb" lang="fr-CA" />
+    <file path="translations/crfiles_strings_ru.xtb" lang="ru" />
+    <file path="translations/crfiles_strings_es.xtb" lang="es" />
+    <file path="translations/crfiles_strings_es-419.xtb" lang="es-419" />
+    <file path="translations/crfiles_strings_pt-BR.xtb" lang="pt-BR" />
+    <file path="translations/crfiles_strings_pt-PT.xtb" lang="pt-PT" />
+  </translations>
+  <release seq="1">
+    <!-- Reserve 31000-31999 for strings; keep binary assets in a separate range. -->
+    <includes first_id="32000">
+      <include name="IDR_CRFILES_AVATAR_0" file="../chrome/app/theme/default_200_percent/common/profile_avatar_cat.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_1" file="../chrome/app/theme/default_200_percent/common/profile_avatar_dog.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_2" file="../chrome/app/theme/default_200_percent/common/profile_avatar_flower.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_3" file="../chrome/app/theme/default_200_percent/common/profile_avatar_horse.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_4" file="../chrome/app/theme/default_200_percent/common/profile_avatar_cupcake.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_5" file="../chrome/app/theme/default_200_percent/common/profile_avatar_awesome.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_6" file="../chrome/app/theme/default_200_percent/common/profile_avatar_soccer.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_7" file="../chrome/app/theme/default_200_percent/common/profile_avatar_ninja.png" type="BINDATA" />
+      <include name="IDR_CRFILES_AVATAR_8" file="../chrome/app/theme/default_200_percent/common/profile_avatar_sun_cloud.png" type="BINDATA" />
+    </includes>
+    <messages first_id="31000">
+      <message name="IDS_CRFILES_ABOUT" desc="crFiles file manager interface.">About</message>
+      <message name="IDS_CRFILES_ACCEPT" desc="crFiles file manager interface.">Accept</message>
+      <message name="IDS_CRFILES_BACK" desc="crFiles file manager interface.">Back</message>
+      <message name="IDS_CRFILES_CANCEL" desc="crFiles file manager interface.">Cancel</message>
+      <message name="IDS_CRFILES_CANCELED" desc="crFiles file manager interface.">Transfer canceled</message>
+      <message name="IDS_CRFILES_CLOSE" desc="crFiles file manager interface.">Close</message>
+      <message name="IDS_CRFILES_COMPARE_CODE" desc="crFiles file manager interface.">Compare the entire code on both devices before accepting.</message>
+      <message name="IDS_CRFILES_COMPLETE" desc="crFiles file manager interface.">Transfer complete</message>
+      <message name="IDS_CRFILES_CONFIG_ERROR" desc="crFiles file manager interface.">Enter a device name (up to 64 UTF-8 bytes) and an absolute receive folder. Settings must be writable.</message>
+      <message name="IDS_CRFILES_CONNECT_AUTH_ERROR" desc="crFiles file manager interface.">Access was denied or revoked. Check phone permissions and pair again if needed.</message>
+      <message name="IDS_CRFILES_CONNECT_CERT_ERROR" desc="crFiles file manager interface.">The phone certificate does not match. No credentials were sent.</message>
+      <message name="IDS_CRFILES_DESCRIPTION" desc="crFiles file manager interface.">A tabbed file manager with crPhotos-compatible nearby sharing.</message>
+      <message name="IDS_CRFILES_DEVICE_NAME" desc="crFiles file manager interface.">Device name</message>
+      <message name="IDS_CRFILES_DISABLE" desc="crFiles file manager interface.">Disable nearby sharing</message>
+      <message name="IDS_CRFILES_DOWNLOADS" desc="crFiles file manager interface.">Downloads</message>
+      <message name="IDS_CRFILES_EMPTY" desc="crFiles file manager interface.">This folder is empty.</message>
+      <message name="IDS_CRFILES_ENABLE" desc="crFiles file manager interface.">Enable nearby sharing</message>
+      <message name="IDS_CRFILES_EXIT_FULLSCREEN" desc="crFiles file manager interface.">Exit fullscreen</message>
+      <message name="IDS_CRFILES_FOLDER" desc="crFiles file manager interface.">Folder</message>
+      <message name="IDS_CRFILES_FORWARD" desc="crFiles file manager interface.">Forward</message>
+      <message name="IDS_CRFILES_FULLSCREEN" desc="crFiles file manager interface.">Fullscreen</message>
+      <message name="IDS_CRFILES_HOME" desc="crFiles file manager interface.">Home</message>
+      <message name="IDS_CRFILES_ICONS" desc="crFiles file manager interface.">Icons</message>
+      <message name="IDS_CRFILES_INSTALL_ON_DEVICE" desc="crFiles file manager interface.">Install on device</message>
+      <message name="IDS_CRFILES_INSTALL_ON_DEVICE_FAILED" desc="crFiles file manager interface.">crFiles could not be installed on this device.</message>
+      <message name="IDS_CRFILES_INSTALL_ON_DEVICE_SUCCESS" desc="crFiles file manager interface.">crFiles was installed on this device.</message>
+      <message name="IDS_CRFILES_ITEMS" desc="crFiles file manager interface.">items</message>
+      <message name="IDS_CRFILES_LANGUAGE" desc="crFiles file manager interface.">Language</message>
+      <message name="IDS_CRFILES_LANGUAGE_RESTART" desc="crFiles file manager interface.">Restart crFiles to apply language changes.</message>
+      <message name="IDS_CRFILES_LIST" desc="crFiles file manager interface.">List</message>
+      <message name="IDS_CRFILES_LOADING" desc="crFiles file manager interface.">Loading folder…</message>
+      <message name="IDS_CRFILES_LOCATION" desc="crFiles file manager interface.">Location</message>
+      <message name="IDS_CRFILES_MAXIMIZE" desc="crFiles file manager interface.">Maximize</message>
+      <message name="IDS_CRFILES_MENU" desc="crFiles file manager interface.">Menu</message>
+      <message name="IDS_CRFILES_MINIMIZE" desc="crFiles file manager interface.">Minimize</message>
+      <message name="IDS_CRFILES_MORE" desc="crFiles file manager interface.">Show more</message>
+      <message name="IDS_CRFILES_NEARBY" desc="crFiles file manager interface.">Nearby devices</message>
+      <message name="IDS_CRFILES_NEARBY_OFF" desc="crFiles file manager interface.">Sharing is off.</message>
+      <message name="IDS_CRFILES_NEARBY_READY" desc="crFiles file manager interface.">Devices on your local network appear here.</message>
+      <message name="IDS_CRFILES_NEW_TAB" desc="crFiles file manager interface.">New tab</message>
+      <message name="IDS_CRFILES_OPEN" desc="crFiles file manager interface.">Open</message>
+      <message name="IDS_CRFILES_OPEN_ERROR" desc="crFiles file manager interface.">Unable to open this file.</message>
+      <message name="IDS_CRFILES_PHONE_SEND_ERROR" desc="crFiles file manager interface.">Could not finish sending. Check the connection, available phone storage and selected media (1–128 files, up to 16 GB each and 64 GB total). Completed files are kept.</message>
+      <message name="IDS_CRFILES_PHONE_SEND_PAIR" desc="crFiles file manager interface.">Pair this phone in Connect first, then send again.</message>
+      <message name="IDS_CRFILES_PHONE_SEND_PREPARING" desc="crFiles file manager interface.">Preparing photos and videos…</message>
+      <message name="IDS_CRFILES_PHONE_SEND_WAITING" desc="crFiles file manager interface.">Accept the transfer in crFiles on your phone.</message>
+      <message name="IDS_CRFILES_READ_ERROR" desc="crFiles file manager interface.">Unable to read this folder. Check its path and permissions.</message>
+      <message name="IDS_CRFILES_RECEIVED" desc="crFiles file manager interface.">Received files</message>
+      <message name="IDS_CRFILES_RECEIVE_DIRECTORY" desc="crFiles file manager interface.">Receive folder</message>
+      <message name="IDS_CRFILES_RECEIVE_PROMPT" desc="crFiles file manager interface.">Receive these files in the folder shown above?</message>
+      <message name="IDS_CRFILES_REFRESH" desc="crFiles file manager interface.">Refresh</message>
+      <message name="IDS_CRFILES_REJECT" desc="crFiles file manager interface.">Reject</message>
+      <message name="IDS_CRFILES_RESTORE" desc="crFiles file manager interface.">Restore</message>
+      <message name="IDS_CRFILES_SELECTED" desc="crFiles file manager interface.">selected</message>
+      <message name="IDS_CRFILES_SEND" desc="crFiles file manager interface.">Send selected files</message>
+      <message name="IDS_CRFILES_SEND_ERROR" desc="crFiles file manager interface.">Select files to send and check that the device is available.</message>
+      <message name="IDS_CRFILES_SETTINGS" desc="crFiles file manager interface.">Settings</message>
+      <message name="IDS_CRFILES_SYSTEM_LANGUAGE" desc="crFiles file manager interface.">System default</message>
+      <message name="IDS_CRFILES_THEME_DARK" desc="crFiles file manager interface.">Use dark theme</message>
+      <message name="IDS_CRFILES_THEME_LIGHT" desc="crFiles file manager interface.">Use light theme</message>
+      <message name="IDS_CRFILES_THEME_SYSTEM" desc="crFiles file manager interface.">Use system theme</message>
+      <message name="IDS_CRFILES_TRANSFERRING" desc="crFiles file manager interface.">Transfer progress</message>
+      <message name="IDS_CRFILES_TRANSFER_ERROR" desc="crFiles file manager interface.">Transfer failed. Check the connection and receive folder.</message>
+      <message name="IDS_CRFILES_UP" desc="crFiles file manager interface.">Up</message>
+      <message name="IDS_CRFILES_VIEW_OPTIONS" desc="File view options and column labels.">View Options</message>
+      <message name="IDS_CRFILES_ICON_SIZE" desc="File view options and column labels.">Icon Size</message>
+      <message name="IDS_CRFILES_SORT_A_Z" desc="File view options and column labels.">A-Z</message>
+      <message name="IDS_CRFILES_SORT_Z_A" desc="File view options and column labels.">Z-A</message>
+      <message name="IDS_CRFILES_LAST_MODIFIED" desc="File view options and column labels.">Last Modified</message>
+      <message name="IDS_CRFILES_FIRST_MODIFIED" desc="File view options and column labels.">First Modified</message>
+      <message name="IDS_CRFILES_SIZE" desc="File view options and column labels.">Size</message>
+      <message name="IDS_CRFILES_TYPE" desc="File view options and column labels.">Type</message>
+      <message name="IDS_CRFILES_SHOW_HIDDEN" desc="File view options and column labels.">Show Hidden Files</message>
+      <message name="IDS_CRFILES_VISIBLE_COLUMNS" desc="File view options and column labels.">Visible Columns</message>
+      <message name="IDS_CRFILES_NAME" desc="File view options and column labels.">Name</message>
+      <message name="IDS_CRFILES_SIDEBAR_WIDTH" desc="File view options and column labels.">Sidebar Width</message>
+      <message name="IDS_CRFILES_DESKTOP" desc="Sidebar locations and system trash.">Desktop</message>
+      <message name="IDS_CRFILES_TRASH" desc="Sidebar locations and system trash.">Trash</message>
+      <message name="IDS_CRFILES_TRASH_ERROR" desc="Sidebar locations and system trash.">Some items could not be moved or restored. Existing files are not overwritten.</message>
+      <message name="IDS_CRFILES_MOVE_TRASH" desc="Move selected items to the app trash.">Move to Trash</message>
+      <message name="IDS_CRFILES_NEW_FOLDER" desc="Create a folder in the current directory.">New folder</message>
+      <message name="IDS_CRFILES_NEW_FOLDER_ERROR" desc="Create a folder in the current directory.">Unable to create the folder. Check its name, permissions, and whether it already exists.</message>
+      <message name="IDS_CRFILES_SPLIT_LEFT" desc="File pane split controls.">Split left</message>
+      <message name="IDS_CRFILES_SPLIT_RIGHT" desc="File pane split controls.">Split right</message>
+      <message name="IDS_CRFILES_SPLIT_TOP" desc="File pane split controls.">Split top</message>
+      <message name="IDS_CRFILES_SPLIT_BOTTOM" desc="File pane split controls.">Split bottom</message>
+      <message name="IDS_CRFILES_CLOSE_PANE" desc="File pane split controls.">Close pane</message>
+      <message name="IDS_CRFILES_RESIZE_SPLIT" desc="File pane split controls.">Resize split</message>
+      <message name="IDS_CRFILES_SHARE_PANE" desc="Shared file panes and local file operations.">Share</message>
+      <message name="IDS_CRFILES_SHARED_PANE" desc="Shared file panes and local file operations.">Sharing this folder</message>
+      <message name="IDS_CRFILES_RENAME_PANE" desc="Shared file panes and local file operations.">Rename pane</message>
+      <message name="IDS_CRFILES_PANE_NAME_ERROR" desc="Shared file panes and local file operations.">Enter a shorter name without control characters.</message>
+      <message name="IDS_CRFILES_FILE_OPERATION_ERROR" desc="Shared file panes and local file operations.">Some file operations could not be completed. Existing items were not overwritten.</message>
+      <message name="IDS_CRFILES_HISTORY" desc="File operation history.">History</message>
+      <message name="IDS_CRFILES_HISTORY_EMPTY" desc="File operation history.">No file operations yet</message>
+      <message name="IDS_CRFILES_HISTORY_MOVE" desc="File operation history.">Move</message>
+      <message name="IDS_CRFILES_HISTORY_COPY" desc="File operation history.">Copy</message>
+      <message name="IDS_CRFILES_HISTORY_SEND" desc="File operation history.">Send</message>
+      <message name="IDS_CRFILES_HISTORY_RECEIVE" desc="File operation history.">Receive</message>
+      <message name="IDS_CRFILES_HISTORY_DRAG" desc="File operation history.">Drag and drop</message>
+      <message name="IDS_CRFILES_HISTORY_MENU" desc="File operation history.">Menu / button</message>
+      <message name="IDS_CRFILES_HISTORY_REMOTE" desc="File operation history.">Remote client</message>
+      <message name="IDS_CRFILES_HISTORY_SUCCESS" desc="File operation history.">Succeeded</message>
+      <message name="IDS_CRFILES_HISTORY_FAILED" desc="File operation history.">Failed</message>
+      <message name="IDS_CRFILES_HISTORY_RETAINED" desc="File operation history.">Copied; source could not be removed</message>
+      <message name="IDS_CRFILES_HISTORY_PENDING" desc="File operation history.">In progress or interrupted</message>
+      <message name="IDS_CRFILES_HISTORY_SOURCE" desc="File operation history.">Source</message>
+      <message name="IDS_CRFILES_HISTORY_DESTINATION" desc="File operation history.">Destination</message>
+      <message name="IDS_CRFILES_HISTORY_SEARCH" desc="History path search.">Search file paths</message>
+      <message name="IDS_CRFILES_HISTORY_NO_MATCHES" desc="History path search.">No matching file operations</message>
+      <message name="IDS_CRFILES_HISTORY_FILTER" desc="History filtering and access records.">Filter</message>
+      <message name="IDS_CRFILES_HISTORY_ACCESS" desc="History filtering and access records.">Access</message>
+      <message name="IDS_CRFILES_HISTORY_OPEN_FILE" desc="History filtering and access records.">Open File</message>
+      <message name="IDS_CRFILES_GENERAL" desc="Settings and history retention.">General</message>
+      <message name="IDS_CRFILES_BUILD_TIME" desc="Settings and history retention.">Build time</message>
+      <message name="IDS_CRFILES_KEEP_HISTORY" desc="Settings and history retention.">Keep history for</message>
+      <message name="IDS_CRFILES_HISTORY_7_DAYS" desc="Settings and history retention.">7 days</message>
+      <message name="IDS_CRFILES_HISTORY_30_DAYS" desc="Settings and history retention.">30 days</message>
+      <message name="IDS_CRFILES_HISTORY_90_DAYS" desc="Settings and history retention.">90 days</message>
+      <message name="IDS_CRFILES_HISTORY_1_YEAR" desc="Settings and history retention.">1 year</message>
+      <message name="IDS_CRFILES_PROJECT" desc="Nearby sharing settings and About information.">Project:</message>
+      <message name="IDS_CRFILES_AUTHOR" desc="Nearby sharing settings and About information.">Author</message>
+      <message name="IDS_CRFILES_NEARBY_SETTINGS" desc="Nearby sharing settings and About information.">Nearby sharing</message>
+      <message name="IDS_CRFILES_APPLY" desc="Nearby sharing settings and About information.">Apply</message>
+      <message name="IDS_CRFILES_AVATAR" desc="Nearby sharing settings and About information.">Choose avatar</message>
+      <message name="IDS_CRFILES_DISCOVERY" desc="Nearby sharing settings and About information.">Allow nearby discovery and receiving</message>
+      <message name="IDS_CRFILES_AUTO_ACCEPT" desc="Nearby sharing settings and About information.">Automatically accept files from trusted devices</message>
+      <message name="IDS_CRFILES_CUT" desc="File and folder context menu.">Cut</message>
+      <message name="IDS_CRFILES_PASTE" desc="File and folder context menu.">Paste</message>
+      <message name="IDS_CRFILES_MOVE_TO" desc="File and folder context menu.">Move to</message>
+      <message name="IDS_CRFILES_COPY_TO" desc="File and folder context menu.">Copy to</message>
+      <message name="IDS_CRFILES_RENAME" desc="File and folder context menu.">Rename</message>
+      <message name="IDS_CRFILES_COMPRESS" desc="File and folder context menu.">Compress</message>
+      <message name="IDS_CRFILES_OPEN_TERMINAL" desc="File and folder context menu.">Open in Terminal</message>
+      <message name="IDS_CRFILES_COPY_PATH" desc="File and folder context menu.">Copy File Path</message>
+      <message name="IDS_CRFILES_PROPERTIES" desc="File and folder context menu.">Properties</message>
+      <message name="IDS_CRFILES_OPEN_NEW_TAB" desc="File and folder context menu.">Open in New Tab</message>
+      <message name="IDS_CRFILES_OPEN_SPLIT" desc="File and folder context menu.">Open in Split</message>
+      <message name="IDS_CRFILES_OPEN_WITH" desc="File and folder context menu.">Open With</message>
+      <message name="IDS_CRFILES_AUTO_HIDE_TOOLBAR" desc="Toolbar preferences and file sharing dialog.">Automatically hide toolbar</message>
+      <message name="IDS_CRFILES_ANIMATE_FOLDERS" desc="Toolbar preferences and file sharing dialog.">Animate folder contents</message>
+      <message name="IDS_CRFILES_SHARE_TO" desc="Toolbar preferences and file sharing dialog.">Share to</message>
+      <message name="IDS_CRFILES_FILES" desc="Toolbar preferences and file sharing dialog.">Files</message>
+      <message name="IDS_CRFILES_FOLDERS" desc="Toolbar preferences and file sharing dialog.">Folders</message>
+      <message name="IDS_CRFILES_TOTAL_SIZE" desc="Toolbar preferences and file sharing dialog.">Total size</message>
+      <message name="IDS_CRFILES_MANUAL_CONNECTION" desc="Toolbar preferences and file sharing dialog.">Manual connection</message>
+      <message name="IDS_CRFILES_DEVICE_ADDRESS" desc="Toolbar preferences and file sharing dialog.">Device address</message>
+    </messages>
+  </release>
+</grit>

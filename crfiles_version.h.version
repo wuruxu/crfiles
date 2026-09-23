@@ -1,0 +1,17 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef CRFILES_CRFILES_VERSION_H_
+#define CRFILES_CRFILES_VERSION_H_
+
+#define CRFILES_VERSION_MAJOR @MAJOR@
+#define CRFILES_VERSION_MINOR @MINOR@
+#define CRFILES_VERSION_PATCH @PATCH@
+#define CRFILES_VERSION_BUILD @BUILD@
+
+#define CRFILES_VERSION_STRING "@MAJOR@.@MINOR@.@PATCH@"
+#define CRFILES_FILE_VERSION_STRING "@MAJOR@.@MINOR@.@PATCH@.@BUILD@"
+#define CRFILES_VERSION_COMMA @MAJOR@,@MINOR@,@PATCH@,@BUILD@
+
+#endif  // CRFILES_CRFILES_VERSION_H_

@@ -1,0 +1,231 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+import("//build/config/ui.gni")
+import("//build/util/process_version.gni")
+import("//libcr/locales.gni")
+import("//tools/grit/grit_rule.gni")
+import("//tools/grit/repack.gni")
+if (is_linux) {
+  import("//build/config/linux/pkg_config.gni")
+  pkg_config("context_gio") {
+    packages = [ "gio-unix-2.0" ]
+  }
+}
+crfiles_locales = libcr_supported_locales
+
+process_version("crfiles_version") {
+  process_only = true
+  sources = [ "VERSION" ]
+  template_file = "crfiles_version.h.version"
+  output = "$target_gen_dir/crfiles_version.h"
+}
+
+grit("crfiles_strings") {
+  source = "crfiles_strings.grd"
+  resource_ids = ""
+  outputs = [
+    "grit/crfiles_strings.h",
+    "crfiles_strings_en-US.pak",
+  ]
+
+  foreach(locale, crfiles_locales) {
+    outputs += [ "crfiles_strings_${locale}.pak" ]
+  }
+}
+
+repack("crfiles_resources_pak") {
+  sources = [
+    "$root_gen_dir/crFiles/crfiles_strings_en-US.pak",
+    "$root_gen_dir/ui/resources/ui_resources_100_percent.pak",
+    "$root_gen_dir/ui/strings/app_locale_settings_en-US.pak",
+    "$root_gen_dir/ui/strings/ax_strings_en-US.pak",
+    "$root_gen_dir/ui/strings/ui_strings_en-US.pak",
+  ]
+  output = "$root_out_dir/crfiles_resources.pak"
+  deps = [
+    ":crfiles_strings",
+    "//ui/resources",
+    "//ui/strings",
+  ]
+  if (toolkit_views) {
+    sources +=
+        [ "$root_gen_dir/ui/views/resources/views_resources_100_percent.pak" ]
+    deps += [ "//ui/views/resources" ]
+  }
+}
+
+foreach(locale, crfiles_locales) {
+  repack("crfiles_resources_${locale}_pak") {
+    sources = [
+      "$root_gen_dir/crFiles/crfiles_strings_${locale}.pak",
+      "$root_gen_dir/ui/strings/app_locale_settings_${locale}.pak",
+      "$root_gen_dir/ui/strings/ax_strings_${locale}.pak",
+      "$root_gen_dir/ui/strings/ui_strings_${locale}.pak",
+    ]
+    output = "$root_out_dir/crfiles_resources_${locale}.pak"
+    deps = [
+      ":crfiles_strings",
+      "//ui/strings",
+    ]
+  }
+}
+
+repack("crfiles_resources_200_percent_pak") {
+  sources = [ "$root_gen_dir/ui/resources/ui_resources_200_percent.pak" ]
+  output = "$root_out_dir/crfiles_resources_200_percent.pak"
+  deps = [ "//ui/resources" ]
+  if (toolkit_views) {
+    sources +=
+        [ "$root_gen_dir/ui/views/resources/views_resources_200_percent.pak" ]
+    deps += [ "//ui/views/resources" ]
+  }
+}
+
+copy("app_icon") {
+  sources = [ "crFiles.svg" ]
+  outputs = [ "$root_out_dir/crfiles_resources/{{source_file_part}}" ]
+}
+
+copy("file_icons") {
+  sources = [
+    "resources/file_icons/COPYRIGHT",
+    "resources/file_icons/README.md",
+    "resources/file_icons/application-x-executable.svg",
+    "resources/file_icons/application-x-generic.svg",
+    "resources/file_icons/audio-x-generic.svg",
+    "resources/file_icons/font-x-generic.svg",
+    "resources/file_icons/image-x-generic.svg",
+    "resources/file_icons/inode-directory.svg",
+    "resources/file_icons/package-x-generic.svg",
+    "resources/file_icons/text-html.svg",
+    "resources/file_icons/text-x-generic.svg",
+    "resources/file_icons/text-x-script.svg",
+    "resources/file_icons/video-x-generic.svg",
+    "resources/file_icons/x-office-document.svg",
+    "resources/file_icons/x-office-presentation.svg",
+    "resources/file_icons/x-office-spreadsheet.svg",
+  ]
+  outputs =
+      [ "$root_out_dir/crfiles_resources/file_icons/{{source_file_part}}" ]
+}
+
+executable("crFiles") {
+  sources = [
+    "crfiles_cache_state.cc",
+    "crfiles_cache_state.h",
+    "crfiles_history.cc",
+    "crfiles_history.h",
+    "crfiles_file_operations.cc",
+    "crfiles_file_operations.h",
+    "crfiles_app_icon.cc",
+    "crfiles_app_icon.h",
+    "crfiles_file_icons.cc",
+    "crfiles_file_icons.h",
+    "crfiles_image_preview.cc",
+    "crfiles_image_preview.h",
+    "crfiles_frame_view.cc",
+    "crfiles_frame_view.h",
+    "crfiles_main.cc",
+    "crfiles_settings_dialog.cc",
+    "crfiles_settings_dialog.h",
+    "crfiles_trash.cc",
+    "crfiles_trash.h",
+    "crfiles_theme.cc",
+    "crfiles_theme.h",
+    "crfiles_window.cc",
+    "crfiles_context_actions.cc",
+    "crfiles_context_actions.h",
+    "crfiles_window.h",
+    "sharing/connect_client.cc",
+    "sharing/connect_client.h",
+    "sharing/connect_discovery.cc",
+    "sharing/connect_discovery.h",
+    "sharing/nearby_files_win.h",
+    "sharing/file_share_dialog.cc",
+    "sharing/file_share_dialog.h",
+    "sharing/nearby_sharing.cc",
+    "sharing/nearby_sharing.h",
+    "sharing/nearby_socket.h",
+    "sharing/phone_sender.cc",
+    "sharing/phone_sender.h",
+  ]
+  deps = [
+    ":crfiles_strings",
+    ":crfiles_version",
+    "//base",
+    "//base:i18n",
+    "//cc/paint",
+    "//chrome/app/vector_icons",
+    "//components/discardable_memory/service",
+    "//components/vector_icons",
+    "//crypto",
+    "//libcr",
+    "//libcr:viz",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//net/traffic_annotation",
+    "//skia",
+    "//third_party/sqlite",
+    "//third_party/zlib/google:zip",
+    "//third_party/boringssl",
+    "//ui/accessibility",
+    "//ui/base",
+    "//ui/shell_dialogs",
+    "//ui/base/ime/init",
+    "//ui/color",
+    "//ui/compositor",
+    "//ui/display",
+    "//ui/events",
+    "//ui/gfx",
+    "//ui/gfx/codec",
+    "//ui/gl",
+    "//ui/gl/init",
+    "//ui/native_theme",
+    "//ui/views",
+    "//ui/menus",
+    "//url",
+  ]
+  if (is_linux) {
+    configs += [ ":context_gio" ]
+  }
+  data_deps = [
+    ":app_icon",
+    ":crfiles_resources_200_percent_pak",
+    ":crfiles_resources_pak",
+    ":file_icons",
+  ]
+  foreach(locale, crfiles_locales) {
+    data_deps += [ ":crfiles_resources_${locale}_pak" ]
+  }
+  if (use_aura) {
+    deps += [
+      "//ui/aura",
+      "//ui/wm",
+    ]
+  }
+  if (use_ozone) {
+    deps += [ "//ui/ozone" ]
+  }
+  if (is_linux) {
+    deps += [
+      "//ui/linux:display_server_utils",
+      "//ui/linux:linux_ui_factory",
+    ]
+  }
+  if (is_win) {
+    sources += [
+      "crfiles_exe.rc",
+      "resources/win/crfiles_resource.h",
+    ]
+    inputs = [ "resources/win/crfiles_app_icon.ico" ]
+    libs = [
+      "iphlpapi.lib",
+      "ws2_32.lib",
+      "shell32.lib",
+    ]
+    configs += [ "//build/config/win:windowed" ]
+    configs -= [ "//build/config/win:console" ]
+  }
+}

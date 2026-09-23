@@ -1,0 +1,7 @@
+# Include from the Chromium source root Makefile. Never invoke ninja directly.
+.PHONY: crfiles crfileswin
+crfiles:
+	autoninja -C out/debian crFiles
+
+crfileswin:
+	autoninja -C out/win10 crFiles

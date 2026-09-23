@@ -1,0 +1,179 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_cache_state.h"
+#include "crFiles/crfiles_image_preview.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <list>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <tuple>
+#include <string>
+#include <utility>
+#include "base/files/file_util.h"
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
+#include "ui/gfx/image/image_skia_rep.h"
+#include "third_party/skia/include/codec/SkCodec.h"
+#include "third_party/skia/include/codec/SkEncodedOrigin.h"
+#include "third_party/skia/include/codec/SkJpegDecoder.h"
+#include "third_party/skia/include/codec/SkWebpDecoder.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkData.h"
+#include "third_party/skia/include/core/SkImage.h"
+#include "third_party/skia/include/core/SkSamplingOptions.h"
+#include "third_party/skia/include/core/SkStream.h"
+#include "third_party/skia/modules/svg/include/SkSVGDOM.h"
+#include "third_party/skia/modules/svg/include/SkSVGSVG.h"
+namespace crfiles {
+namespace {
+using ThumbnailKey = std::tuple<base::FilePath, int64_t, base::Time, base::Time, int>;
+struct ThumbnailItem {
+  ThumbnailKey key; gfx::ImageSkia image; size_t bytes;
+  std::shared_ptr<FileCacheEpoch> epoch;
+  uint64_t revision;
+};
+struct ThumbnailCache {
+  base::Lock lock;
+  std::list<ThumbnailItem> recent;
+  std::map<ThumbnailKey, std::list<ThumbnailItem>::iterator> index;
+  size_t bytes = 0;
+  void Erase(std::list<ThumbnailItem>::iterator item) {
+    bytes -= item->bytes; index.erase(item->key); recent.erase(item);
+  }
+};
+ThumbnailCache& Thumbnails() {
+  static base::NoDestructor<ThumbnailCache> cache;
+  return *cache;
+}
+}
+gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled) {
+  auto stopped = [&] { return canceled && canceled->load(std::memory_order_relaxed); };
+  if (stopped() || maximum_edge <= 0 || maximum_edge > 128) return {};
+  auto epoch = ObserveFileCachePath(path, false);
+  const auto revision = epoch->revision.load();
+  base::File::Info before;
+  if (!base::GetFileInfo(path, &before) || before.is_directory || stopped()) return {};
+  const ThumbnailKey key{path, before.size, before.last_modified, before.creation_time, maximum_edge};
+  auto& cache = Thumbnails();
+  {
+    base::AutoLock guard(cache.lock);
+    auto found = cache.index.find(key);
+    if (found != cache.index.end() && !found->second->epoch->Matches(found->second->revision)) {
+      cache.Erase(found->second); found = cache.index.end();
+    }
+    if (epoch->Matches(revision) && found != cache.index.end()) {
+      cache.recent.splice(cache.recent.begin(), cache.recent, found->second);
+      return found->second->image;
+    }
+  }
+  // Neither filesystem IO nor image decoding holds the shared cache lock.
+  auto image = LoadImagePreviewCancelable(path, maximum_edge, canceled);
+  if (stopped() || image.isNull()) return {};
+  base::File::Info after;
+  if (!base::GetFileInfo(path, &after) || after.is_directory || before.size != after.size ||
+      before.last_modified != after.last_modified || before.creation_time != after.creation_time) return {};
+  const size_t bytes = sizeof(ThumbnailItem) + sizeof(ThumbnailKey) + 8 * sizeof(void*) +
+      2 * path.value().capacity() * sizeof(base::FilePath::CharType) +
+      image.GetRepresentation(1.f).GetBitmap().computeByteSize();
+  constexpr size_t kMaxBytes = 64 * 1024 * 1024;
+  base::AutoLock guard(cache.lock);
+  if (stopped()) return {};
+  if (!epoch->Matches(revision)) return {};
+  if (bytes > kMaxBytes) return image;
+  // Replace obsolete versions of this path instead of retaining every edit.
+  auto item = cache.index.lower_bound(ThumbnailKey{path, std::numeric_limits<int64_t>::min(),
+      base::Time(), base::Time(), 0});
+  while (item != cache.index.end() && std::get<0>(item->first) == path) {
+    auto old = item++;
+    if (std::get<4>(old->first) == maximum_edge) cache.Erase(old->second);
+  }
+  while (!cache.recent.empty() && (cache.recent.size() >= 1024 || cache.bytes + bytes > kMaxBytes))
+    cache.Erase(std::prev(cache.recent.end()));
+  cache.recent.push_front({key, image, bytes, std::move(epoch), revision});
+  cache.index.emplace(key, cache.recent.begin()); cache.bytes += bytes;
+  return image;
+}
+gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge) {
+  return LoadImagePreviewCancelable(path, maximum_edge, {});
+}
+gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled) {
+  auto stopped = [&] { return canceled && canceled->load(std::memory_order_relaxed); };
+  if (stopped()) return {};
+  if (maximum_edge <= 0 || maximum_edge > 2048) return {};
+  std::string encoded;
+  if (!base::ReadFileToStringWithMaxSize(path, &encoded, 64 * 1024 * 1024)) return {};
+  if (stopped()) return {};
+  SkBitmap result;
+  if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
+    SkMemoryStream stream(encoded.data(), encoded.size(), true);
+    auto dom = SkSVGDOM::MakeFromStream(stream);
+    if (!dom || !dom->getRoot()) return {};
+    auto size = dom->containerSize();
+    if (size.isEmpty() && dom->getRoot()->getViewBox()) {
+      const auto& box = *dom->getRoot()->getViewBox();
+      size = SkSize::Make(box.width(), box.height());
+    }
+    if (size.isEmpty()) size = SkSize::Make(300, 150);
+    if (!std::isfinite(size.width()) || !std::isfinite(size.height())) return {};
+    const float scale = maximum_edge / std::max(size.width(), size.height());
+    if (!std::isfinite(scale)) return {};
+    const int width = std::max(1, static_cast<int>(std::round(size.width() * scale)));
+    const int height = std::max(1, static_cast<int>(std::round(size.height() * scale)));
+    if (!result.tryAllocN32Pixels(width, height)) return {};
+    result.eraseColor(SK_ColorTRANSPARENT);
+    SkCanvas canvas(result);
+    canvas.scale(scale, scale);
+    // Resolve percentage dimensions against the document's viewport.
+    dom->setContainerSize(size);
+    if (stopped()) return {};
+    dom->render(&canvas);
+  } else {
+    auto data = SkData::MakeWithCopy(encoded.data(), encoded.size());
+    std::unique_ptr<SkCodec> codec;
+    SkCodec::Result status;
+    if (SkJpegDecoder::IsJpeg(encoded.data(), encoded.size()))
+      codec = SkJpegDecoder::Decode(std::move(data), &status);
+    else if (SkWebpDecoder::IsWebp(encoded.data(), encoded.size()))
+      codec = SkWebpDecoder::Decode(std::move(data), &status);
+    else codec = SkCodec::MakeFromData(std::move(data));
+    if (!codec) return {};
+    const auto original = codec->getInfo();
+    if (original.width() <= 0 || original.height() <= 0) return {};
+    const float scale = std::min(1.f, static_cast<float>(maximum_edge) /
+        std::max(original.width(), original.height()));
+    const auto dimensions = codec->getScaledDimensions(scale);
+    // Some codecs must decode at full resolution before downsampling.
+    if (dimensions.width() <= 0 || dimensions.height() <= 0 ||
+        static_cast<int64_t>(dimensions.width()) * dimensions.height() > 64 * 1024 * 1024) return {};
+    auto info = SkImageInfo::MakeN32Premul(dimensions.width(), dimensions.height());
+    SkBitmap bitmap;
+    if (!bitmap.tryAllocPixels(info)) return {};
+    bitmap.eraseColor(SK_ColorTRANSPARENT);
+    if (stopped()) return {};
+    if (codec->getPixels(info, bitmap.getPixels(), bitmap.rowBytes()) != SkCodec::kSuccess) return {};
+    if (stopped()) return {};
+    int width = std::max(1, static_cast<int>(std::round(original.width() * scale)));
+    int height = std::max(1, static_cast<int>(std::round(original.height() * scale)));
+    const auto origin = codec->getOrigin();
+    const bool swap = SkEncodedOriginSwapsWidthHeight(origin);
+    if (!result.tryAllocN32Pixels(swap ? height : width, swap ? width : height)) return {};
+    result.eraseColor(SK_ColorTRANSPARENT);
+    SkCanvas canvas(result);
+    canvas.concat(SkEncodedOriginToMatrix(origin, result.width(), result.height()));
+    canvas.drawImageRect(bitmap.asImage(), SkRect::MakeWH(width, height),
+        SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+  }
+  if (stopped()) return {};
+  result.setImmutable();
+  auto image = gfx::ImageSkia::CreateFromBitmap(result, 1.f);
+  image.MakeThreadSafe();
+  return image;
+}
+}

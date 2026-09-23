@@ -1,0 +1,42 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include <winver.h>
+
+#include "crFiles/resources/win/crfiles_resource.h"
+#include "crFiles/crfiles_version.h"
+
+// The first and lowest-numbered icon is used by Explorer and shortcuts.
+IDI_CRFILES_APP_ICON ICON "resources\\win\\crfiles_app_icon.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION CRFILES_VERSION_COMMA
+ PRODUCTVERSION CRFILES_VERSION_COMMA
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "crFiles file manager"
+      VALUE "FileVersion", CRFILES_FILE_VERSION_STRING
+      VALUE "InternalName", "crFiles"
+      VALUE "OriginalFilename", "crFiles.exe"
+      VALUE "ProductName", "crFiles"
+      VALUE "ProductVersion", CRFILES_VERSION_STRING
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END
