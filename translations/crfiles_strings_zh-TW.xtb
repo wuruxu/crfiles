@@ -147,4 +147,20 @@
   <translation id="1679468732025957970">總大小</translation>
   <translation id="5773396583717901962">手動連線</translation>
   <translation id="2199490340923544295">裝置位址</translation>
+  <translation id="7997020651253694232">已信任裝置</translation>
+  <translation id="5286485239428440530">尚無已信任裝置。</translation>
+  <translation id="8986362086234534611">取消信任</translation>
+  <translation id="4921685967128462327"><ph name="NAME"/> · 信任時間：<ph name="TRUSTED"/> · 最後活躍：<ph name="ACTIVE"/></translation>
+  <translation id="8352583813781765412">傳送：<ph name="SENT"/> · 接收：<ph name="RECEIVED"/></translation>
+  <translation id="947347161463981946">信任此裝置（下次略過驗證碼核對）</translation>
+  <translation id="997416069389860447">分享失敗。請檢查位址、資料夾權限、可用空間及所選檔案（1–128 個，檔名不得重複）。</translation>
+  <translation id="4768520392674237594">總耗時</translation>
+  <translation id="6266010466321749320"><ph name="MINUTES"/> 分 <ph name="SECONDS"/> 秒</translation>
+  <translation id="3539227316283621565">圖片</translation>
+  <translation id="6146563240635539929">影片</translation>
+  <translation id="8929830219790827383">從書籤中移除</translation>
+  <translation id="3325995804968971809">樣式</translation>
+  <translation id="3122085228797291657">跟隨系統主題</translation>
+  <translation id="1807246157184219062">淺色</translation>
+  <translation id="2414886740292270097">深色</translation>
 </translationbundle>

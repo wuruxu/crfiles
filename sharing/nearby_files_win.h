@@ -31,10 +31,10 @@ inline bool IsRegularHandle(HANDLE handle, bool directory) {
 // be redirected by renaming/replacing an ancestor during a transfer.
 class PinnedDirectory {
  public:
-  PinnedDirectory() = default;
-  ~PinnedDirectory() = default;
-  PinnedDirectory(PinnedDirectory&&) = default;
-  PinnedDirectory& operator=(PinnedDirectory&&) = default;
+  PinnedDirectory();
+  ~PinnedDirectory();
+  PinnedDirectory(PinnedDirectory&&);
+  PinnedDirectory& operator=(PinnedDirectory&&);
   PinnedDirectory(const PinnedDirectory&) = delete;
   PinnedDirectory& operator=(const PinnedDirectory&) = delete;
 
@@ -118,10 +118,10 @@ inline bool ProtectPrivateDirectory(const base::FilePath& path) {
 
 class DirectoryLock {
  public:
-  DirectoryLock() = default;
-  ~DirectoryLock() = default;
-  DirectoryLock(DirectoryLock&&) = default;
-  DirectoryLock& operator=(DirectoryLock&&) = default;
+  DirectoryLock();
+  ~DirectoryLock();
+  DirectoryLock(DirectoryLock&&);
+  DirectoryLock& operator=(DirectoryLock&&);
   DirectoryLock(const DirectoryLock&) = delete;
   DirectoryLock& operator=(const DirectoryLock&) = delete;
 

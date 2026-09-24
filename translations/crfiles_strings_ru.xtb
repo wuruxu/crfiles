@@ -147,4 +147,20 @@
   <translation id="1679468732025957970">Общий размер</translation>
   <translation id="5773396583717901962">Подключение вручную</translation>
   <translation id="2199490340923544295">Адрес устройства</translation>
+  <translation id="7997020651253694232">Доверенные устройства</translation>
+  <translation id="5286485239428440530">Нет доверенных устройств.</translation>
+  <translation id="8986362086234534611">Забыть</translation>
+  <translation id="4921685967128462327"><ph name="NAME"/> · Доверие с: <ph name="TRUSTED"/> · Последняя активность: <ph name="ACTIVE"/></translation>
+  <translation id="8352583813781765412">Отправлено: <ph name="SENT"/> · Получено: <ph name="RECEIVED"/></translation>
+  <translation id="947347161463981946">Доверять этому устройству (не сверять код в следующий раз)</translation>
+  <translation id="997416069389860447">Не удалось поделиться. Проверьте адрес, права на папку, свободное место и выбранные файлы (1–128 файлов с уникальными именами).</translation>
+  <translation id="4768520392674237594">Общее время</translation>
+  <translation id="6266010466321749320"><ph name="MINUTES"/> мин <ph name="SECONDS"/> с</translation>
+  <translation id="3539227316283621565">Изображения</translation>
+  <translation id="6146563240635539929">Видео</translation>
+  <translation id="8929830219790827383">Удалить из закладок</translation>
+  <translation id="3325995804968971809">Стиль</translation>
+  <translation id="3122085228797291657">Использовать системную тему</translation>
+  <translation id="1807246157184219062">Светлая</translation>
+  <translation id="2414886740292270097">Тёмная</translation>
 </translationbundle>

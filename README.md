@@ -371,11 +371,67 @@ Cache validity is independent of History. Scoped mutations cover local transfer
 batches, Trash/restore, folder creation and inbound sharing, including error and
 partial-success paths. Observed directory ancestors and changed file subtrees get
 revision changes; unrelated caches remain valid. Readers created during a mutation
-also see it as active. A directory read that overlaps a write retries after a
-100 ms delay; image results crossing a mutation are not cached. Registrations use
+also see it as active. A successful directory read overlapping a write is displayed provisionally and
+refreshed in place once per second, so incoming transfers do not block navigation.
+Provisional snapshots and image results crossing a mutation are not cached; a
+read invalidated by a completed mutation is retried after 250 ms. Registrations use
 weak references so expired paths can be reclaimed, and existing cache capacity
 limits remain in effect. This tracks in-process operations; external changes are
 still checked by directory revalidation and thumbnail metadata checks.
 
 Only source/API and structural checks were performed for these changes. No build,
 unit tests, GUI execution or speedup measurements were run.
+
+Windows adaptation
+------------------
+The Windows build uses Shell association handlers for Open With, including the
+system application chooser. Shell calls initialize COM on their worker thread.
+New-folder, rename and archive destinations reject Windows device names, invalid
+characters, alternate stream names and trailing spaces/periods. Transfers resolve
+existing Windows paths through handles before checking destination ancestry.
+Reparse-point source trees remain unsupported; failures retain source files.
+
+The sidebar lists available drive letters and updates once per second. File
+clipboard interoperability uses CF_HDROP and Preferred DropEffect: Explorer
+copies remain copies and cuts are moved by the normal file-operation pipeline.
+Virtual Shell items without filesystem paths are not supported. Cache mutation
+checks conservatively cover Windows path case aliases without merging keys for
+case-sensitive directories.
+
+The build generates crfiles_buildtime.h in the GN output directory, with
+SOURCE_DATE_EPOCH support. The old /tmp header is no longer required.
+On the Linux cross-build host, `make wf0` packages existing out/win10 outputs
+without compiling. Override CRFILES_WIN_OUT_DIR and CRFILES_WIN_PACKAGE_ZIP to
+choose the source and ZIP destination. The package includes runtime DLLs,
+resource packs, the supported translations and bundled SVG file icons.
+
+Windows receive targets still require local drive paths and reject UNC paths,
+junctions and symlinks. Windows GUI behavior, clipboard exchange, device discovery
+and file transfer require validation on Windows; this adaptation was checked
+statically without compiling or running the application.
+
+Windows navigation paths
+------------------------
+The address bar and breadcrumbs display local paths as `/c/Users` while all
+filesystem operations, copied file paths, History records and Shell integration
+keep native Windows paths. Both `/c/Users` and `C:\Users` (or `C:/Users`) can be
+entered. UNC paths retain their native representation. Linux paths are unchanged.
+
+`/` is a navigation-only drive list. Drive entries open native drive roots; Up
+from a drive root returns to `/`. Back/forward, tabs, split panes and workspace
+restoration preserve this location. Available drive letters refresh with the
+sidebar and are not stored in the directory cache. The virtual root cannot be a
+new-folder, paste, drop or sharing destination; drive entries cannot be moved,
+renamed, copied, compressed, shared or deleted from this page. Drive properties
+do not recursively scan the entire volume.
+
+Collapsible sidebar
+-------------------
+Drag the sidebar divider down to zero width to hide it. Release below 110 px
+to collapse, or at/above 110 px to settle within the 220–360 px expanded range.
+Dragging clips the sidebar contents; release uses a 160 ms ease-out animation.
+A transparent 6 px edge remains available when collapsed, with a themed hover
+indicator and resize cursor. Drag it outward to expand, or double-click it to
+restore the previous expanded width. Ctrl+L also toggles that saved width.
+Visibility and expanded width are persisted separately. History hides both the
+sidebar and its resize edge without changing the saved sidebar preference.

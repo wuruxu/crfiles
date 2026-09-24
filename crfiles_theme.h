@@ -30,6 +30,8 @@ struct HistoryPreferences {
 };
 HistoryPreferences GetHistoryPreferences();
 bool SetHistoryPreferences(const HistoryPreferences& preferences);
+base::DictValue GetCrFilesBookmarks();
+bool SetCrFilesBookmarks(base::DictValue bookmarks);
 base::DictValue GetCrFilesWorkspace();
 bool SetCrFilesWorkspace(base::DictValue workspace);
 void InitializeCrFilesTheme();

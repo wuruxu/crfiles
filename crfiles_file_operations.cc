@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_file_operations.h"
+#include "crFiles/crfiles_context_actions.h"
 #include <set>
 #include "third_party/zlib/google/zip.h"
 #include "crFiles/crfiles_history.h"
@@ -10,6 +11,7 @@
 #include "build/build_config.h"
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+#include "base/win/scoped_handle.h"
 #else
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -22,6 +24,28 @@
 #endif
 namespace crfiles {
 namespace {
+#if BUILDFLAG(IS_WIN)
+base::FilePath ResolvedWindowsPath(const base::FilePath& path) {
+  base::win::ScopedHandle handle(CreateFileW(path.value().c_str(), 0,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  if (!handle.is_valid()) return {};
+  const DWORD size = GetFinalPathNameByHandleW(handle.get(), nullptr, 0, FILE_NAME_NORMALIZED);
+  if (!size || size > 65536) return {};
+  std::wstring name(size + 1, L'\0');
+  const DWORD written = GetFinalPathNameByHandleW(handle.get(), name.data(), static_cast<DWORD>(name.size()), FILE_NAME_NORMALIZED);
+  if (!written || written >= name.size()) return {};
+  name.resize(written);
+  return base::FilePath(name).NormalizePathSeparators().StripTrailingSeparators();
+}
+bool WindowsContainsPath(const base::FilePath& source, const base::FilePath& destination) {
+  const auto left = source.GetComponents(), right = destination.GetComponents();
+  if (left.size() > right.size()) return false;
+  for (size_t i = 0; i < left.size(); ++i)
+    if (!base::FilePath::CompareEqualIgnoreCase(left[i], right[i])) return false;
+  return true;
+}
+#endif
 bool RegularEntry(const base::FilePath& path) {
 #if BUILDFLAG(IS_WIN)
   const auto attributes = GetFileAttributesW(path.value().c_str());
@@ -81,9 +105,15 @@ FileOperationResult TransferLocalFiles(std::vector<base::FilePath> sources,
   std::set<base::FilePath> seen;
   for (const auto& source : sources) {
     FileOperationLog log(move ? "move" : "copy", trigger, source.AsUTF8Unsafe(), destination.Append(source.BaseName()).AsUTF8Unsafe());
-    if (!log.valid() || canonical_destination.empty() || !base::DirectoryExists(canonical_destination)) { ++result.failed; continue; }
+    if (!log.valid() || !IsValidEntryName(source.BaseName().AsUTF16Unsafe()) || canonical_destination.empty() || !base::DirectoryExists(canonical_destination)) { ++result.failed; continue; }
     const auto canonical = base::MakeAbsoluteFilePath(source);
     if (canonical.empty() || !seen.insert(canonical).second) { ++result.failed; continue; }
+#if BUILDFLAG(IS_WIN)
+    const auto resolved_source = ResolvedWindowsPath(source);
+    const auto resolved_destination = ResolvedWindowsPath(canonical_destination);
+    if (resolved_source.empty() || resolved_destination.empty() ||
+        WindowsContainsPath(resolved_source, resolved_destination)) { ++result.failed; continue; }
+#endif
     const auto target = canonical_destination.Append(source.BaseName());
     if (canonical == target || canonical == canonical_destination || canonical.IsParent(canonical_destination) ||
         source.BaseName().empty() || base::PathExists(target) || base::IsLink(target) || !SafeTree(source)) {
@@ -107,7 +137,7 @@ FileOperationResult RenameLocalFile(base::FilePath source, base::FilePath target
   FileOperationResult result;
   FileOperationLog log("rename", "menu", source.AsUTF8Unsafe(), target.AsUTF8Unsafe());
   ScopedFileCacheMutation mutation({source, target});
-  if (!log.valid() || source.DirName() != target.DirName() || source == target || !RegularEntry(source) || !Publish(source, target)) { result.failed = 1; return result; }
+  if (!log.valid() || !IsValidEntryName(target.BaseName().AsUTF16Unsafe()) || source.DirName() != target.DirName() || source == target || !RegularEntry(source) || !Publish(source, target)) { result.failed = 1; return result; }
   log.Succeed(); result.changed.push_back(target); result.removed.push_back(source); return result;
 }
 FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base::FilePath target) {
@@ -116,7 +146,7 @@ FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base
   FileOperationLog log("compress", "menu", sources.front().DirName().AsUTF8Unsafe(), target.AsUTF8Unsafe());
   ScopedFileCacheMutation mutation({target});
   base::ScopedTempDir staging;
-  if (!log.valid() || base::PathExists(target) || !staging.CreateUniqueTempDirUnderPath(target.DirName())) { result.failed = 1; return result; }
+  if (!log.valid() || !IsValidEntryName(target.BaseName().AsUTF16Unsafe()) || base::PathExists(target) || !staging.CreateUniqueTempDirUnderPath(target.DirName())) { result.failed = 1; return result; }
   zip::ZipParams params; params.src_dir = sources.front().DirName(); params.recursive = true;
   params.dest_file = staging.GetPath().AppendASCII("archive.zip");
   std::vector<base::FilePath> relative_paths;

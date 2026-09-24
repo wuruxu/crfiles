@@ -5,3 +5,28 @@ crfiles:
 
 crfileswin:
 	autoninja -C out/win10 crFiles
+
+# Package existing Windows outputs on the Linux cross-build host.
+.PHONY: wf0
+wf0:
+	@set -eu; \
+	case "$(CRFILES_WIN_PACKAGE_ZIP)" in *.zip) ;; *) echo "Package output must end in .zip" >&2; exit 1 ;; esac; \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+		test -f "$(CRFILES_WIN_OUT_DIR)/$$file" || { echo "Missing build output: $(CRFILES_WIN_OUT_DIR)/$$file" >&2; exit 1; }; \
+	done; \
+	command -v zip >/dev/null; \
+	staging=$$(mktemp -d /tmp/crfiles-win-package.XXXXXX); \
+	trap 'rm -rf -- "$$staging"' EXIT; \
+	package="$$staging/$(CRFILES_WIN_PACKAGE_NAME)"; \
+	mkdir -p "$$package/crfiles_resources/file_icons" "$$package/licenses"; \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+		cp "$(CRFILES_WIN_OUT_DIR)/$$file" "$$package/$$file"; \
+	done; \
+	for file in "$(CRFILES_WIN_OUT_DIR)"/vcruntime140*.dll "$(CRFILES_WIN_OUT_DIR)"/msvcp140*.dll; do \
+		if test -f "$$file"; then cp "$$file" "$$package/"; fi; \
+	done; \
+	cp crFiles/README.md crFiles/VERSION crFiles/LICENSE "$$package/"; \
+	cp LICENSE "$$package/licenses/Chromium-LICENSE"; \
+	(cd "$$staging" && zip -r "$(CRFILES_WIN_PACKAGE_NAME).zip" "$(CRFILES_WIN_PACKAGE_NAME)"); \
+	mv -f "$$staging/$(CRFILES_WIN_PACKAGE_NAME).zip" "$(CRFILES_WIN_PACKAGE_ZIP)"; \
+	sha256sum "$(CRFILES_WIN_PACKAGE_ZIP)"

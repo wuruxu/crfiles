@@ -110,8 +110,7 @@ copy("file_icons") {
       [ "$root_out_dir/crfiles_resources/file_icons/{{source_file_part}}" ]
 }
 
-executable("crFiles") {
-  sources = [
+crfiles_sources = [
     "crfiles_cache_state.cc",
     "crfiles_cache_state.h",
     "crfiles_history.cc",
@@ -150,7 +149,18 @@ executable("crFiles") {
     "sharing/phone_sender.cc",
     "sharing/phone_sender.h",
   ]
+
+action("crfiles_buildtime") {
+  script = "tools/generate_buildtime.py"
+  inputs = crfiles_sources + [ "VERSION", "crfiles_strings.grd", "BUILD.gn", "crfiles_windows.cc", "crfiles_windows.h", "crfiles_exe.rc", "sharing/nearby_files_win.cc" ]
+  outputs = [ "$target_gen_dir/crfiles_buildtime.h" ]
+  args = [ "--output", rebase_path(outputs[0], root_build_dir) ]
+}
+
+executable("crFiles") {
+  sources = crfiles_sources
   deps = [
+    ":crfiles_buildtime",
     ":crfiles_strings",
     ":crfiles_version",
     "//base",
@@ -217,6 +227,9 @@ executable("crFiles") {
   if (is_win) {
     sources += [
       "crfiles_exe.rc",
+      "crfiles_windows.cc",
+      "sharing/nearby_files_win.cc",
+      "crfiles_windows.h",
       "resources/win/crfiles_resource.h",
     ]
     inputs = [ "resources/win/crfiles_app_icon.ico" ]
@@ -224,6 +237,9 @@ executable("crFiles") {
       "iphlpapi.lib",
       "ws2_32.lib",
       "shell32.lib",
+      "shlwapi.lib",
+      "ole32.lib",
+      "uuid.lib",
     ]
     configs += [ "//build/config/win:windowed" ]
     configs -= [ "//build/config/win:console" ]

@@ -76,6 +76,8 @@ class NearbySharing {
     Stage stage = Stage::kOff;
     int status_message_id = 0;
     uint64_t session = 0;
+    base::TimeTicks started_at;
+    base::TimeTicks finished_at;
     std::string code;
     std::string device_name;
     int avatar = 0;

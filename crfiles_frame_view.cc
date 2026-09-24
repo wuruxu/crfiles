@@ -55,7 +55,7 @@ constexpr int kResizeBorder = 6;
 
 enum MenuCommand {
   kMenuCommandThemeSystem = 1, kMenuCommandThemeLight, kMenuCommandThemeDark,
-  kMenuCommandFullscreen, kMenuCommandHistory, kMenuCommandSettings, kMenuCommandAbout, kMenuCommandInstallOnDevice,
+  kMenuCommandFullscreen, kMenuCommandHistory, kMenuCommandTrustedDevices, kMenuCommandSettings, kMenuCommandAbout, kMenuCommandInstallOnDevice,
 };
 class OptionsMenuView : public libcr::OptionsMenuView {
   METADATA_HEADER(OptionsMenuView, libcr::OptionsMenuView)
@@ -90,6 +90,10 @@ class OptionsMenuView : public libcr::OptionsMenuView {
           callback.Run(kMenuCommandHistory);
         }, callback_), l10n_util::GetStringUTF16(IDS_CRFILES_HISTORY),
         std::u16string_view(), &kListAltIcon);
+    AddMenuItem(base::BindRepeating([](base::RepeatingCallback<void(int)> callback) {
+          callback.Run(kMenuCommandTrustedDevices);
+        }, callback_), l10n_util::GetStringUTF16(IDS_CRFILES_NEARBY_TRUSTED_DEVICES),
+        std::u16string_view(), &vector_icons::kDevicesIcon);
     AddMenuItem(base::BindRepeating(
                     [](base::RepeatingCallback<void(int)> callback) {
                       callback.Run(kMenuCommandSettings);
@@ -348,6 +352,7 @@ void HandleOptionsMenuCommand(int command) {
     widget_->SetFullscreen(!widget_->IsFullscreen());
   }
   if (command == kMenuCommandHistory) ShowCrFilesHistory();
+  if (command == kMenuCommandTrustedDevices) ShowCrFilesTrustedDevices();
   if (command == kMenuCommandSettings) ShowCrFilesSettingsDialog(widget_);
   if (command == kMenuCommandAbout) ShowCrFilesAboutDialog(widget_);
 #if BUILDFLAG(IS_LINUX)

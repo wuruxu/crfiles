@@ -189,6 +189,22 @@
       <message name="IDS_CRFILES_TOTAL_SIZE" desc="Toolbar preferences and file sharing dialog.">Total size</message>
       <message name="IDS_CRFILES_MANUAL_CONNECTION" desc="Toolbar preferences and file sharing dialog.">Manual connection</message>
       <message name="IDS_CRFILES_DEVICE_ADDRESS" desc="Toolbar preferences and file sharing dialog.">Device address</message>
+      <message name="IDS_CRFILES_NEARBY_TRUSTED_DEVICES" desc="Trusted nearby device list heading">Trusted devices</message>
+      <message name="IDS_CRFILES_NEARBY_NO_TRUSTED_DEVICES" desc="Empty trusted device list">No trusted devices.</message>
+      <message name="IDS_CRFILES_NEARBY_FORGET" desc="Revoke trust in a device">Forget</message>
+      <message name="IDS_CRFILES_NEARBY_TRUST_DETAILS" desc="Device name, trust date and authenticated last active date"><ph name="NAME">$1<ex>Phone</ex></ph> · Trusted: <ph name="TRUSTED">$2<ex>9/6/2026 10:00</ex></ph> · Last active: <ph name="ACTIVE">$3<ex>9/6/2026 11:00</ex></ph></message>
+      <message name="IDS_CRFILES_NEARBY_TRUST_STATS" desc="Successfully stored file byte totals">Sent: <ph name="SENT">$1<ex>12 MB</ex></ph> · Received: <ph name="RECEIVED">$2<ex>24 MB</ex></ph></message>
+      <message name="IDS_CRFILES_NEARBY_TRUST_DEVICE" desc="Remember an explicitly verified peer">Trust this device (skip code checks next time)</message>
+      <message name="IDS_CRFILES_NEARBY_ERROR" desc="Nearby sharing error">Sharing failed. Check the address, folder permissions, free space and selection (1–128 files with unique names).</message>
+      <message name="IDS_CRFILES_TOTAL_TIME" desc="Total elapsed time for a file sharing session, including connection and confirmation.">Total time</message>
+      <message name="IDS_CRFILES_DURATION_MINUTES_SECONDS" desc="Elapsed time in total minutes and remaining seconds; minutes can exceed 60."><ph name="MINUTES">$1<ex>75</ex></ph> min <ph name="SECONDS">$2<ex>30</ex></ph> s</message>
+      <message name="IDS_CRFILES_PICTURES" desc="Sidebar folder bookmarks.">Pictures</message>
+      <message name="IDS_CRFILES_VIDEOS" desc="Sidebar folder bookmarks.">Videos</message>
+      <message name="IDS_CRFILES_REMOVE_BOOKMARK" desc="Sidebar folder bookmarks.">Remove from Bookmarks</message>
+      <message name="IDS_CRFILES_STYLE" desc="Label for the application style setting">Style</message>
+      <message name="IDS_CRFILES_THEME_SETTING_SYSTEM" desc="Theme setting that follows the operating system">Follow system theme</message>
+      <message name="IDS_CRFILES_THEME_SETTING_LIGHT" desc="Light application theme setting">Light</message>
+      <message name="IDS_CRFILES_THEME_SETTING_DARK" desc="Dark application theme setting">Dark</message>
     </messages>
   </release>
 </grit>

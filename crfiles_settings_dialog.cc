@@ -73,11 +73,7 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/view_observer.h"
-#if __has_include("/tmp/crFiles_buildtime.h")
-#include "/tmp/crFiles_buildtime.h"
-#else
-#define CRFILES_BUILD_TIME "—"
-#endif
+#include "crFiles/crfiles_buildtime.h"
 namespace crfiles {
 namespace {
 constexpr std::array<const char*, 13> kLanguages = {
@@ -257,24 +253,50 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   }
   std::unique_ptr<views::View> GeneralPage() {
     auto page = Page(IDS_CRFILES_GENERAL);
-    Label(page.get(), Text(IDS_CRFILES_LANGUAGE));
+    auto* language_row = page->AddChildView(std::make_unique<views::View>());
+    language_row->SetPreferredSize(gfx::Size(0, 52));
+    auto* language_layout = language_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal));
+    language_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+    language_layout->SetFlexForView(Label(language_row, Text(IDS_CRFILES_LANGUAGE)), 1);
     std::vector<ui::SimpleComboboxModel::Item> languages;
     languages.emplace_back(Text(IDS_CRFILES_SYSTEM_LANGUAGE));
-    for (size_t i = 1; i < kLanguages.size(); ++i) languages.emplace_back(base::UTF8ToUTF16(kLanguages[i]));
-    language_ = page->AddChildView(std::make_unique<views::Combobox>(std::make_unique<ui::SimpleComboboxModel>(languages)));
-    for (size_t i = 0; i < kLanguages.size(); ++i) if (GetCrFilesLanguageSetting() == kLanguages[i]) language_->SetSelectedIndex(i);
+    constexpr std::array<std::u16string_view, 12> language_names = {
+        u"English (United States)", u"简体中文", u"繁體中文（香港）", u"繁體中文（台灣）",
+        u"العربية", u"Français", u"Français (Canada)", u"Русский", u"Español",
+        u"Español (Latinoamérica)", u"Português (Brasil)", u"Português (Portugal)"};
+    for (const auto name : language_names) languages.emplace_back(std::u16string(name));
+    language_ = language_row->AddChildView(std::make_unique<views::Combobox>(std::make_unique<ui::SimpleComboboxModel>(std::move(languages))));
+    language_->SetPreferredSize(gfx::Size(260, 36));
+    language_->SetSelectedIndex(0);
+    const auto language = GetCrFilesLanguageSetting();
+    for (size_t i = 0; i < kLanguages.size(); ++i) if (language == kLanguages[i]) language_->SetSelectedIndex(i);
     language_->SetAccessibleName(Text(IDS_CRFILES_LANGUAGE));
+    language_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
     language_->SetCallback(base::BindRepeating(&Settings::LanguageChanged, base::Unretained(this)));
-    Label(page.get(), Text(IDS_CRFILES_LANGUAGE_RESTART))->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
-    auto* themes = page->AddChildView(std::make_unique<views::View>());
-    themes->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+    auto* hint = Label(page.get(), Text(IDS_CRFILES_LANGUAGE_RESTART));
+    hint->SetMultiLine(true); hint->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
+    auto* theme_row = page->AddChildView(std::make_unique<views::View>());
+    theme_row->SetPreferredSize(gfx::Size(0, 66));
+    theme_row->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(14, 0, 0, 0)));
+    auto* theme_layout = theme_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal));
+    theme_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+    theme_layout->SetFlexForView(Label(theme_row, Text(IDS_CRFILES_STYLE)), 1);
+    auto* themes = theme_row->AddChildView(std::make_unique<views::View>());
+    auto* toggle_layout = themes->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(2, 10), 4));
+    toggle_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
     constexpr std::array modes = {CrFilesThemeMode::kSystem, CrFilesThemeMode::kLight, CrFilesThemeMode::kDark};
-    constexpr std::array labels = {IDS_CRFILES_THEME_SYSTEM, IDS_CRFILES_THEME_LIGHT, IDS_CRFILES_THEME_DARK};
+    constexpr std::array labels = {IDS_CRFILES_THEME_SETTING_SYSTEM, IDS_CRFILES_THEME_SETTING_LIGHT, IDS_CRFILES_THEME_SETTING_DARK};
     for (size_t i = 0; i < modes.size(); ++i) {
       auto mode = modes[i];
-      themes_.push_back(themes->AddChildView(std::make_unique<libcr::ThemeToggleButton>(base::BindRepeating(&Settings::ChangeTheme, base::Unretained(this), mode), mode, Text(labels[i]), GetCrFilesThemeMode() == mode, libcr::ThemeToggleStyle::kSettings)));
+      auto* button = themes->AddChildView(std::make_unique<libcr::ThemeToggleButton>(base::BindRepeating(&Settings::ChangeTheme, base::Unretained(this), mode), mode, Text(labels[i]), GetCrFilesThemeMode() == mode, libcr::ThemeToggleStyle::kSettings));
+      button->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+      themes_.push_back(button);
     }
-    themes->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(0, 0, 12, 0)));
+    auto* spacing = page->AddChildView(std::make_unique<views::View>());
+    spacing->SetPreferredSize(gfx::Size(0, 2));
     const auto preferences = GetFileViewPreferences();
     auto_hide_toolbar_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_AUTO_HIDE_TOOLBAR)));
     animate_folders_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_ANIMATE_FOLDERS)));

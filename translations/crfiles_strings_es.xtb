@@ -147,4 +147,20 @@
   <translation id="1679468732025957970">Tamaño total</translation>
   <translation id="5773396583717901962">Conexión manual</translation>
   <translation id="2199490340923544295">Dirección del dispositivo</translation>
+  <translation id="7997020651253694232">Dispositivos de confianza</translation>
+  <translation id="5286485239428440530">No hay dispositivos de confianza.</translation>
+  <translation id="8986362086234534611">Olvidar</translation>
+  <translation id="4921685967128462327"><ph name="NAME"/> · Confianza desde: <ph name="TRUSTED"/> · Última actividad: <ph name="ACTIVE"/></translation>
+  <translation id="8352583813781765412">Enviado: <ph name="SENT"/> · Recibido: <ph name="RECEIVED"/></translation>
+  <translation id="947347161463981946">Confiar en este dispositivo (omitir la verificación del código la próxima vez)</translation>
+  <translation id="997416069389860447">Error al compartir. Comprueba la dirección, los permisos de la carpeta, el espacio libre y la selección (1–128 archivos con nombres únicos).</translation>
+  <translation id="4768520392674237594">Tiempo total</translation>
+  <translation id="6266010466321749320"><ph name="MINUTES"/> min <ph name="SECONDS"/> s</translation>
+  <translation id="3539227316283621565">Imágenes</translation>
+  <translation id="6146563240635539929">Vídeos</translation>
+  <translation id="8929830219790827383">Eliminar de marcadores</translation>
+  <translation id="3325995804968971809">Estilo</translation>
+  <translation id="3122085228797291657">Usar el tema del sistema</translation>
+  <translation id="1807246157184219062">Claro</translation>
+  <translation id="2414886740292270097">Oscuro</translation>
 </translationbundle>

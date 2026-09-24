@@ -2,11 +2,13 @@
 #ifndef CRFILES_CONTEXT_ACTIONS_H_
 #define CRFILES_CONTEXT_ACTIONS_H_
 #include <string>
+#include <string_view>
 #include <optional>
 #include <cstdint>
 #include <vector>
 #include "base/files/file_path.h"
 namespace crfiles {
+bool IsValidEntryName(std::u16string_view name);
 struct FileApplication { std::string id, name; bool is_default = false; };
 // Worker-only system association lookup and launch.
 std::vector<FileApplication> FileApplications(const base::FilePath& path);

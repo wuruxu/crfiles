@@ -147,4 +147,20 @@
   <translation id="1679468732025957970">总大小</translation>
   <translation id="5773396583717901962">手动连接</translation>
   <translation id="2199490340923544295">设备地址</translation>
+  <translation id="7997020651253694232">已信任设备</translation>
+  <translation id="5286485239428440530">暂无已信任设备。</translation>
+  <translation id="8986362086234534611">取消信任</translation>
+  <translation id="4921685967128462327"><ph name="NAME"/> · 信任时间：<ph name="TRUSTED"/> · 最后活跃：<ph name="ACTIVE"/></translation>
+  <translation id="8352583813781765412">发送：<ph name="SENT"/> · 接收：<ph name="RECEIVED"/></translation>
+  <translation id="947347161463981946">信任此设备（下次跳过验证码核对）</translation>
+  <translation id="997416069389860447">分享失败。请检查地址、目录权限、可用空间及所选文件（1–128 个，文件名不能重复）。</translation>
+  <translation id="4768520392674237594">总耗时</translation>
+  <translation id="6266010466321749320"><ph name="MINUTES"/> 分 <ph name="SECONDS"/> 秒</translation>
+  <translation id="3539227316283621565">图片</translation>
+  <translation id="6146563240635539929">视频</translation>
+  <translation id="8929830219790827383">从书签中移除</translation>
+  <translation id="3325995804968971809">样式</translation>
+  <translation id="3122085228797291657">跟随系统主题</translation>
+  <translation id="1807246157184219062">浅色</translation>
+  <translation id="2414886740292270097">深色</translation>
 </translationbundle>

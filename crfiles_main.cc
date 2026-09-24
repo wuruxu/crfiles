@@ -37,6 +37,7 @@
 #include "build/build_config.h"
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "crFiles/crfiles_theme.h"
+#include "crFiles/crfiles_version.h"
 #include "crFiles/crfiles_window.h"
 #include "libcr/viz_context_factory.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
@@ -182,7 +183,7 @@ class CrFilesAXPlatformDelegate : public ui::AXPlatform::Delegate {
 #if BUILDFLAG(IS_WIN)
   ui::AXPlatform::ProductStrings GetProductStrings() override {
     return {.product_name = "crFiles",
-            .product_version = "0.1.0",
+            .product_version = CRFILES_VERSION_STRING,
             .toolkit_version = "Chromium Views"};
   }
 #endif

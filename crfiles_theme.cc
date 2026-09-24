@@ -175,6 +175,18 @@ bool SetHistoryPreferences(const HistoryPreferences& preferences) {
   if (Save()) return true;
   Settings() = std::move(previous); return false;
 }
+base::DictValue GetCrFilesBookmarks() {
+  base::AutoLock lock(SettingsLock());
+  const auto* bookmarks = Settings().FindDict("bookmarks");
+  return bookmarks ? bookmarks->Clone() : base::DictValue();
+}
+bool SetCrFilesBookmarks(base::DictValue bookmarks) {
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().Clone();
+  Settings().Set("bookmarks", std::move(bookmarks));
+  if (Save()) return true;
+  Settings() = std::move(previous); return false;
+}
 base::DictValue GetCrFilesWorkspace() {
   base::AutoLock lock(SettingsLock());
   const auto* workspace = Settings().FindDict("workspace");

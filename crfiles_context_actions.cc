@@ -2,9 +2,12 @@
 #include "crFiles/crfiles_context_actions.h"
 #include "crFiles/crfiles_history.h"
 #include "base/process/launch.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include <limits>
+#include <algorithm>
 #include "build/build_config.h"
 #if BUILDFLAG(IS_LINUX)
 #include <gio/gio.h>
@@ -12,6 +15,12 @@
 #elif BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <wrl/client.h>
+#include "base/win/scoped_com_initializer.h"
+#include "crFiles/grit/crfiles_strings.h"
+#include "ui/base/l10n/l10n_util.h"
 #endif
 namespace crfiles {
 std::vector<FileApplication> FileApplications(const base::FilePath& path) {
@@ -40,6 +49,30 @@ std::vector<FileApplication> FileApplications(const base::FilePath& path) {
     g_object_unref(info);
   }
   g_object_unref(file);
+#elif BUILDFLAG(IS_WIN)
+  base::win::ScopedCOMInitializer com;
+  if (!com.Succeeded()) return apps;
+  const auto extension = path.Extension();
+  DWORD length = 0;
+  AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME, extension.c_str(), L"open", nullptr, &length);
+  if (length && length < 32768) {
+    std::wstring name(length, L'\0');
+    if (SUCCEEDED(AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME, extension.c_str(), L"open", name.data(), &length))) {
+      name.resize(length ? length - 1 : 0);
+      apps.push_back({{}, base::WideToUTF8(name), true});
+    }
+  }
+  Microsoft::WRL::ComPtr<IEnumAssocHandlers> handlers;
+  if (SUCCEEDED(SHAssocEnumHandlers(extension.c_str(), ASSOC_FILTER_NONE, &handlers))) {
+    Microsoft::WRL::ComPtr<IAssocHandler> handler;
+    while (handlers->Next(1, &handler, nullptr) == S_OK) {
+      PWSTR id = nullptr, name = nullptr;
+      if (SUCCEEDED(handler->GetName(&id)) && SUCCEEDED(handler->GetUIName(&name)) && id && name)
+        apps.push_back({base::WideToUTF8(id), base::WideToUTF8(name), false});
+      CoTaskMemFree(id); CoTaskMemFree(name); handler.Reset();
+    }
+  }
+  apps.push_back({"windows:choose", base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_CRFILES_OPEN_WITH)) + "…", false});
 #endif
   return apps;
 }
@@ -54,12 +87,55 @@ bool OpenFileWith(const base::FilePath& path, const std::string& application) {
     g_list_free(files); g_object_unref(file); g_object_unref(app);
   }
 #elif BUILDFLAG(IS_WIN)
-  ok = reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", path.value().c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+  base::win::ScopedCOMInitializer com;
+  if (com.Succeeded()) {
+    if (application.empty()) {
+      ok = reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", path.value().c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+    } else if (application == "windows:choose") {
+      OPENASINFO info{};
+      info.pcszFile = path.value().c_str();
+      info.oaifInFlags = OAIF_EXEC;
+      ok = SUCCEEDED(SHOpenWithDialog(nullptr, &info));
+    } else {
+      Microsoft::WRL::ComPtr<IEnumAssocHandlers> handlers;
+      Microsoft::WRL::ComPtr<IShellItem> item;
+      Microsoft::WRL::ComPtr<IDataObject> data;
+      if (SUCCEEDED(SHCreateItemFromParsingName(path.value().c_str(), nullptr, IID_PPV_ARGS(&item))) &&
+          SUCCEEDED(item->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&data))) &&
+          SUCCEEDED(SHAssocEnumHandlers(path.Extension().c_str(), ASSOC_FILTER_NONE, &handlers))) {
+        Microsoft::WRL::ComPtr<IAssocHandler> handler;
+        while (handlers->Next(1, &handler, nullptr) == S_OK) {
+          PWSTR id = nullptr;
+          const bool match = SUCCEEDED(handler->GetName(&id)) && id && base::WideToUTF8(id) == application;
+          CoTaskMemFree(id);
+          if (match) { ok = SUCCEEDED(handler->Invoke(data.Get())); break; }
+          handler.Reset();
+        }
+      }
+    }
+  }
 #elif BUILDFLAG(IS_MAC)
   ok = base::LaunchProcess(std::vector<std::string>{"/usr/bin/open", path.value()}, base::LaunchOptions()).IsValid();
 #endif
   if (ok) log.Succeed();
   return ok;
+}
+bool IsValidEntryName(std::u16string_view name) {
+  if (name.empty() || name == u"." || name == u".." ||
+      name.find_first_of(u"/\\") != std::u16string_view::npos || name.find(char16_t(0)) != std::u16string_view::npos) return false;
+  const auto path = base::FilePath::FromUTF16Unsafe(name);
+  if (path.IsAbsolute() || path.ReferencesParent() || path.BaseName() != path) return false;
+#if BUILDFLAG(IS_WIN)
+  if (name.size() > 255 || name.back() == u'.' || name.back() == u' ' || name.find_first_of(u"<>:\"|?*") != std::u16string_view::npos ||
+      std::ranges::any_of(name, [](char16_t c) { return c < 32; })) return false;
+  auto stem = base::ToLowerASCII(std::u16string(name.substr(0, name.find(u'.'))));
+  while (!stem.empty() && stem.back() == u' ') stem.pop_back();
+  if (stem == u"con" || stem == u"prn" || stem == u"aux" || stem == u"nul" || stem == u"clock$" ||
+      stem == u"conin$" || stem == u"conout$") return false;
+  if (stem.size() == 4 && (stem.starts_with(u"com") || stem.starts_with(u"lpt")) &&
+      ((stem.back() >= u'1' && stem.back() <= u'9') || stem.back() == u'¹' || stem.back() == u'²' || stem.back() == u'³')) return false;
+#endif
+  return true;
 }
 std::optional<uint64_t> FileSelectionSize(std::vector<base::FilePath> paths) {
   uint64_t bytes = 0; size_t count = paths.size();

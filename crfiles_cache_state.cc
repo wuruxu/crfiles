@@ -6,6 +6,7 @@
 #include "base/no_destructor.h"
 #include "base/files/file_util.h"
 #include "base/synchronization/lock.h"
+#include "build/build_config.h"
 namespace crfiles {
 namespace {
 using Key = std::pair<base::FilePath, bool>;
@@ -18,8 +19,19 @@ struct State {
 State& CacheState() { static base::NoDestructor<State> state; return *state; }
 bool Affected(const Key& key, const std::vector<base::FilePath>& paths) {
   return std::ranges::any_of(paths, [&](const auto& changed) {
+#if BUILDFLAG(IS_WIN)
+    // Invalidate conservatively across case aliases without merging cache keys:
+    // Windows also supports directories with case-sensitive names.
+    const auto left = changed.NormalizePathSeparators().GetComponents();
+    const auto right = key.first.NormalizePathSeparators().GetComponents();
+    const auto common = std::min(left.size(), right.size());
+    for (size_t i = 0; i < common; ++i)
+      if (!base::FilePath::CompareEqualIgnoreCase(left[i], right[i])) return false;
+    return left.size() <= right.size() || key.second;
+#else
     return changed == key.first || changed.IsParent(key.first) ||
         (key.second && key.first.IsParent(changed));
+#endif
   });
 }
 }

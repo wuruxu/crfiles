@@ -147,4 +147,20 @@
   <translation id="1679468732025957970">الحجم الإجمالي</translation>
   <translation id="5773396583717901962">اتصال يدوي</translation>
   <translation id="2199490340923544295">عنوان الجهاز</translation>
+  <translation id="7997020651253694232">الأجهزة الموثوقة</translation>
+  <translation id="5286485239428440530">لا توجد أجهزة موثوقة.</translation>
+  <translation id="8986362086234534611">إلغاء الثقة</translation>
+  <translation id="4921685967128462327"><ph name="NAME"/> · موثوق منذ: <ph name="TRUSTED"/> · آخر نشاط: <ph name="ACTIVE"/></translation>
+  <translation id="8352583813781765412">المرسل: <ph name="SENT"/> · المستلم: <ph name="RECEIVED"/></translation>
+  <translation id="947347161463981946">الوثوق بهذا الجهاز (تخطي التحقق من الرمز لاحقًا)</translation>
+  <translation id="997416069389860447">فشلت المشاركة. تحقق من العنوان وأذونات المجلد والمساحة الحرة والملفات المحددة (من 1 إلى 128 ملفًا بأسماء فريدة).</translation>
+  <translation id="4768520392674237594">الوقت الإجمالي</translation>
+  <translation id="6266010466321749320"><ph name="MINUTES"/> د <ph name="SECONDS"/> ث</translation>
+  <translation id="3539227316283621565">الصور</translation>
+  <translation id="6146563240635539929">الفيديوهات</translation>
+  <translation id="8929830219790827383">إزالة من الإشارات المرجعية</translation>
+  <translation id="3325995804968971809">النمط</translation>
+  <translation id="3122085228797291657">اتباع مظهر النظام</translation>
+  <translation id="1807246157184219062">فاتح</translation>
+  <translation id="2414886740292270097">داكن</translation>
 </translationbundle>

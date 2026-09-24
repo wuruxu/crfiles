@@ -13,5 +13,6 @@ void ApplyCrFilesSharingSettings();
 void ApplyCrFilesViewSettings();
 bool IsCrFilesSharingBusy();
 void ShowCrFilesHistory();
+void ShowCrFilesTrustedDevices();
 }
 #endif
