@@ -7,6 +7,7 @@
 #include "base/base_paths.h"
 #include "base/environment.h"
 #include "base/files/file_util.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/important_file_writer.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
@@ -53,6 +54,28 @@ bool MoveToTrash(const base::FilePath& path) {
   log.SetDestination(files.Append(path.BaseName()).AsUTF8Unsafe());
   if (!base::Move(path, files.Append(path.BaseName()))) return false;
   log.Succeed(); return true;
+}
+bool EmptyTrash() {
+  const auto root = TrashRoot();
+  if (root.empty() || !root.IsAbsolute() || root.ReferencesParent()) return false;
+  ScopedFileCacheMutation mutation({root});
+  FileOperationLog log("empty_trash", "menu", root.AsUTF8Unsafe(), {});
+  if (!log.valid()) return false;
+  base::AutoLock lock(TrashLock());
+  if (base::IsLink(root)) return false;
+  if (!base::PathExists(root)) { log.Succeed(); return true; }
+  base::FileEnumerator entries(root, false, base::FileEnumerator::DIRECTORIES,
+      base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
+      base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+  bool ok = true;
+  for (auto entry = entries.Next(); !entry.empty(); entry = entries.Next()) {
+    // Never delete the trash root or unrelated files outside its UUID entries.
+    if (!base::Uuid::ParseLowercase(entry.BaseName().AsUTF8Unsafe()).is_valid()) { ok = false; continue; }
+    if (!base::DeletePathRecursively(entry)) ok = false;
+  }
+  ok &= entries.GetError() == base::File::FILE_OK;
+  if (ok) log.Succeed();
+  return ok;
 }
 bool RestoreFromTrash(const base::FilePath& path) {
   FileOperationLog log("restore", "menu", path.AsUTF8Unsafe(), {});

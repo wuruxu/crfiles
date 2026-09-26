@@ -4,6 +4,7 @@
 import("//build/config/ui.gni")
 import("//build/util/process_version.gni")
 import("//libcr/locales.gni")
+import("//mojo/public/tools/bindings/mojom.gni")
 import("//tools/grit/grit_rule.gni")
 import("//tools/grit/repack.gni")
 if (is_linux) {
@@ -121,6 +122,13 @@ crfiles_sources = [
     "crfiles_app_icon.h",
     "crfiles_file_icons.cc",
     "crfiles_file_icons.h",
+    "crfiles_search.cc",
+    "crfiles_search.h",
+    "crfiles_search_process.cc",
+    "crfiles_search_content.cc",
+    "crfiles_search_content.h",
+    "crfiles_search_view.cc",
+    "crfiles_search_view.h",
     "crfiles_image_preview.cc",
     "crfiles_image_preview.h",
     "crfiles_frame_view.cc",
@@ -150,17 +158,23 @@ crfiles_sources = [
     "sharing/phone_sender.h",
   ]
 
+mojom("crfiles_search_mojom") {
+  sources = [ "crfiles_search.mojom" ]
+}
+
 action("crfiles_buildtime") {
   script = "tools/generate_buildtime.py"
-  inputs = crfiles_sources + [ "VERSION", "crfiles_strings.grd", "BUILD.gn", "crfiles_windows.cc", "crfiles_windows.h", "crfiles_exe.rc", "sharing/nearby_files_win.cc" ]
+  inputs = crfiles_sources + [ "crfiles_search.mojom", "VERSION", "crfiles_strings.grd", "BUILD.gn", "crfiles_windows.cc", "crfiles_windows.h", "crfiles_exe.rc", "sharing/nearby_files_win.cc" ]
   outputs = [ "$target_gen_dir/crfiles_buildtime.h" ]
   args = [ "--output", rebase_path(outputs[0], root_build_dir) ]
 }
 
 executable("crFiles") {
   sources = crfiles_sources
+  include_dirs = [ "//third_party/pdfium" ]
   deps = [
     ":crfiles_buildtime",
+    ":crfiles_search_mojom",
     ":crfiles_strings",
     ":crfiles_version",
     "//base",
@@ -174,11 +188,15 @@ executable("crFiles") {
     "//libcr:viz",
     "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
     "//net",
     "//net/traffic_annotation",
     "//skia",
+    "//third_party/pdfium:pdfium",
     "//third_party/sqlite",
     "//third_party/zlib/google:zip",
+    "//third_party/zlib",
     "//third_party/boringssl",
     "//ui/accessibility",
     "//ui/base",

@@ -15,6 +15,10 @@
 #include <utility>
 #include "base/files/file_util.h"
 #include "base/no_destructor.h"
+#include "base/time/time.h"
+#include "third_party/pdfium/public/cpp/fpdf_scopers.h"
+#include "third_party/pdfium/public/fpdf_progressive.h"
+#include "third_party/pdfium/public/fpdfview.h"
 #include "base/synchronization/lock.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "third_party/skia/include/codec/SkCodec.h"
@@ -31,6 +35,67 @@
 #include "third_party/skia/modules/svg/include/SkSVGSVG.h"
 namespace crfiles {
 namespace {
+// crFiles owns its PDFium instance. All PDF handles, including destruction,
+// stay under this lock; workers may change between requests. Keep the SDK alive
+// for the process lifetime so shutdown cannot race with a file worker.
+struct PdfPreviewRuntime {
+  PdfPreviewRuntime() {
+    FPDF_LIBRARY_CONFIG config = {};
+    config.version = 2;  // Use the renderer compiled into PDFium by default.
+    FPDF_InitLibraryWithConfig(&config);
+  }
+  base::Lock lock;
+};
+struct PdfPreviewPause {
+  IFSDK_PAUSE pause_api = {};
+  const std::atomic_bool* canceled = nullptr;
+  base::TimeTicks deadline;
+  bool Stopped() const {
+    return (canceled && canceled->load(std::memory_order_relaxed)) || base::TimeTicks::Now() >= deadline;
+  }
+};
+gfx::ImageSkia RenderPdfThumbnail(const std::string& encoded, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled) {
+  static base::NoDestructor<PdfPreviewRuntime> runtime;
+  base::AutoLock guard(runtime->lock);
+  PdfPreviewPause pause;
+  pause.canceled = canceled.get();
+  pause.deadline = base::TimeTicks::Now() + base::Seconds(2);
+  pause.pause_api.version = 1;
+  pause.pause_api.user = &pause;
+  pause.pause_api.NeedToPauseNow = [](IFSDK_PAUSE* pause_api) -> FPDF_BOOL {
+    return static_cast<PdfPreviewPause*>(pause_api->user)->Stopped();
+  };
+  if (pause.Stopped()) return {};
+  // Loading/parsing is synchronous. Observe cancellation between PDFium calls
+  // and cooperatively inside progressive rendering. No form/JavaScript host.
+  ScopedFPDFDocument document(FPDF_LoadMemDocument64(encoded.data(), encoded.size(), nullptr));
+  if (!document || pause.Stopped() || FPDF_GetPageCount(document.get()) < 1) return {};
+  ScopedFPDFPage page(FPDF_LoadPage(document.get(), 0));
+  if (!page || pause.Stopped()) return {};
+  const double page_width = FPDF_GetPageWidthF(page.get());
+  const double page_height = FPDF_GetPageHeightF(page.get());
+  if (!std::isfinite(page_width) || !std::isfinite(page_height) || page_width <= 0 || page_height <= 0) return {};
+  const double scale = maximum_edge / std::max(page_width, page_height);
+  const int width = std::clamp(static_cast<int>(std::round(page_width * scale)), 1, maximum_edge);
+  const int height = std::clamp(static_cast<int>(std::round(page_height * scale)), 1, maximum_edge);
+  SkBitmap result;
+  if (!result.tryAllocN32Pixels(width, height, true)) return {};
+  result.eraseColor(SK_ColorWHITE);
+  ScopedFPDFBitmap bitmap(FPDFBitmap_CreateEx(width, height, FPDFBitmap_BGRx,
+      result.getPixels(), static_cast<int>(result.rowBytes())));
+  if (!bitmap || pause.Stopped()) return {};
+  int status = FPDF_RenderPageBitmap_Start(bitmap.get(), page.get(), 0, 0, width, height, 0,
+      FPDF_ANNOT | FPDF_RENDER_LIMITEDIMAGECACHE, &pause.pause_api);
+  while (status == FPDF_RENDER_TOBECONTINUED && !pause.Stopped())
+    status = FPDF_RenderPage_Continue(page.get(), &pause.pause_api);
+  FPDF_RenderPage_Close(page.get());
+  if (status != FPDF_RENDER_DONE || pause.Stopped()) return {};
+  result.setImmutable();
+  auto image = gfx::ImageSkia::CreateFromBitmap(result, 1.f);
+  image.MakeThreadSafe();
+  return image;
+}
 using ThumbnailKey = std::tuple<base::FilePath, int64_t, base::Time, base::Time, int>;
 struct ThumbnailItem {
   ThumbnailKey key; gfx::ImageSkia image; size_t bytes;
@@ -110,6 +175,8 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
   std::string encoded;
   if (!base::ReadFileToStringWithMaxSize(path, &encoded, 64 * 1024 * 1024)) return {};
   if (stopped()) return {};
+  if (path.MatchesExtension(FILE_PATH_LITERAL(".pdf")) || encoded.starts_with("%PDF-"))
+    return RenderPdfThumbnail(encoded, maximum_edge, canceled);
   SkBitmap result;
   if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
     SkMemoryStream stream(encoded.data(), encoded.size(), true);

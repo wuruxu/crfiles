@@ -163,4 +163,24 @@
   <translation id="3122085228797291657">跟随系统主题</translation>
   <translation id="1807246157184219062">浅色</translation>
   <translation id="2414886740292270097">深色</translation>
+  <translation id="5159560892333415631">清空回收站</translation>
+  <translation id="3472692949324419376">永久删除回收站中的所有项目？此操作无法撤销。</translation>
+  <translation id="1383876407941801731">搜索</translation>
+  <translation id="152835193502726983">按路径搜索</translation>
+  <translation id="2810027854515126016">按内容搜索</translation>
+  <translation id="4746823868296065535">输入关键词；输入 .pdf 或 .txt 后按空格筛选</translation>
+  <translation id="1178581264944972037">暂停</translation>
+  <translation id="8200772114523450471">继续</translation>
+  <translation id="5993630545341499256">输入关键词或文件类型。内容搜索需要关键词。</translation>
+  <translation id="2263107154412103083">正在搜索…</translation>
+  <translation id="7607002721634913082">已暂停</translation>
+  <translation id="134275439349343980">搜索已取消</translation>
+  <translation id="3270257063716505046">搜索完成</translation>
+  <translation id="4601564743945960495">搜索失败。请检查文件夹或重试。</translation>
+  <translation id="4118624008365998354">已达到搜索上限，请缩小搜索范围。</translation>
+  <translation id="2029103826420892535">个匹配</translation>
+  <translation id="7992826586750241916">项已扫描</translation>
+  <translation id="3460842926886499352">项已跳过或仅部分搜索</translation>
+  <translation id="5336759974910418265">打开所在文件夹</translation>
+  <translation id="3133846425424266483">隐藏文件</translation>
 </translationbundle>

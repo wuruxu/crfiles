@@ -163,4 +163,24 @@
   <translation id="3122085228797291657">Suivre le thème du système</translation>
   <translation id="1807246157184219062">Clair</translation>
   <translation id="2414886740292270097">Sombre</translation>
+  <translation id="5159560892333415631">Vider la corbeille</translation>
+  <translation id="3472692949324419376">Supprimer définitivement tous les éléments de la corbeille? Cette action est irréversible.</translation>
+  <translation id="1383876407941801731">Rechercher</translation>
+  <translation id="152835193502726983">Rechercher par chemin</translation>
+  <translation id="2810027854515126016">Rechercher par contenu</translation>
+  <translation id="4746823868296065535">Rechercher ici; saisir .pdf ou .txt puis Espace pour filtrer</translation>
+  <translation id="1178581264944972037">Pause</translation>
+  <translation id="8200772114523450471">Reprendre</translation>
+  <translation id="5993630545341499256">Saisissez une recherche ou un type de fichier. La recherche par contenu nécessite du texte.</translation>
+  <translation id="2263107154412103083">Recherche en cours…</translation>
+  <translation id="7607002721634913082">En pause</translation>
+  <translation id="134275439349343980">Recherche annulée</translation>
+  <translation id="3270257063716505046">Recherche terminée</translation>
+  <translation id="4601564743945960495">Échec de la recherche. Vérifiez le dossier ou réessayez.</translation>
+  <translation id="4118624008365998354">Limite atteinte; affinez votre recherche.</translation>
+  <translation id="2029103826420892535">correspondances</translation>
+  <translation id="7992826586750241916">éléments analysés</translation>
+  <translation id="3460842926886499352">éléments ignorés ou partiellement analysés</translation>
+  <translation id="5336759974910418265">Ouvrir le dossier parent</translation>
+  <translation id="3133846425424266483">Fichier caché</translation>
 </translationbundle>

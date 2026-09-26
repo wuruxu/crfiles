@@ -8,5 +8,7 @@ base::FilePath TrashRoot();
 // Blocking operations; callers must run on a file worker.
 bool MoveToTrash(const base::FilePath& path);
 bool RestoreFromTrash(const base::FilePath& path);
+// Permanently delete crFiles-owned trash entries under the shared trash lock.
+bool EmptyTrash();
 }
 #endif

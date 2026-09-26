@@ -163,4 +163,24 @@
   <translation id="3122085228797291657">跟隨系統主題</translation>
   <translation id="1807246157184219062">淺色</translation>
   <translation id="2414886740292270097">深色</translation>
+  <translation id="5159560892333415631">清空資源回收筒</translation>
+  <translation id="3472692949324419376">永久刪除資源回收筒中的所有項目？此操作無法復原。</translation>
+  <translation id="1383876407941801731">搜尋</translation>
+  <translation id="152835193502726983">依路徑搜尋</translation>
+  <translation id="2810027854515126016">依內容搜尋</translation>
+  <translation id="4746823868296065535">輸入關鍵字；輸入 .pdf 或 .txt 後按空白鍵篩選</translation>
+  <translation id="1178581264944972037">暫停</translation>
+  <translation id="8200772114523450471">繼續</translation>
+  <translation id="5993630545341499256">輸入關鍵字或檔案類型。內容搜尋需要關鍵字。</translation>
+  <translation id="2263107154412103083">正在搜尋…</translation>
+  <translation id="7607002721634913082">已暫停</translation>
+  <translation id="134275439349343980">搜尋已取消</translation>
+  <translation id="3270257063716505046">搜尋完成</translation>
+  <translation id="4601564743945960495">搜尋失敗。請檢查資料夾或重試。</translation>
+  <translation id="4118624008365998354">已達搜尋上限，請縮小搜尋範圍。</translation>
+  <translation id="2029103826420892535">個符合項目</translation>
+  <translation id="7992826586750241916">項已掃描</translation>
+  <translation id="3460842926886499352">項已略過或僅部分搜尋</translation>
+  <translation id="5336759974910418265">開啟所在資料夾</translation>
+  <translation id="3133846425424266483">隱藏檔案</translation>
 </translationbundle>

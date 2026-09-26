@@ -163,4 +163,24 @@
   <translation id="3122085228797291657">Использовать системную тему</translation>
   <translation id="1807246157184219062">Светлая</translation>
   <translation id="2414886740292270097">Тёмная</translation>
+  <translation id="5159560892333415631">Очистить корзину</translation>
+  <translation id="3472692949324419376">Удалить все объекты из корзины навсегда? Это действие нельзя отменить.</translation>
+  <translation id="1383876407941801731">Поиск</translation>
+  <translation id="152835193502726983">Поиск по пути</translation>
+  <translation id="2810027854515126016">Поиск по содержимому</translation>
+  <translation id="4746823868296065535">Введите запрос; для фильтра введите .pdf или .txt и пробел</translation>
+  <translation id="1178581264944972037">Пауза</translation>
+  <translation id="8200772114523450471">Продолжить</translation>
+  <translation id="5993630545341499256">Введите запрос или тип файла. Для поиска по содержимому нужен запрос.</translation>
+  <translation id="2263107154412103083">Поиск…</translation>
+  <translation id="7607002721634913082">Приостановлено</translation>
+  <translation id="134275439349343980">Поиск отменён</translation>
+  <translation id="3270257063716505046">Поиск завершён</translation>
+  <translation id="4601564743945960495">Ошибка поиска. Проверьте папку или повторите попытку.</translation>
+  <translation id="4118624008365998354">Достигнут предел поиска; уточните запрос.</translation>
+  <translation id="2029103826420892535">совпадений</translation>
+  <translation id="7992826586750241916">проверено</translation>
+  <translation id="3460842926886499352">пропущено или проверено частично</translation>
+  <translation id="5336759974910418265">Открыть содержащую папку</translation>
+  <translation id="3133846425424266483">Скрытый файл</translation>
 </translationbundle>

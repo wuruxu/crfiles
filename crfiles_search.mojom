@@ -1,0 +1,35 @@
+// Copyright 2026 The Chromium Authors
+module crfiles.mojom;
+
+enum SearchMode { kPath, kContent };
+struct SearchOptions {
+  string root;
+  string query;
+  array<string> extensions;
+  SearchMode mode;
+  bool show_hidden = false;
+  bool hidden_only = false;
+};
+struct SearchHit {
+  string path;
+  bool directory;
+  bool hidden;
+  int64 size;
+  string detail;
+};
+struct SearchBatch {
+  array<SearchHit> hits;
+  uint64 scanned;
+  uint64 skipped;
+  bool done;
+  bool paused;
+  bool limited;
+  bool failed;
+};
+// Pull-based batches provide backpressure. Each job has at most one Next call.
+interface SearchService {
+  Start(uint64 job, SearchOptions options);
+  Next(uint64 job) => (SearchBatch batch);
+  SetPaused(uint64 job, bool paused);
+  Cancel(uint64 job);
+};

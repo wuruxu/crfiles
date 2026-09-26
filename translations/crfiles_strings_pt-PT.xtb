@@ -163,4 +163,24 @@
   <translation id="3122085228797291657">Seguir o tema do sistema</translation>
   <translation id="1807246157184219062">Claro</translation>
   <translation id="2414886740292270097">Escuro</translation>
+  <translation id="5159560892333415631">Esvaziar o lixo</translation>
+  <translation id="3472692949324419376">Eliminar permanentemente todos os itens do lixo? Esta ação não pode ser anulada.</translation>
+  <translation id="1383876407941801731">Pesquisar</translation>
+  <translation id="152835193502726983">Pesquisar por caminho</translation>
+  <translation id="2810027854515126016">Pesquisar por conteúdo</translation>
+  <translation id="4746823868296065535">Pesquise aqui; escreva .pdf ou .txt seguido de espaço para filtrar</translation>
+  <translation id="1178581264944972037">Pausar</translation>
+  <translation id="8200772114523450471">Retomar</translation>
+  <translation id="5993630545341499256">Introduza uma consulta ou um tipo de ficheiro. A pesquisa por conteúdo requer uma consulta.</translation>
+  <translation id="2263107154412103083">A pesquisar…</translation>
+  <translation id="7607002721634913082">Em pausa</translation>
+  <translation id="134275439349343980">Pesquisa cancelada</translation>
+  <translation id="3270257063716505046">Pesquisa concluída</translation>
+  <translation id="4601564743945960495">Falha na pesquisa. Verifique a pasta ou tente novamente.</translation>
+  <translation id="4118624008365998354">Limite atingido; refine a pesquisa.</translation>
+  <translation id="2029103826420892535">correspondências</translation>
+  <translation id="7992826586750241916">itens examinados</translation>
+  <translation id="3460842926886499352">itens ignorados ou parcialmente examinados</translation>
+  <translation id="5336759974910418265">Abrir pasta do ficheiro</translation>
+  <translation id="3133846425424266483">Ficheiro oculto</translation>
 </translationbundle>

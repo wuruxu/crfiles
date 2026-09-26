@@ -107,6 +107,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
 | Alt+Left / Alt+Right | Back / forward |
 | F5 | Refresh |
 | F11 | Toggle fullscreen |
+| A–Z in a focused folder view | Select the next file or folder starting with that letter; press again to continue, wrapping at the end |
 
 ## Nearby sharing
 
@@ -435,3 +436,101 @@ indicator and resize cursor. Drag it outward to expand, or double-click it to
 restore the previous expanded width. Ctrl+L also toggles that saved width.
 Visibility and expanded width are persisted separately. History hides both the
 sidebar and its resize edge without changing the saved sidebar preference.
+
+PDF thumbnails
+--------------
+Icon mode previews the first page of PDFs through the bundled PDFium library.
+Rendering fits the page on a white background within the existing 128 px thumbnail
+limit. It uses the visible-first file-visual queue and shared 64 MiB / 1024-entry
+thumbnail LRU, with metadata and mutation checks before caching. PDFium is lazily
+initialized, and all PDF API calls and handle cleanup are serialized on workers.
+No document scripts or interactive form environment are started.
+
+Inputs retain the preview loader's 64 MiB file limit. Progressive rendering checks
+the directory cancellation token and a two-second cooperative time budget;
+document/page parsing and individual rendering operations cannot be forcibly
+interrupted. Password-protected PDFs requiring a password, damaged documents,
+large files and failed/timed-out previews retain their normal file icon. Double
+click continues to launch the system default application.
+
+This change was checked against local PDFium APIs without compiling or running
+the application. Linux and Windows runtime preview validation remains pending.
+
+
+Directory search
+----------------
+
+Use **Search** in a folder pane's bottom toolbar to open a dedicated search tab
+for that folder and its descendants. The capsule input follows the History page
+layout. Its filter icon offers **Search by Path** (default),
+**Search by Content**, and an unchecked **Hidden File** checkbox after a
+separator. Hidden files and directories are excluded unless enabled; Windows
+hidden attributes are respected in addition to dot-prefixed names. Toggling this
+option preserves ordinary results and their existing rows. When enabled, a
+supplemental hidden-only pass runs after the ordinary pass, enumerating folders
+but not rereading ordinary file contents. Turning it off filters hidden matches
+from the list; turning it back on reuses matches already collected. A running
+hidden pass may finish into the bounded result cache even while its results are
+hidden. Typing a query or changing file types prepares a new search; Enter starts
+it. Switching a filter menu option starts a search immediately when query text
+or a query chip is present.
+
+Type an extension followed by Space, for example `.pdf ` or `.jpg `, to create a
+removable type chip. Multiple types are alternatives; `.jpg .png Canon` searches
+both image types for `Canon` when content mode is selected. Path mode can use
+only type chips; content mode also requires a query. Matching is case-insensitive.
+
+Content sources currently include:
+
+- UTF-8 text and UTF-16 text with a byte-order mark.
+- Embedded PDF text, through the bundled PDFium library.
+- JPEG EXIF, XMP and comments; PNG eXIf, tEXt, zTXt and iTXt;
+  WebP EXIF/XMP; and EXIF fields in small TIFF files.
+- Recognized EXIF values include camera/lens make and model, capture dates,
+  author, description, copyright, exposure, ISO, Windows XP text fields and GPS.
+
+This is metadata/text matching, not OCR, image recognition, a geographic query
+engine or an Office document parser. Images without matching embedded metadata
+will not match content queries. Scanned PDFs without text are not OCR-processed.
+
+A lazily started `--crfiles-search-process` child handles enumeration and parsing
+through the generated `crfiles_search.mojom` interface. Tabs share the process;
+parsing runs on one worker sequence. Pull-based batches apply backpressure, and
+job/generation IDs discard stale results after editing or canceling. The tab
+shows a spinning indicator while searching, a pause icon when paused and a check
+when complete; canceled and failed searches also have distinct icons.
+**Pause/Resume** is an icon on the left of the centered root-path capsule and
+is hidden when no task is active. Typing keeps the query editable; only Enter
+starts the search and turns the query into a chip in the search
+field. Removing that chip stops the search; Escape also cancels
+the task. There is no separate Cancel button. Enter starts searches without a
+separate Search button. The result folder action has a
+rounded background with animated hover and press feedback. Pause/cancel are cooperative: a native
+file read or PDF parsing call already in progress must return first. Closing the
+last search tab releases the child process. This process separation does not
+constitute an OS security sandbox.
+
+The UI keeps at most 10,000 results in a continuously scrolling virtual list.
+Only visible rows and roughly three buffer rows on either side have Views;
+offscreen rows are released, except for a focused row retained for keyboard
+continuity. New batches append to the visible index without rescanning old hits.
+List updates are coalesced at 100 ms and progress labels at 250 ms; completion,
+pause and cancel statuses update immediately. Highlighted text caches its
+RenderText until bounds, font, theme or display scale changes. Path
+search shows one line per result, with matching path text highlighted in color
+using regular font weight. Content
+search shows the filename on the first line and the highlighted matching excerpt
+on the second line. Long lines are elided; hover to see the full text. Double-click
+a result to open it; files use the system default application. Each result also
+provides an **Open containing folder** icon that selects and scrolls to the
+result in its parent directory. Restored search tabs retain
+their root folder, but do not automatically rerun previous queries.
+
+Limits keep resource usage bounded: 1,000,000 scanned entries, 10,000 queued
+folders, 16 MiB per text file, 64 MiB per PDF, and the first 512 PDF pages with a
+three-second cooperative extraction budget. Image metadata has 4 MiB encoded
+and decoded budgets and a two-second cooperative scan budget. Whole-file TIFF
+metadata reading is limited to 4 MiB. Symlinks, Windows reparse points and POSIX
+special files are skipped. The status line reports skipped/partially searched
+files and limits; results can therefore be incomplete for unsupported, protected,
+unreadable or oversized files. No persistent content index is created.

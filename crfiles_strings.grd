@@ -205,6 +205,26 @@
       <message name="IDS_CRFILES_THEME_SETTING_SYSTEM" desc="Theme setting that follows the operating system">Follow system theme</message>
       <message name="IDS_CRFILES_THEME_SETTING_LIGHT" desc="Light application theme setting">Light</message>
       <message name="IDS_CRFILES_THEME_SETTING_DARK" desc="Dark application theme setting">Dark</message>
+      <message name="IDS_CRFILES_EMPTY_TRASH" desc="Permanently empty the crFiles private trash.">Empty Trash</message>
+      <message name="IDS_CRFILES_EMPTY_TRASH_CONFIRM" desc="Permanently empty the crFiles private trash.">Permanently delete all items in Trash? This cannot be undone.</message>
+      <message name="IDS_CRFILES_SEARCH" desc="Directory search page and background search status.">Search</message>
+      <message name="IDS_CRFILES_SEARCH_PATH" desc="Directory search page and background search status.">Search by Path</message>
+      <message name="IDS_CRFILES_SEARCH_CONTENT" desc="Directory search page and background search status.">Search by Content</message>
+      <message name="IDS_CRFILES_SEARCH_PLACEHOLDER" desc="Directory search page and background search status.">Search here; type .pdf or .txt followed by Space to filter</message>
+      <message name="IDS_CRFILES_SEARCH_PAUSE" desc="Directory search page and background search status.">Pause</message>
+      <message name="IDS_CRFILES_SEARCH_RESUME" desc="Directory search page and background search status.">Resume</message>
+      <message name="IDS_CRFILES_SEARCH_READY" desc="Directory search page and background search status.">Enter a query or file type. Content search requires a query.</message>
+      <message name="IDS_CRFILES_SEARCH_RUNNING" desc="Directory search page and background search status.">Searching…</message>
+      <message name="IDS_CRFILES_SEARCH_PAUSED" desc="Directory search page and background search status.">Paused</message>
+      <message name="IDS_CRFILES_SEARCH_CANCELED" desc="Directory search page and background search status.">Search canceled</message>
+      <message name="IDS_CRFILES_SEARCH_COMPLETE" desc="Directory search page and background search status.">Search complete</message>
+      <message name="IDS_CRFILES_SEARCH_FAILED" desc="Directory search page and background search status.">Search failed. Check the folder or try again.</message>
+      <message name="IDS_CRFILES_SEARCH_LIMIT" desc="Directory search page and background search status.">Search limit reached; narrow your query.</message>
+      <message name="IDS_CRFILES_SEARCH_MATCHES" desc="Directory search page and background search status.">matches</message>
+      <message name="IDS_CRFILES_SEARCH_SCANNED" desc="Directory search page and background search status.">scanned</message>
+      <message name="IDS_CRFILES_SEARCH_SKIPPED" desc="Directory search page and background search status.">skipped or partially searched</message>
+      <message name="IDS_CRFILES_SEARCH_OPEN_FOLDER" desc="Directory search page and background search status.">Open containing folder</message>
+      <message name="IDS_CRFILES_SEARCH_HIDDEN" desc="Checkbox in the search filter menu to include hidden files and folders.">Hidden File</message>
     </messages>
   </release>
 </grit>

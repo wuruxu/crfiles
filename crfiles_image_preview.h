@@ -7,14 +7,16 @@
 #include "base/files/file_path.h"
 #include "ui/gfx/image/image_skia.h"
 namespace crfiles {
-// Blocking decode, bounded by file size and pixel count. Run on a file worker.
+// Images/SVG and PDF first pages, bounded by file size and pixel count.
+// Blocking decode: run on a file worker. PDFium access is serialized.
 gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge);
 // Worker-only shared LRU. Validates file metadata on every lookup. Retained
 // thumbnails are bounded by 64 MiB and 1024 entries; large previews bypass it.
 gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled);
 // Cooperative cancellation around IO and decode stages; an executing codec call
-// finishes before cancellation can be observed.
+// finishes before cancellation can be observed. PDF progressive rendering also
+// checks cancellation and a time budget; PDF loading/parsing cannot be interrupted.
 gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled);
 }

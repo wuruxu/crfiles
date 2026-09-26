@@ -163,4 +163,24 @@
   <translation id="3122085228797291657">اتباع مظهر النظام</translation>
   <translation id="1807246157184219062">فاتح</translation>
   <translation id="2414886740292270097">داكن</translation>
+  <translation id="5159560892333415631">إفراغ سلة المهملات</translation>
+  <translation id="3472692949324419376">هل تريد حذف جميع العناصر في سلة المهملات نهائيًا؟ لا يمكن التراجع عن هذا الإجراء.</translation>
+  <translation id="1383876407941801731">بحث</translation>
+  <translation id="152835193502726983">البحث بالمسار</translation>
+  <translation id="2810027854515126016">البحث بالمحتوى</translation>
+  <translation id="4746823868296065535">ابحث هنا؛ اكتب .pdf أو .txt ثم مسافة للتصفية</translation>
+  <translation id="1178581264944972037">إيقاف مؤقت</translation>
+  <translation id="8200772114523450471">استئناف</translation>
+  <translation id="5993630545341499256">أدخل عبارة أو نوع ملف. يتطلب البحث بالمحتوى عبارة بحث.</translation>
+  <translation id="2263107154412103083">جارٍ البحث…</translation>
+  <translation id="7607002721634913082">متوقف مؤقتًا</translation>
+  <translation id="134275439349343980">تم إلغاء البحث</translation>
+  <translation id="3270257063716505046">اكتمل البحث</translation>
+  <translation id="4601564743945960495">فشل البحث. تحقق من المجلد أو أعد المحاولة.</translation>
+  <translation id="4118624008365998354">تم بلوغ حد البحث؛ ضيّق نطاق البحث.</translation>
+  <translation id="2029103826420892535">نتائج مطابقة</translation>
+  <translation id="7992826586750241916">عناصر مفحوصة</translation>
+  <translation id="3460842926886499352">عناصر متخطاة أو مفحوصة جزئيًا</translation>
+  <translation id="5336759974910418265">فتح المجلد الحاوي</translation>
+  <translation id="3133846425424266483">ملف مخفي</translation>
 </translationbundle>

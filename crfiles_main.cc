@@ -37,6 +37,7 @@
 #include "build/build_config.h"
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "crFiles/crfiles_theme.h"
+#include "crFiles/crfiles_search.h"
 #include "crFiles/crfiles_version.h"
 #include "crFiles/crfiles_window.h"
 #include "libcr/viz_context_factory.h"
@@ -312,6 +313,10 @@ int CrFilesEntry(int argc, char** argv) {
   mojo_configuration.is_broker_process = true;
   mojo::core::Init(mojo_configuration);
   base::i18n::InitializeICU();
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kSearchProcessSwitch)) {
+    base::FeatureList::InitInstance("", "");
+    return crfiles::RunSearchProcess();
+  }
   ui::RegisterPathProvider();
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
