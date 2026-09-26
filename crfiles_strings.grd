@@ -225,6 +225,7 @@
       <message name="IDS_CRFILES_SEARCH_SKIPPED" desc="Directory search page and background search status.">skipped or partially searched</message>
       <message name="IDS_CRFILES_SEARCH_OPEN_FOLDER" desc="Directory search page and background search status.">Open containing folder</message>
       <message name="IDS_CRFILES_SEARCH_HIDDEN" desc="Checkbox in the search filter menu to include hidden files and folders.">Hidden File</message>
+      <message name="IDS_CRFILES_HOVER_IMAGE_PREVIEW" desc="General settings checkbox to enlarge an image while hovering over its file entry.">Preview images on hover</message>
     </messages>
   </release>
 </grit>

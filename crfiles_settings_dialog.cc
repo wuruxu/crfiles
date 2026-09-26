@@ -300,21 +300,24 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     const auto preferences = GetFileViewPreferences();
     auto_hide_toolbar_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_AUTO_HIDE_TOOLBAR)));
     animate_folders_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_ANIMATE_FOLDERS)));
+    hover_image_preview_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_HOVER_IMAGE_PREVIEW)));
     auto_hide_toolbar_->SetChecked(preferences.auto_hide_toolbar);
     animate_folders_->SetChecked(preferences.animate_folders);
-    for (auto* checkbox : {auto_hide_toolbar_.get(), animate_folders_.get()}) {
+    hover_image_preview_->SetChecked(preferences.hover_image_preview);
+    for (auto* checkbox : {auto_hide_toolbar_.get(), animate_folders_.get(), hover_image_preview_.get()}) {
       checkbox->SetFocusBehavior(views::View::FocusBehavior::NEVER);
       checkbox->SetCallback(base::BindRepeating(&Settings::FileViewChanged, base::Unretained(this)));
     }
     return page;
   }
   void FileViewChanged() {
-    const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked()});
+    const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked(), hover_image_preview_->GetChecked()});
     error_->SetVisible(!saved);
     if (!saved) {
       const auto preferences = GetFileViewPreferences();
       auto_hide_toolbar_->SetChecked(preferences.auto_hide_toolbar);
       animate_folders_->SetChecked(preferences.animate_folders);
+      hover_image_preview_->SetChecked(preferences.hover_image_preview);
     }
     ApplyCrFilesViewSettings();
   }
@@ -582,7 +585,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   raw_ptr<views::Combobox> language_ = nullptr, retention_ = nullptr;
   raw_ptr<views::Textfield> name_ = nullptr, directory_ = nullptr;
   raw_ptr<views::Label> error_ = nullptr;
-  raw_ptr<views::Checkbox> auto_hide_toolbar_ = nullptr, animate_folders_ = nullptr;
+  raw_ptr<views::Checkbox> auto_hide_toolbar_ = nullptr, animate_folders_ = nullptr, hover_image_preview_ = nullptr;
   raw_ptr<views::Checkbox> discovery_ = nullptr, auto_accept_ = nullptr;
   raw_ptr<views::MdTextButton> apply_ = nullptr;
   raw_ptr<views::ImageButton> avatar_button_ = nullptr, folder_ = nullptr;

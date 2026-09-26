@@ -119,7 +119,7 @@ ThumbnailCache& Thumbnails() {
 gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled) {
   auto stopped = [&] { return canceled && canceled->load(std::memory_order_relaxed); };
-  if (stopped() || maximum_edge <= 0 || maximum_edge > 128) return {};
+  if (stopped() || maximum_edge <= 0 || maximum_edge > 720) return {};
   auto epoch = ObserveFileCachePath(path, false);
   const auto revision = epoch->revision.load();
   base::File::Info before;

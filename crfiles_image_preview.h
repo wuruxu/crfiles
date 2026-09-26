@@ -11,7 +11,8 @@ namespace crfiles {
 // Blocking decode: run on a file worker. PDFium access is serialized.
 gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge);
 // Worker-only shared LRU. Validates file metadata on every lookup. Retained
-// thumbnails are bounded by 64 MiB and 1024 entries; large previews bypass it.
+// thumbnails/hover previews up to 720 px are bounded by 64 MiB and 1024 entries;
+// larger previews bypass it.
 gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled);
 // Cooperative cancellation around IO and decode stages; an executing codec call

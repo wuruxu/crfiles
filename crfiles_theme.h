@@ -21,6 +21,7 @@ inline constexpr std::array<int, 4> kHistoryRetentionDays = {7, 30, 90, 365};
 struct FileViewPreferences {
   bool auto_hide_toolbar = true;
   bool animate_folders = true;
+  bool hover_image_preview = false;
 };
 FileViewPreferences GetFileViewPreferences();
 bool SetFileViewPreferences(const FileViewPreferences& preferences);

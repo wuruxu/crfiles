@@ -33,6 +33,7 @@
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
+#include "base/files/file_path_watcher.h"
 #include "base/functional/bind.h"
 #include "base/i18n/time_formatting.h"
 #include "base/i18n/case_conversion.h"
@@ -48,6 +49,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/task/bind_post_task.h"
+#include "base/threading/sequence_bound.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_flags.h"
@@ -510,6 +513,39 @@ class DirectoryReadQueue {
   std::vector<std::shared_ptr<Job>> jobs_;
 };
 DirectoryReadQueue& DirectoryReads() { static base::NoDestructor<DirectoryReadQueue> queue; return *queue; }
+// Owned and destroyed on one blocking sequence; notifications are coalesced
+// before crossing to the UI. Each visible directory has one shared watcher.
+class LiveDirectoryWatch {
+ public:
+  LiveDirectoryWatch(base::FilePath path, base::RepeatingCallback<void(base::FilePath)> changed)
+      : path_(std::move(path)), changed_(std::move(changed)) {
+    const bool ok = watcher_.Watch(path_, base::FilePathWatcher::Type::kNonRecursive,
+        base::BindRepeating(&LiveDirectoryWatch::Changed, base::Unretained(this)));
+    Changed(path_, !ok);
+    if (path_ == TrashRoot()) StartFallback();
+#if BUILDFLAG(IS_APPLE)
+    // kqueue does not report content changes to files inside a directory.
+    StartFallback();
+#endif
+  }
+ private:
+  void StartFallback() {
+    if (!fallback_.IsRunning()) fallback_.Start(FROM_HERE, base::Seconds(5), this, &LiveDirectoryWatch::Flush);
+  }
+  void Changed(const base::FilePath&, bool error) {
+    if (error) StartFallback();
+    if (!coalesce_.IsRunning()) coalesce_.Start(FROM_HERE, base::Milliseconds(200), this, &LiveDirectoryWatch::Flush);
+  }
+  void Flush() {
+    { ScopedFileCacheMutation invalidate({path_}); }
+    changed_.Run(path_);
+  }
+  base::FilePath path_;
+  base::RepeatingCallback<void(base::FilePath)> changed_;
+  base::FilePathWatcher watcher_;
+  base::OneShotTimer coalesce_;
+  base::RepeatingTimer fallback_;
+};
 void AnimateButton(views::Button* button) {
   button->SetAnimateOnStateChange(true);
   button->SetAnimationDuration(base::Milliseconds(160));
@@ -2234,7 +2270,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     files_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     if (root_) files_->set_context_menu_controller(this);
     files_->RegisterPostLayoutCallback(base::BindRepeating(&FilesView::RestoreScroll, base::Unretained(this)));
-    file_scroll_subscription_ = files_->AddContentsScrolledCallback(base::BindRepeating(&FilesView::FileViewportChanged, weak_.GetWeakPtr()));
+    file_scroll_subscription_ = files_->AddContentsScrolledCallback(base::BindRepeating(&FilesView::FileContentsScrolled, weak_.GetWeakPtr()));
     files_->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
     auto* footer = center->AddChildView(std::make_unique<views::View>());
     footer_ = footer;
@@ -2450,7 +2486,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }, weak_.GetWeakPtr())));
     files_->SetContents(std::move(contents));
   }
-  ~FilesView() override { if (destination_dialog_) destination_dialog_->ListenerDestroyed(); context_runner_.reset(); read_cancel_->store(true); order_cancel_->store(true); DirectoryReads().Prune(); visual_cancel_->store(true, std::memory_order_relaxed); outside_click_handler_.reset(); CloseNewFolder(); CloseViewOptions(); if (!root_) g_contents = nullptr; }
+  ~FilesView() override { hover_cancel_->store(true); live_cancel_->store(true); if (destination_dialog_) destination_dialog_->ListenerDestroyed(); context_runner_.reset(); read_cancel_->store(true); order_cancel_->store(true); DirectoryReads().Prune(); visual_cancel_->store(true, std::memory_order_relaxed); outside_click_handler_.reset(); CloseNewFolder(); CloseViewOptions(); if (!root_) g_contents = nullptr; }
   void AddedToWidget() override {
     views::View::AddedToWidget();
     if (root_) return;
@@ -2544,6 +2580,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   views::View* DefaultFocusView() { return root_ ? (search_view_ ? search_view_.get() : files_.get()) : ActivePane()->DefaultFocusView(); }
   gfx::Size GetMinimumSize() const override { return root_ ? gfx::Size(300, 140) : gfx::Size(900, 500); }
   void PrepareToClose() {
+    if (!root_) CloseHoverPreview(false);
+    live_watches_.clear(); timer_.Stop();
     if (search_view_) StopSearchPage(search_view_);
     sidebar_animation_timer_.Stop();
     CancelDirectoryWork();
@@ -2726,6 +2764,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     trusted_dialog_.SetView(ShowTrustedDevicesDialog(GetWidget(), sharing_));
   }
   void ApplyViewSettings() {
+    if (!GetFileViewPreferences().hover_image_preview) CloseHoverPreview(false);
     const bool animate = GetFileViewPreferences().animate_folders;
     for (auto& tab : tabs_) VisitPanes(tab.pane_host, base::BindRepeating([](bool enabled, FilesView* pane) {
       if (pane->history_page_) return;
@@ -3128,9 +3167,285 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
 
  private:
+  void CloseHoverPreview(bool animate = true) {
+    hover_wait_timer_.Stop(); hover_cancel_->store(true);
+    hover_owner_.reset(); hover_path_.clear(); hover_ready_ = false;
+    if (!hover_panel_) return;
+    hover_hide_timer_.Stop();
+    hover_panel_->layer()->GetAnimator()->StopAnimating();
+    if (!animate) { hover_panel_->SetVisible(false); return; }
+    ui::ScopedLayerAnimationSettings settings(hover_panel_->layer()->GetAnimator());
+    settings.SetTransitionDuration(base::Milliseconds(120));
+    settings.SetTweenType(gfx::Tween::EASE_OUT);
+    hover_panel_->layer()->SetOpacity(0.f);
+    hover_hide_timer_.Start(FROM_HERE, base::Milliseconds(120), base::BindOnce([](base::WeakPtr<FilesView> shell) {
+      if (shell && shell->hover_panel_) shell->hover_panel_->SetVisible(false);
+    }, weak_.GetWeakPtr()));
+  }
+  bool HoverPreviewValid() {
+    if (!GetFileViewPreferences().hover_image_preview) return false;
+    if (!hover_owner_ || hover_path_.empty() || !GetWidget() || !GetWidget()->IsActive() || !display::Screen::Get()) return false;
+    auto* pane = hover_owner_.get();
+    if (!pane->IsDrawn() || pane->LiveUpdateBusy() || GetBoundsInScreen() != hover_root_bounds_) return false;
+    const auto row = pane->row_views_.find(hover_path_);
+    if (row == pane->row_views_.end()) return false;
+    const auto point = display::Screen::Get()->GetCursorScreenPoint();
+    return row->second->GetBoundsInScreen().Contains(point) && pane->files_->GetBoundsInScreen().Contains(point);
+  }
+  void PollImageHover(gfx::Point point) {
+    if (!GetFileViewPreferences().hover_image_preview) {
+      if (!hover_path_.empty()) CloseHoverPreview(false);
+      return;
+    }
+    FilesView* owner = nullptr;
+    base::FilePath path;
+    if (GetWidget() && GetWidget()->IsActive()) VisitPanes(Current().pane_host,
+        base::BindRepeating([](gfx::Point point, FilesView** owner, base::FilePath* path, FilesView* pane) {
+          if (*owner || pane->history_page_ || !pane->IsDrawn() || pane->LiveUpdateBusy() ||
+              !pane->files_->GetBoundsInScreen().Contains(point) ||
+              (pane->footer_shown_ && pane->footer_->GetBoundsInScreen().Contains(point))) return;
+          for (const auto& [entry, button] : pane->visible_buttons_) {
+            if (entry->directory || entry->removed ||
+                (!entry->mime.starts_with("image/") && !entry->path.MatchesExtension(FILE_PATH_LITERAL(".svg")))) continue;
+            auto row = pane->row_views_.find(entry->path);
+            if (row != pane->row_views_.end() && row->second->GetBoundsInScreen().Contains(point)) {
+              *owner = pane; *path = entry->path; return;
+            }
+          }
+        }, point, &owner, &path));
+    if (owner && hover_owner_.get() == owner && hover_path_ == path && GetBoundsInScreen() == hover_root_bounds_) return;
+    if (!hover_path_.empty()) CloseHoverPreview();
+    if (!owner) return;
+    hover_owner_ = owner->weak_.GetWeakPtr(); hover_path_ = std::move(path);
+    hover_root_bounds_ = GetBoundsInScreen();
+    hover_cancel_ = std::make_shared<std::atomic_bool>(false);
+    hover_wait_timer_.Start(FROM_HERE, base::Milliseconds(400), this, &FilesView::StartHoverPreview);
+  }
+  void StartHoverPreview() {
+    if (!HoverPreviewValid()) { CloseHoverPreview(); return; }
+    hover_ready_ = true;
+    for (const auto& [entry, button] : hover_owner_->visible_buttons_)
+      if (entry->path == hover_path_ && !entry->thumbnail.isNull()) { ShowHoverImage(entry->thumbnail); break; }
+    LoadHoverPreview();
+  }
+  void LoadHoverPreview() {
+    if (hover_decode_running_ || !hover_ready_ || !HoverPreviewValid()) return;
+    hover_decode_running_ = true;
+    const auto canceled = hover_cancel_;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&LoadCachedThumbnail, hover_path_, 720, canceled),
+        base::BindOnce(&FilesView::HoverImageLoaded, weak_.GetWeakPtr(), canceled));
+  }
+  void HoverImageLoaded(CancelFlag canceled, gfx::ImageSkia image) {
+    hover_decode_running_ = false;
+    if (canceled != hover_cancel_ || Stopped(canceled)) { LoadHoverPreview(); return; }
+    if (!HoverPreviewValid()) { CloseHoverPreview(); return; }
+    if (!image.isNull()) ShowHoverImage(image);
+  }
+  void ShowHoverImage(const gfx::ImageSkia& image) {
+    if (!HoverPreviewValid() || image.isNull() || image.width() <= 0 || image.height() <= 0) return;
+    gfx::Rect area = GetLocalBounds(); area.Inset(8);
+    gfx::Rect anchor = hover_owner_->row_views_.at(hover_path_)->GetBoundsInScreen();
+    anchor.Offset(-hover_root_bounds_.x(), -hover_root_bounds_.y());
+    // Choose the largest available side without covering the hovered row.
+    // This also works for full-width list rows and short windows.
+    const std::array rooms = {
+      gfx::Rect(anchor.right() + 12, area.y(), std::max(0, area.right() - anchor.right() - 12), area.height()),
+      gfx::Rect(area.x(), area.y(), std::max(0, anchor.x() - area.x() - 12), area.height()),
+      gfx::Rect(area.x(), anchor.bottom() + 12, area.width(), std::max(0, area.bottom() - anchor.bottom() - 12)),
+      gfx::Rect(area.x(), area.y(), area.width(), std::max(0, anchor.y() - area.y() - 12))};
+    double scale = 0;
+    size_t side = 0;
+    for (size_t index = 0; index < rooms.size(); ++index) {
+      if (rooms[index].width() < 48 || rooms[index].height() < 48) continue;
+      const double fit = std::min(static_cast<double>(std::min(360, rooms[index].width() - 16)) / image.width(),
+          static_cast<double>(std::min(280, rooms[index].height() - 16)) / image.height());
+      if (fit > scale) { scale = fit; side = index; }
+    }
+    if (scale <= 0) return;
+    const gfx::Size size(std::max(1, static_cast<int>(std::floor(image.width() * scale))),
+                         std::max(1, static_cast<int>(std::floor(image.height() * scale))));
+    const int w = size.width() + 16, h = size.height() + 16;
+    const auto& room = rooms[side];
+    gfx::Rect bounds(side < 2 ? (side == 0 ? room.x() : room.right() - w) :
+        display::Screen::Get()->GetCursorScreenPoint().x() - hover_root_bounds_.x() - w / 2,
+        side < 2 ? anchor.y() : (side == 2 ? room.y() : room.bottom() - h), w, h);
+    bounds.AdjustToFit(room);
+    if (bounds.Intersects(anchor)) return;
+    if (!hover_panel_) {
+      hover_panel_ = AddChildView(std::make_unique<views::View>());
+      hover_panel_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+      hover_panel_->SetCanProcessEventsWithinSubtree(false);
+      hover_panel_->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, 12));
+      hover_panel_->SetBorder(views::CreateRoundedRectBorder(1, 12, ui::kColorSysOutline));
+      hover_panel_->SetPaintToLayer(); hover_panel_->layer()->SetFillsBoundsOpaquely(false);
+      hover_panel_->SetVisible(false);
+      hover_image_ = hover_panel_->AddChildView(std::make_unique<views::ImageView>());
+      hover_image_->SetCornerRadius(6);
+      hover_image_->GetViewAccessibility().SetIsIgnored(true);
+    }
+    const bool entering = !hover_panel_->GetVisible() || hover_hide_timer_.IsRunning();
+    hover_hide_timer_.Stop(); hover_panel_->layer()->GetAnimator()->StopAnimating();
+    hover_panel_->SetBoundsRect(bounds);
+    hover_image_->SetBounds(8, 8, size.width(), size.height()); hover_image_->SetImageSize(size);
+    hover_image_->SetImage(ui::ImageModel::FromImageSkia(image));
+    ReorderChildView(hover_panel_, children().size() - 1);
+    hover_panel_->SetVisible(true);
+    if (entering) hover_panel_->layer()->SetOpacity(0.f);
+    ui::ScopedLayerAnimationSettings settings(hover_panel_->layer()->GetAnimator());
+    settings.SetTransitionDuration(base::Milliseconds(120)); settings.SetTweenType(gfx::Tween::EASE_OUT);
+    hover_panel_->layer()->SetOpacity(1.f);
+  }
+  void SyncLiveDirectories() {
+    if (root_ || tabs_.empty() || !GetWidget()) return;
+    const bool active = GetWidget()->IsActive();
+    const bool activated = active && !live_window_active_;
+    live_window_active_ = active;
+    std::set<base::FilePath> paths;
+    VisitPanes(Current().pane_host, base::BindRepeating([](bool activated,
+                                                        std::set<base::FilePath>* paths, FilesView* pane) {
+      if (pane->history_page_ || pane->tabs_.empty()) return;
+      const auto& path = pane->Current().path;
+      const bool visible = pane->IsDrawn() && !pane->GetWidget()->IsMinimized() && path.IsAbsolute() && !IsDrivesLocation(path);
+      if (visible) {
+        paths->insert(path);
+        if (!pane->live_visible_ || activated) pane->QueueLiveRead();
+      } else if (pane->live_visible_) pane->CancelLiveRead();
+      pane->live_visible_ = visible;
+    }, activated, &paths));
+    std::erase_if(live_watches_, [&paths](const auto& item) { return !paths.contains(item.first); });
+    if (!paths.empty() && !live_watch_runner_)
+      live_watch_runner_ = base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock(), base::TaskPriority::USER_VISIBLE});
+    for (const auto& path : paths) if (!live_watches_.contains(path)) {
+      live_watches_.emplace(path, base::SequenceBound<LiveDirectoryWatch>(live_watch_runner_, path,
+          base::BindPostTaskToCurrentDefault(base::BindRepeating(&FilesView::LiveDirectoryChanged, weak_.GetWeakPtr()))));
+    }
+  }
+  void LiveDirectoryChanged(base::FilePath path) {
+    if (tabs_.empty() || !live_watches_.contains(path)) return;
+    CachedDirectories().Remove(path);
+    VisitPanes(Current().pane_host, base::BindRepeating([](const base::FilePath& path, FilesView* pane) {
+      if (!pane->history_page_ && pane->IsDrawn() && pane->Current().path == path) pane->QueueLiveRead();
+    }, path));
+  }
+  void CancelLiveRead() {
+    live_cancel_->store(true);
+    DirectoryReads().Prune();
+    live_cancel_ = std::make_shared<std::atomic_bool>(false);
+    live_read_timer_.Stop(); live_read_pending_ = false; live_dirty_ = false; live_visible_ = false;
+  }
+  void QueueLiveRead() {
+    live_dirty_ = true;
+    if (!live_read_pending_ && !live_read_timer_.IsRunning())
+      live_read_timer_.Start(FROM_HERE, base::Milliseconds(50), this, &FilesView::ReadLiveDirectory);
+  }
+  bool LiveUpdateBusy() {
+    return Current().loading || order_pending_ || root_->local_operation_busy_ || trash_busy_ ||
+        !dragging_rows_.empty() || (GetWidget() && GetWidget()->HasCapture()) ||
+        (context_runner_ && context_runner_->IsRunning()) || more_menu_open_ || new_folder_widget_ || options_widget_ ||
+        std::ranges::any_of(row_views_, [](const auto& item) { return item.second->GetState() == views::Button::STATE_PRESSED; });
+  }
+  void ReadLiveDirectory() {
+    if (!root_ || history_page_ || !IsDrawn() || !files_->contents()) return;
+    if (LiveUpdateBusy()) {
+      live_read_timer_.Start(FROM_HERE, base::Milliseconds(200), this, &FilesView::ReadLiveDirectory);
+      return;
+    }
+    live_dirty_ = false; live_read_pending_ = true;
+    const auto& tab = Current();
+    DirectoryReads().Request(tab.path, tab.options.sort, tab.options.show_hidden, live_cancel_,
+        base::BindOnce(&FilesView::LiveDirectoryRead, weak_.GetWeakPtr(), live_cancel_, tab.request, tab.path));
+  }
+  void LiveDirectoryRead(CancelFlag token, uint64_t request, base::FilePath path, DirectoryResult result) {
+    if (token != live_cancel_ || Stopped(token)) return;
+    live_read_pending_ = false;
+    if (!IsDrawn() || Current().request != request || Current().path != path) return;
+    if (LiveUpdateBusy() ||
+        (result.ok && !result.Current() && (!result.epoch || result.epoch->writers.load() == 0))) {
+      QueueLiveRead(); return;
+    }
+    if (result.ok && (result.sort != Current().options.sort || result.hidden != Current().options.show_hidden)) {
+      // Shared reads may serve panes with different view options. Sort their
+      // metadata on the worker instead of repeatedly reading the same folder.
+      live_read_pending_ = true;
+      base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+          base::BindOnce([](DirectoryResult data, FileSort sort, bool hidden, CancelFlag canceled) {
+            data.order = SortDirectory(SortRecords(data.entries, canceled), sort, hidden, data.path == TrashRoot(), canceled);
+            data.sort = sort; data.hidden = hidden; return data;
+          }, std::move(result), Current().options.sort, Current().options.show_hidden, token),
+          base::BindOnce(&FilesView::LiveDirectoryRead, weak_.GetWeakPtr(), token, request, path));
+      return;
+    }
+    ApplyLiveDirectory(std::move(result));
+    if (live_dirty_) QueueLiveRead();
+  }
+  void ApplyLiveDirectory(DirectoryResult result) {
+    auto& tab = Current();
+    CachedDirectories().Put(result);
+    if (result.ok && SameDirectoryContents(tab.entries, result.entries)) {
+      tab.error = false; UpdateStatus(); return;
+    }
+    tab.error = !result.ok;
+    if (!result.ok) { result.entries.clear(); result.order.clear(); CachedDirectories().Remove(tab.path); }
+    CancelFileVisuals(); virtual_rows_timer_.Stop(); SaveScroll();
+    auto* layout = static_cast<FileLayout*>(files_->contents());
+    base::FilePath anchor_path, focus_path, keyboard_path, selection_anchor_path;
+    const auto viewport = files_->GetVisibleRect();
+    const auto first = layout->ItemsInRect(viewport).first;
+    int anchor_offset = 0;
+    if (first < displayed_entries_.size()) {
+      anchor_path = tab.entries[displayed_entries_[first]].path;
+      anchor_offset = viewport.y() - layout->ItemBounds(first).y();
+    }
+    auto* focused = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
+    for (const auto& [path, row] : row_views_) if (focused && row->Contains(focused)) focus_path = path;
+    if (keyboard_position_ && *keyboard_position_ < displayed_entries_.size()) keyboard_path = tab.entries[displayed_entries_[*keyboard_position_]].path;
+    if (keyboard_anchor_ && *keyboard_anchor_ < displayed_entries_.size()) selection_anchor_path = tab.entries[displayed_entries_[*keyboard_anchor_]].path;
+    std::map<base::FilePath, const Entry*> previous;
+    for (const auto& entry : tab.entries) if (!entry.removed) previous.emplace(entry.path, &entry);
+    std::map<base::FilePath, size_t> positions;
+    std::set<base::FilePath> unchanged;
+    for (size_t index = 0; index < result.entries.size(); ++index) {
+      auto& entry = result.entries[index]; positions.emplace(entry.path, index);
+      const auto old = previous.find(entry.path);
+      if (old == previous.end() || !SameMetadata(*old->second, entry)) continue;
+      unchanged.insert(entry.path);
+      entry.images = old->second->images; entry.icon_loaded = old->second->icon_loaded;
+      entry.thumbnail = old->second->thumbnail; entry.thumbnail_attempted = old->second->thumbnail_attempted;
+    }
+    std::vector<base::FilePath> remove;
+    for (const auto& [path, row] : row_views_) if (!unchanged.contains(path)) remove.push_back(path);
+    for (const auto& path : remove) {
+      if (path == focus_path) files_->RequestFocus();
+      RemoveFileRow(path);
+    }
+    // Retained row callbacks use paths, but visual work keeps Entry pointers.
+    // Rebind every pointer before destroying the old model storage.
+    for (auto& [entry, button] : visible_buttons_) entry = &result.entries[positions.at(entry->path)];
+    std::erase_if(tab.selected, [&positions](const auto& path) { return !positions.contains(path); });
+    tab.entries = std::move(result.entries); tab.sorted_entries = std::move(result.order);
+    tab.sorted_mode = tab.options.sort; tab.sorted_hidden = tab.options.show_hidden;
+    RebuildDisplayedEntries(); layout->SetItemCount(displayed_entries_.size());
+    for (size_t position = 0; position < displayed_entries_.size(); ++position) {
+      const auto& path = tab.entries[displayed_entries_[position]].path;
+      if (path == anchor_path) tab.scroll = std::max(0, layout->ItemBounds(position).y() + anchor_offset);
+      if (path == keyboard_path) keyboard_position_ = position;
+      if (path == selection_anchor_path) keyboard_anchor_ = position;
+      if (auto row = row_views_.find(path); row != row_views_.end()) layout->PlaceItem(position, row->second);
+    }
+    // Restore geometry and scroll before materializing the new visible range.
+    layout->OrderItems();
+    pending_scroll_ = tab.scroll; files_->InvalidateLayout(); files_->DeprecatedLayoutImmediately();
+    UpdateVirtualRows();
+    if (!focus_path.empty()) {
+      if (auto row = row_views_.find(focus_path); row != row_views_.end()) row->second->RequestFocus();
+    }
+    UpdateStatus(); root_->ScheduleWorkspaceSave();
+  }
   void PollFooterHover() {
     if (root_ || tabs_.empty() || !display::Screen::Get()) return;
     const auto cursor = display::Screen::Get()->GetCursorScreenPoint();
+    PollImageHover(cursor);
     VisitPanes(Current().pane_host, base::BindRepeating([](gfx::Point point, FilesView* pane) {
       if (pane->history_page_ || !pane->footer_) return;
       // Hover anywhere in either an active or inactive pane reveals its footer.
@@ -3506,6 +3821,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr(), generation));
   }
   void DismissEditingBubbles() {
+    CloseHoverPreview();
     if (tabs_.empty()) return;
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
       if (!pane->new_folder_widget_) return;
@@ -3623,6 +3939,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     ActivePane()->footer_active_ = false;
     UpdatePaneControls(); SyncNavigation(); ScheduleWorkspaceSave();
     ActivePane()->DefaultFocusView()->RequestFocus();
+    SyncLiveDirectories();
   }
   void ClosePaneTab(int id) {
     auto found = std::ranges::find(tabs_, id, &Tab::id);
@@ -4603,6 +4920,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     order_cancel_ = std::make_shared<std::atomic_bool>(false);
   }
   void CancelDirectoryWork() {
+    CancelLiveRead();
     read_cancel_->store(true); DirectoryReads().Prune();
     read_cancel_ = std::make_shared<std::atomic_bool>(false);
     directory_retry_.Stop(); CancelOrdering();
@@ -4654,6 +4972,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     entry.thumbnail = {};
   }
   void RemoveFileRow(const base::FilePath& path) {
+    if (root_ && root_->hover_owner_.get() == this && root_->hover_path_ == path) root_->CloseHoverPreview();
     auto found = row_views_.find(path);
     if (found == row_views_.end()) return;
     auto* row = found->second.get();
@@ -4668,6 +4987,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto* layout = static_cast<FileLayout*>(files_->contents());
     layout->ForgetItem(row);
     layout->RemoveChildViewT(row);
+  }
+  void FileContentsScrolled() {
+    if (root_ && root_->hover_owner_.get() == this) root_->CloseHoverPreview();
+    FileViewportChanged();
   }
   void FileViewportChanged() {
     if (!root_ || history_page_) return;
@@ -4722,6 +5045,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     RequestFileVisuals();
   }
   void RenderFiles() {
+    if (root_ && root_->hover_owner_.get() == this) root_->CloseHoverPreview();
     if (history_page_) return;
     if (Current().sorted_mode != Current().options.sort || Current().sorted_hidden != Current().options.show_hidden) {
       RequestOrder(); return;
@@ -4862,6 +5186,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     return tile;
   }
   void CancelFileVisuals() {
+    if (root_ && root_->hover_owner_.get() == this) root_->CloseHoverPreview();
     visual_cancel_->store(true, std::memory_order_relaxed);
     visual_cancel_ = std::make_shared<std::atomic_bool>(false);
     visual_pending_.clear();
@@ -5064,6 +5389,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr(), path));
   }
   void UpdateNearby() {
+    SyncLiveDirectories();
     CheckReceivedDirectory();
 #if BUILDFLAG(IS_WIN)
     UpdateWindowsDrives();
@@ -5213,6 +5539,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
   CancelFlag read_cancel_ = std::make_shared<std::atomic_bool>(false);
   CancelFlag order_cancel_ = std::make_shared<std::atomic_bool>(false);
   base::OneShotTimer directory_retry_;
+  raw_ptr<views::View> hover_panel_ = nullptr;
+  raw_ptr<views::ImageView> hover_image_ = nullptr;
+  base::WeakPtr<FilesView> hover_owner_;
+  base::FilePath hover_path_;
+  gfx::Rect hover_root_bounds_;
+  CancelFlag hover_cancel_ = std::make_shared<std::atomic_bool>(false);
+  base::OneShotTimer hover_wait_timer_, hover_hide_timer_;
+  bool hover_ready_ = false, hover_decode_running_ = false;
+  std::map<base::FilePath, base::SequenceBound<LiveDirectoryWatch>> live_watches_;
+  scoped_refptr<base::SequencedTaskRunner> live_watch_runner_;
+  CancelFlag live_cancel_ = std::make_shared<std::atomic_bool>(false);
+  base::OneShotTimer live_read_timer_;
+  bool live_visible_ = false, live_window_active_ = false;
+  bool live_read_pending_ = false, live_dirty_ = false;
   bool order_pending_ = false, requested_hidden_ = false;
   FileSort requested_sort_ = FileSort::kNameAscending;
   std::shared_ptr<std::atomic_bool> visual_cancel_ = std::make_shared<std::atomic_bool>(false);

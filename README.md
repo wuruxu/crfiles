@@ -315,12 +315,39 @@ A separate worker-only thumbnail LRU retains at most 1024 successful images and
 and creation timestamps, and requested edge. Metadata is checked on lookup and
 again after decoding; filesystem reads and decoding never hold its mutex.
 Path-scoped writes invalidate affected thumbnails too, and canceled decoding
-cannot populate the cache. Large image previews bypass the thumbnail cache. These
+cannot populate the cache. Hover previews up to 720 px share this budget; larger
+image previews bypass the thumbnail cache. These
 budgets bound retained cache storage, not images held by live file views or
 in-flight decoders. Both caches are process-local and are not workspace data.
 
 
 ## Virtual file views
+
+Enable **Preview images on hover** in **Settings → General** (off by default).
+The preference is saved and takes effect immediately. Hover over an image entry
+in List or Icon mode for about 400 ms to see a rounded
+preview, including SVG images. It fits within 360 × 280 display pixels and the
+available window space, preserves aspect ratio, and avoids covering the hovered
+row. A cached thumbnail appears first when available, followed by a sharper
+worker-decoded image. The overlay uses a 120 ms fade, does not take focus or
+intercept clicks, and closes on scrolling, dragging, navigation, or pointer exit.
+Each window runs at most one hover decode at a time; canceled requests cannot
+replace a newer preview.
+
+Visible folder panes watch their directories for external changes on Linux and
+Windows. Panes showing the same path share a watcher and directory reads.
+Notifications are coalesced before background enumeration; unchanged visible
+rows and the list header are retained while changed entries are replaced.
+Selection and keyboard anchors follow surviving paths, and scrolling remains
+anchored to the previous top item when it still exists. External renames are
+treated as a removal and an addition. Automatic updates do not add History
+records or replay folder arrival animations.
+
+Hidden tabs release their subscriptions and revalidate when shown. Returning
+to the foreground also rechecks visible folders. Updates wait while a pane is
+being dragged, has an open editing popover/menu, or is completing a local file
+operation. Failed watchers use a five-second polling fallback; the synthetic
+Trash view also polls to detect changes inside its per-item storage folders.
 
 The scroll extent comes from the complete filtered, sorted metadata model, not
 from the number of child views. List headers retain their own fixed height and
@@ -486,6 +513,13 @@ Content sources currently include:
 - Embedded PDF text, through the bundled PDFium library.
 - JPEG EXIF, XMP and comments; PNG eXIf, tEXt, zTXt and iTXt;
   WebP EXIF/XMP; and EXIF fields in small TIFF files.
+- MP4, M4V and MOV container metadata, including common title, description,
+  author, date, camera, location and embedded EXIF fields. Compressed video
+  frames are never decoded or searched.
+  Both versioned and unversioned metadata containers are supported, including
+  Pixel camera fields such as `com.android.manufacturer` and `com.android.model`.
+  Movie, track and media creation/modification timestamps are converted to
+  `YYYY-MM-DD HH:MM:SS UTC` for matching years or dates, such as `2025`.
 - Recognized EXIF values include camera/lens make and model, capture dates,
   author, description, copyright, exposure, ISO, Windows XP text fields and GPS.
 
@@ -530,7 +564,8 @@ Limits keep resource usage bounded: 1,000,000 scanned entries, 10,000 queued
 folders, 16 MiB per text file, 64 MiB per PDF, and the first 512 PDF pages with a
 three-second cooperative extraction budget. Image metadata has 4 MiB encoded
 and decoded budgets and a two-second cooperative scan budget. Whole-file TIFF
-metadata reading is limited to 4 MiB. Symlinks, Windows reparse points and POSIX
-special files are skipped. The status line reports skipped/partially searched
+metadata reading is limited to 4 MiB. Video box traversal is limited to 4,096
+boxes, 4 MiB of metadata and two seconds per file. Symlinks, Windows reparse
+points and POSIX special files are skipped. The status line reports skipped/partially searched
 files and limits; results can therefore be incomplete for unsupported, protected,
 unreadable or oversized files. No persistent content index is created.

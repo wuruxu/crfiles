@@ -13,6 +13,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -169,6 +170,232 @@ uint32_t Big32(std::string_view s) {
   uint32_t value = 0; for (size_t i = 0; i < 4; ++i) value = (value << 8) | static_cast<unsigned char>(s[i]);
   return value;
 }
+uint64_t Big64(std::string_view s) {
+  if (s.size() < 8) return 0;
+  uint64_t value = 0; for (size_t i = 0; i < 8; ++i) value = (value << 8) | static_cast<unsigned char>(s[i]);
+  return value;
+}
+std::string VideoTag(std::string_view tag) {
+  if (tag == "\xa9" "nam" || tag == "titl") return "Video.Title";
+  if (tag == "\xa9" "des" || tag == "desc" || tag == "ldes" || tag == "dscp") return "Video.Description";
+  if (tag == "\xa9" "ART" || tag == "\xa9" "aut" || tag == "auth") return "Video.Author";
+  if (tag == "\xa9" "day" || tag == "date" || tag == "yrrc") return "Video.Date";
+  if (tag == "\xa9" "mak") return "Video.CameraMake";
+  if (tag == "\xa9" "mod") return "Video.CameraModel";
+  if (tag == "\xa9" "xyz") return "Video.Location";
+  if (tag == "\xa9" "cmt") return "Video.Comment";
+  if (tag == "\xa9" "cpy" || tag == "cprt") return "Video.Copyright";
+  if (tag == "\xa9" "too") return "Video.Software";
+  if (tag == "keyw") return "Video.Keywords";
+  return {};
+}
+std::string VideoText(std::string_view data, uint32_t type) {
+  if (data.size() > 4096) data = data.substr(0, 4096);
+  if (type == 2) {
+    if (data.size() < 2 || data.size() % 2) return {};
+    std::u16string decoded;
+    for (size_t i = 0; i + 1 < data.size(); i += 2)
+      decoded.push_back((static_cast<unsigned char>(data[i]) << 8) | static_cast<unsigned char>(data[i + 1]));
+    if (!decoded.empty() && decoded.front() == 0xfeff) decoded.erase(decoded.begin());
+    return base::UTF16ToUTF8(decoded);
+  }
+  if (type != 0 && type != 1) return {};
+  const auto end = data.find('\0');
+  data = data.substr(0, end);
+  if (data.empty() || !base::IsStringUTF8(data)) return {};
+  return std::string(data);
+}
+class VideoMetadataSearch {
+ public:
+  VideoMetadataSearch(base::File& file, const std::u16string& query,
+                      const SearchControl& control, bool* skipped)
+      : file_(file), query_(query), control_(control), skipped_(skipped),
+        deadline_(base::TimeTicks::Now() + base::Seconds(2)) {}
+  std::string Search(uint64_t length) { return Scan(0, length, 0, false, {}); }
+
+ private:
+  struct Box {
+    uint64_t payload = 0, end = 0;
+    std::string type;
+  };
+  bool ReadBox(uint64_t offset, uint64_t end, Box* box) {
+    if (end - offset < 8) return false;
+    std::string header;
+    if (!ReadAt(file_, offset, 8, &header)) return false;
+    box->type = header.substr(4, 4);
+    uint64_t size = Big32(header);
+    uint64_t header_size = 8;
+    if (size == 1) {
+      if (end - offset < 16 || !ReadAt(file_, offset + 8, 8, &header)) return false;
+      size = Big64(header); header_size = 16;
+    } else if (size == 0) {
+      size = end - offset;
+    }
+    if (size < header_size || size > end - offset) return false;
+    box->payload = offset + header_size;
+    box->end = offset + size;
+    return true;
+  }
+  bool ReadPayload(uint64_t start, uint64_t end, size_t limit, std::string* data) {
+    const uint64_t size = end - start;
+    if (size > limit || size > kMetadataLimit - metadata_bytes_) { *skipped_ = true; return false; }
+    if (!ReadAt(file_, start, static_cast<size_t>(size), data)) { *skipped_ = true; return false; }
+    metadata_bytes_ += static_cast<size_t>(size);
+    return true;
+  }
+  void ReadKeys(const Box& box) {
+    std::string data;
+    if (!ReadPayload(box.payload, box.end, 64 * 1024, &data) || data.size() < 8) return;
+    const uint32_t count = Big32(std::string_view(data).substr(4, 4));
+    if (count > 256) { *skipped_ = true; return; }
+    size_t offset = 8;
+    keys_.clear();
+    for (uint32_t i = 0; i < count; ++i) {
+      if (offset > data.size() || data.size() - offset < 8) { *skipped_ = true; return; }
+      const size_t size = Big32(std::string_view(data).substr(offset, 4));
+      if (size < 8 || size > data.size() - offset) { *skipped_ = true; return; }
+      const auto key = std::string_view(data).substr(offset + 8, size - 8);
+      keys_.push_back(base::IsStringUTF8(key) ? std::string(key) : std::string());
+      offset += size;
+    }
+  }
+  std::string ItemName(std::string_view type) const {
+    auto name = VideoTag(type);
+    if (!name.empty()) return name;
+    const uint32_t index = Big32(type);
+    if (index > 0 && index <= keys_.size()) return keys_[index - 1];
+    return {};
+  }
+  std::string MatchValue(const Box& box, const std::string& name, bool data_box) {
+    std::string data;
+    if (!ReadPayload(box.payload, box.end, 64 * 1024, &data)) return {};
+    std::string value;
+    if (data_box) {
+      if (data.size() < 8) return {};
+      const uint32_t type = Big32(data) & 0xffffff;
+      std::string_view payload = std::string_view(data).substr(8);
+      if (type == 0 && (payload.starts_with(std::string_view("Exif\0\0", 6)) ||
+                        payload.starts_with("II") || payload.starts_with("MM"))) {
+        if (payload.starts_with(std::string_view("Exif\0\0", 6))) payload.remove_prefix(6);
+        return MatchExif(payload, query_);
+      }
+      value = VideoText(payload, type);
+    } else {
+      // QuickTime user-data strings may start with a 16-bit length and language.
+      std::string_view text = data;
+      if (data.size() >= 4 && ((static_cast<size_t>(static_cast<unsigned char>(data[0])) << 8) |
+          static_cast<unsigned char>(data[1])) == data.size() - 4)
+        text.remove_prefix(4);
+      value = VideoText(text, 0);
+    }
+    return value.empty() ? std::string() : SearchFragment(name + ": " + value, query_);
+  }
+  std::string MatchDates(const Box& box) {
+    std::string header;
+    if (box.end - box.payload < 4 || !ReadPayload(box.payload, box.payload + 4, 4, &header)) {
+      *skipped_ = true; return {};
+    }
+    const unsigned char version = static_cast<unsigned char>(header.front());
+    if (version > 1) { *skipped_ = true; return {}; }
+    const size_t width = version == 1 ? 8 : 4;
+    if (box.end - box.payload < 4 + 2 * width) { *skipped_ = true; return {}; }
+    std::string dates;
+    if (!ReadPayload(box.payload + 4, box.payload + 4 + 2 * width, 16, &dates)) return {};
+    for (size_t index = 0; index < 2; ++index) {
+      const auto bytes = std::string_view(dates).substr(index * width, width);
+      const uint64_t seconds = version == 1 ? Big64(bytes) : Big32(bytes);
+      // ISO BMFF uses seconds since 1904-01-01 UTC. Zero is unspecified;
+      // reject dates beyond year 9999 before converting or multiplying.
+      if (seconds == 0) continue;
+      if (seconds > 255485145599ULL) { *skipped_ = true; continue; }
+      const auto time = base::Time::UnixEpoch() + base::Seconds(static_cast<int64_t>(seconds) - 2082844800LL);
+      base::Time::Exploded exploded;
+      time.UTCExplode(&exploded);
+      const auto value = base::StringPrintf("%04d-%02d-%02d %02d:%02d:%02d UTC",
+          exploded.year, exploded.month, exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
+      auto match = SearchFragment("Video." + box.type + (index == 0 ? ".CreateDate: " : ".ModifyDate: ") + value, query_);
+      if (!match.empty()) return match;
+    }
+    return {};
+  }
+  std::string Scan(uint64_t start, uint64_t end, int depth, bool in_ilst,
+                   const std::string& item_name) {
+    for (uint64_t offset = start; offset < end && !control_.Interrupted(); ) {
+      if (base::TimeTicks::Now() >= deadline_ || ++boxes_ > 4096) { *skipped_ = true; break; }
+      Box box;
+      if (!ReadBox(offset, end, &box)) { *skipped_ = true; break; }
+      offset = box.end;
+      if (box.type == "mvhd" || box.type == "tkhd" || box.type == "mdhd") {
+        auto match = MatchDates(box);
+        if (!match.empty()) return match;
+        continue;
+      }
+      if (box.type == "keys" && depth <= 3) { ReadKeys(box); continue; }
+      if (box.type == "Exif" || box.type == "exif") {
+        std::string data;
+        if (ReadPayload(box.payload, box.end, 64 * 1024, &data)) {
+          std::string_view exif(data);
+          if (exif.starts_with(std::string_view("Exif\0\0", 6))) exif.remove_prefix(6);
+          auto match = MatchExif(exif, query_);
+          if (!match.empty()) return match;
+        }
+        continue;
+      }
+      if (box.type == "data" && !item_name.empty()) {
+        auto match = MatchValue(box, item_name, true);
+        if (!match.empty()) return match;
+        continue;
+      }
+      if (depth >= 6) continue;
+      if (in_ilst) {
+        const auto name = ItemName(box.type);
+        if (!name.empty()) {
+          auto match = Scan(box.payload, box.end, depth + 1, false, name);
+          if (!match.empty()) return match;
+        }
+      } else if (box.type == "moov" || box.type == "udta" || box.type == "trak" ||
+                 box.type == "mdia" || box.type == "meta" || box.type == "ilst") {
+        uint64_t child_start = box.payload;
+        if (box.type == "meta") {
+          // ISO FullBox metadata has version/flags; Android/QuickTime files
+          // also use an unversioned container starting directly with hdlr.
+          std::string prefix;
+          if (box.end - child_start < 4 || !ReadAt(file_, child_start, 4, &prefix)) {
+            *skipped_ = true; continue;
+          }
+          if (Big32(prefix) == 0) {
+            child_start += 4;
+          } else {
+            Box first_child;
+            if (!ReadBox(child_start, box.end, &first_child) ||
+                (first_child.type != "hdlr" && first_child.type != "keys" && first_child.type != "ilst")) {
+              *skipped_ = true; continue;
+            }
+          }
+        }
+        std::vector<std::string> parent_keys;
+        if (box.type == "meta") { parent_keys = std::move(keys_); keys_.clear(); }
+        auto match = Scan(child_start, box.end, depth + 1, box.type == "ilst", {});
+        if (box.type == "meta") keys_ = std::move(parent_keys);
+        if (!match.empty()) return match;
+      } else if (depth > 0) {
+        const auto name = VideoTag(box.type);
+        if (!name.empty()) {
+          auto match = MatchValue(box, name, false);
+          if (!match.empty()) return match;
+        }
+      }
+    }
+    return {};
+  }
+  base::File& file_;
+  const std::u16string& query_;
+  const SearchControl& control_;
+  bool* skipped_;
+  base::TimeTicks deadline_;
+  size_t boxes_ = 0, metadata_bytes_ = 0;
+  std::vector<std::string> keys_;
+};
 std::string ImageMetadata(base::File& file, std::string_view signature, const std::u16string& query,
                           const SearchControl& control, bool* skipped) {
   const auto deadline = base::TimeTicks::Now() + base::Seconds(2);
@@ -295,6 +522,9 @@ std::string SearchFileContent(const base::FilePath& path, const std::u16string& 
   const int64_t length = file.GetLength();
   if (length < 0 || !ReadAt(file, 0, std::min<int64_t>(16, length), &signature)) { *skipped = true; return {}; }
   if (signature.starts_with("%PDF-") || path.MatchesExtension(FILE_PATH_LITERAL(".pdf"))) return PdfText(path, query, control, skipped);
+  if (path.MatchesExtension(FILE_PATH_LITERAL(".mp4")) || path.MatchesExtension(FILE_PATH_LITERAL(".mov")) ||
+      path.MatchesExtension(FILE_PATH_LITERAL(".m4v")))
+    return VideoMetadataSearch(file, query, control, skipped).Search(static_cast<uint64_t>(length));
   if (signature.starts_with("\xff\xd8") || signature.starts_with("\x89PNG") || signature.starts_with("II") || signature.starts_with("MM") ||
       (signature.starts_with("RIFF") && signature.size() >= 12 && signature.substr(8, 4) == "WEBP"))
     return ImageMetadata(file, signature, query, control, skipped);
