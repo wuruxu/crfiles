@@ -184,4 +184,32 @@
   <translation id="5336759974910418265">Abrir carpeta contenedora</translation>
   <translation id="3133846425424266483">Archivo oculto</translation>
   <translation id="5320285390743896110">Vista previa de imágenes al pasar el cursor</translation>
+  <translation id="4330963668268145125">Interfaz</translation>
+  <translation id="6977286314722865075">Estilo de la barra de navegación</translation>
+  <translation id="9100530047575291676">Ruta minimalista</translation>
+  <translation id="1093746493556969906">Ruta subrayada</translation>
+  <translation id="7281652176702177523">Segmentos en relieve</translation>
+  <translation id="2704606927547763573">Copiado</translation>
+  <translation id="1677453780898006361">Extraer</translation>
+  <translation id="2216580316684184637">Extraer aquí</translation>
+  <translation id="1541575667632527883">Extraer en una carpeta con el mismo nombre</translation>
+  <translation id="3233966583429109333">Extraer en…</translation>
+  <translation id="6949434160682548041">Contraseña (opcional)</translation>
+  <translation id="6691886083376373509">No se sobrescribirán los archivos ni las carpetas existentes.</translation>
+  <translation id="5949626560795690587">Extrayendo…</translation>
+  <translation id="8525459362212271809">Error al extraer. Comprueba la contraseña, el formato del archivo, el espacio disponible y los nombres en conflicto.</translation>
+  <translation id="8242754211022052209">Extracción completada.</translation>
+  <translation id="1018656279737460067">Cancelada</translation>
+  <translation id="6450619332317296209">Ya existe: <ph name="PATH"/>. Elige otro destino.</translation>
+  <translation id="5209495381416891540">Introduce una contraseña válida del archivo para continuar.</translation>
+  <translation id="1031034072534122915">Extraer en <ph name="NAME"/>/</translation>
+  <translation id="670380500182402678">Reemplazar todo</translation>
+  <translation id="1062407476771304334">Reemplazar</translation>
+  <translation id="8281886186245836920">Omitir</translation>
+  <translation id="100951024926702248">Ya existe: <ph name="PATH"/></translation>
+  <translation id="5810055407516268194">Error al reemplazar. El elemento original se conserva en: <ph name="PATH"/></translation>
+  <translation id="1270626948639993584">Comprimiendo…</translation>
+  <translation id="4525876713008994486">Compresión completada.</translation>
+  <translation id="7749397111688680685">Error de compresión. Comprueba los permisos, el espacio disponible y los conflictos de nombres.</translation>
+<translation id="4802584673094436231">Preparando…</translation>
 </translationbundle>

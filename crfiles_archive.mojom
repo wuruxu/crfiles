@@ -1,0 +1,17 @@
+// Copyright 2026 The Chromium Authors
+module crfiles.mojom;
+import "mojo/public/mojom/base/file.mojom";
+import "mojo/public/mojom/base/file_path.mojom";
+interface ArchiveProgressListener {
+  OnProgress(uint64 bytes);
+  OnCompressionProgress(uint64 bytes, uint64 entries, mojo_base.mojom.FilePath current_path);
+};
+interface ArchiveDecoder {
+  Compress(mojo_base.mojom.FilePath source_directory,
+           array<mojo_base.mojom.FilePath> relative_sources,
+           mojo_base.mojom.FilePath output,
+           pending_remote<ArchiveProgressListener> listener) => (bool success);
+  Extract(mojo_base.mojom.ReadOnlyFile archive, string format,
+          mojo_base.mojom.FilePath staging, string password,
+          pending_remote<ArchiveProgressListener> listener) => (bool success, bool needs_password);
+};

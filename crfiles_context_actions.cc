@@ -8,10 +8,21 @@
 #include "base/files/file_util.h"
 #include <limits>
 #include <algorithm>
+#include <set>
+#include "base/containers/span.h"
+#include "base/strings/string_split.h"
+#include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/geometry/size.h"
+#include "skia/ext/image_operations.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "build/build_config.h"
 #if BUILDFLAG(IS_LINUX)
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
+#include "libcr/svg_icon.h"
+#include "third_party/skia/include/core/SkStream.h"
+#include "third_party/skia/modules/svg/include/SkSVGDOM.h"
+#include "ui/gfx/codec/png_codec.h"
 #elif BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include <shellapi.h>
@@ -21,11 +32,129 @@
 #include "base/win/scoped_com_initializer.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/win/icon_util.h"
 #endif
 namespace crfiles {
+namespace {
+gfx::ImageSkia MenuIcon(gfx::ImageSkia image) {
+  if (image.isNull()) return {};
+  auto resized = gfx::ImageSkiaOperations::CreateResizedImage(image, skia::ImageOperations::RESIZE_BEST, gfx::Size(18, 18));
+  resized.MakeThreadSafe();
+  return resized;
+}
+#if BUILDFLAG(IS_LINUX)
+std::string KeyString(GKeyFile* file, const char* section, const char* key) {
+  gchar* value = g_key_file_get_string(file, section, key, nullptr);
+  std::string result = value ? value : "";
+  g_free(value); return result;
+}
+std::vector<base::FilePath> ApplicationIconDirectories() {
+  std::vector<base::FilePath> roots = {
+      base::FilePath(g_get_home_dir()).AppendASCII(".icons"),
+      base::FilePath(g_get_user_data_dir()).AppendASCII("icons")};
+  const char* data_dirs = g_getenv("XDG_DATA_DIRS");
+  for (const auto& directory : base::SplitString(data_dirs && *data_dirs ? data_dirs : "/usr/local/share:/usr/share",
+      ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) roots.push_back(base::FilePath(directory).AppendASCII("icons"));
+  std::vector<std::string> themes;
+  if (auto* source = g_settings_schema_source_get_default()) {
+    if (auto* schema = g_settings_schema_source_lookup(source, "org.gnome.desktop.interface", true)) {
+      if (g_settings_schema_has_key(schema, "icon-theme")) {
+        auto* settings = g_settings_new_full(schema, nullptr, nullptr);
+        gchar* theme = g_settings_get_string(settings, "icon-theme");
+        if (theme && *theme) themes.emplace_back(theme);
+        g_free(theme); g_object_unref(settings);
+      }
+      g_settings_schema_unref(schema);
+    }
+  }
+  themes.emplace_back("hicolor");
+  std::set<std::string> visited;
+  std::vector<base::FilePath> directories;
+  for (size_t i = 0; i < themes.size() && visited.size() < 16; ++i) {
+    const auto theme = themes[i];
+    if (!visited.insert(theme).second || !IsValidEntryName(base::UTF8ToUTF16(theme))) continue;
+    std::set<base::FilePath> relative_directories;
+    for (const auto& root : roots) {
+      const auto theme_root = root.Append(theme);
+      GKeyFile* index = g_key_file_new();
+      if (g_key_file_load_from_file(index, theme_root.AppendASCII("index.theme").value().c_str(), G_KEY_FILE_NONE, nullptr)) {
+        for (const char* key : {"Directories", "ScaledDirectories"}) {
+          for (const auto& directory : base::SplitString(KeyString(index, "Icon Theme", key), ";,",
+              base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+            base::FilePath relative(directory);
+            if (!relative.IsAbsolute() && !relative.ReferencesParent()) relative_directories.insert(relative);
+          }
+        }
+        for (auto& parent : base::SplitString(KeyString(index, "Icon Theme", "Inherits"), ";,",
+            base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+          if (themes.size() < 64) themes.push_back(std::move(parent));
+        }
+      }
+      g_key_file_unref(index);
+    }
+    // A user icon directory can inherit index.theme from a system directory.
+    for (const auto& root : roots)
+      for (const auto& relative : relative_directories) directories.push_back(root.Append(theme).Append(relative));
+  }
+  directories.insert(directories.end(), roots.begin(), roots.end());
+  directories.emplace_back("/usr/local/share/pixmaps");
+  directories.emplace_back("/usr/share/pixmaps");
+  return directories;
+}
+gfx::ImageSkia ReadApplicationIcon(const base::FilePath& path) {
+  std::string data;
+  if (!base::ReadFileToStringWithMaxSize(path, &data, 4 * 1024 * 1024)) return {};
+  if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
+    SkMemoryStream stream(data.data(), data.size(), true);
+    auto dom = SkSVGDOM::MakeFromStream(stream);
+    if (!dom) return {};
+    auto size = dom->containerSize(); if (size.isEmpty()) size = SkSize::Make(48, 48);
+    libcr::SvgIconCache renderer(std::move(data), gfx::SizeF(size.width(), size.height()));
+    auto image = renderer.GetImageModel(gfx::Size(18, 18));
+    return image.IsImage() ? MenuIcon(image.GetImage().AsImageSkia()) : gfx::ImageSkia();
+  }
+  auto bitmap = gfx::PNGCodec::Decode(base::as_byte_span(data));
+  return bitmap.drawsNothing() ? gfx::ImageSkia() : MenuIcon(gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
+}
+gfx::ImageSkia ApplicationIcon(GAppInfo* app, const std::vector<base::FilePath>& directories) {
+  if (!G_IS_DESKTOP_APP_INFO(app)) return {};
+  gchar* value = g_desktop_app_info_get_string(G_DESKTOP_APP_INFO(app), "Icon");
+  const std::string name = value ? value : "";
+  g_free(value);
+  if (name.empty()) return {};
+  const base::FilePath path(name);
+  if (path.IsAbsolute()) return ReadApplicationIcon(path);
+  if (path.BaseName() != path || path.ReferencesParent()) return {};
+  for (const auto& directory : directories) {
+    for (const char* extension : {"", ".svg", ".png"}) {
+      const auto candidate = directory.Append(name + extension);
+      if (base::PathExists(candidate)) {
+        auto icon = ReadApplicationIcon(candidate);
+        if (!icon.isNull()) return icon;
+      }
+    }
+  }
+  return {};
+}
+#elif BUILDFLAG(IS_WIN)
+gfx::ImageSkia ApplicationIcon(IAssocHandler* handler) {
+  PWSTR location = nullptr;
+  int index = 0;
+  const auto result = handler->GetIconLocation(&location, &index);
+  HICON icon = nullptr;
+  if (SUCCEEDED(result) && location) SHDefExtractIconW(location, index, 0, nullptr, &icon, MAKELONG(32, 32));
+  CoTaskMemFree(location);
+  if (!icon) return {};
+  auto bitmap = IconUtil::CreateSkBitmapFromHICON(icon);
+  DestroyIcon(icon);
+  return bitmap.drawsNothing() ? gfx::ImageSkia() : MenuIcon(gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
+}
+#endif
+}
 std::vector<FileApplication> FileApplications(const base::FilePath& path) {
   std::vector<FileApplication> apps;
 #if BUILDFLAG(IS_LINUX)
+  const auto icon_directories = ApplicationIconDirectories();
   GFile* file = g_file_new_for_path(path.value().c_str());
   GFileInfo* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
   if (info) {
@@ -35,7 +164,7 @@ std::vector<FileApplication> FileApplications(const base::FilePath& path) {
       auto add = [&](GAppInfo* app, bool is_default) {
         const char* id = g_app_info_get_id(app);
         const char* name = g_app_info_get_display_name(app);
-        if (id && name) apps.push_back({id, name, is_default});
+        if (id && name) apps.push_back({id, name, is_default, ApplicationIcon(app, icon_directories)});
       };
       if (preferred) add(preferred, true);
       GList* list = g_app_info_get_all_for_type(type);
@@ -59,7 +188,14 @@ std::vector<FileApplication> FileApplications(const base::FilePath& path) {
     std::wstring name(length, L'\0');
     if (SUCCEEDED(AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_FRIENDLYAPPNAME, extension.c_str(), L"open", name.data(), &length))) {
       name.resize(length ? length - 1 : 0);
-      apps.push_back({{}, base::WideToUTF8(name), true});
+      SHFILEINFOW info{};
+      gfx::ImageSkia icon;
+      if (SHGetFileInfoW(path.value().c_str(), 0, &info, sizeof(info), SHGFI_ICON | SHGFI_SMALLICON) && info.hIcon) {
+        auto bitmap = IconUtil::CreateSkBitmapFromHICON(info.hIcon);
+        DestroyIcon(info.hIcon);
+        if (!bitmap.drawsNothing()) icon = MenuIcon(gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
+      }
+      apps.push_back({{}, base::WideToUTF8(name), true, std::move(icon)});
     }
   }
   Microsoft::WRL::ComPtr<IEnumAssocHandlers> handlers;
@@ -67,12 +203,17 @@ std::vector<FileApplication> FileApplications(const base::FilePath& path) {
     Microsoft::WRL::ComPtr<IAssocHandler> handler;
     while (handlers->Next(1, &handler, nullptr) == S_OK) {
       PWSTR id = nullptr, name = nullptr;
-      if (SUCCEEDED(handler->GetName(&id)) && SUCCEEDED(handler->GetUIName(&name)) && id && name)
-        apps.push_back({base::WideToUTF8(id), base::WideToUTF8(name), false});
+      if (SUCCEEDED(handler->GetName(&id)) && SUCCEEDED(handler->GetUIName(&name)) && id && name) {
+        auto icon = ApplicationIcon(handler.Get());
+        const auto display_name = base::WideToUTF8(name);
+        if (!apps.empty() && apps.front().is_default && apps.front().name == display_name && !icon.isNull())
+          apps.front().icon = icon;
+        apps.push_back({base::WideToUTF8(id), display_name, false, std::move(icon)});
+      }
       CoTaskMemFree(id); CoTaskMemFree(name); handler.Reset();
     }
   }
-  apps.push_back({"windows:choose", base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_CRFILES_OPEN_WITH)) + "…", false});
+  apps.push_back({"windows:choose", base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_CRFILES_OPEN_WITH)) + "…", false, {}});
 #endif
   return apps;
 }

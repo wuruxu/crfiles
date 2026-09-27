@@ -184,4 +184,32 @@
   <translation id="5336759974910418265">Ouvrir le dossier parent</translation>
   <translation id="3133846425424266483">Fichier caché</translation>
   <translation id="5320285390743896110">Prévisualiser les images au survol</translation>
+  <translation id="4330963668268145125">Interface</translation>
+  <translation id="6977286314722865075">Style de la barre de navigation</translation>
+  <translation id="9100530047575291676">Chemin minimaliste</translation>
+  <translation id="1093746493556969906">Chemin souligné</translation>
+  <translation id="7281652176702177523">Segments en relief</translation>
+  <translation id="2704606927547763573">Copié</translation>
+  <translation id="1677453780898006361">Extraire</translation>
+  <translation id="2216580316684184637">Extraire ici</translation>
+  <translation id="1541575667632527883">Extraire dans un dossier du même nom</translation>
+  <translation id="3233966583429109333">Extraire vers…</translation>
+  <translation id="6949434160682548041">Mot de passe (facultatif)</translation>
+  <translation id="6691886083376373509">Les fichiers et dossiers existants ne seront pas écrasés.</translation>
+  <translation id="5949626560795690587">Extraction…</translation>
+  <translation id="8525459362212271809">Échec de l’extraction. Vérifiez le mot de passe, le format de l’archive, l’espace disponible et les noms en conflit.</translation>
+  <translation id="8242754211022052209">Extraction terminée.</translation>
+  <translation id="1018656279737460067">Annulée</translation>
+  <translation id="6450619332317296209">Existe déjà : <ph name="PATH"/>. Choisissez une autre destination.</translation>
+  <translation id="5209495381416891540">Saisissez un mot de passe valide pour l’archive afin de continuer.</translation>
+  <translation id="1031034072534122915">Extraire dans <ph name="NAME"/>/</translation>
+  <translation id="670380500182402678">Tout remplacer</translation>
+  <translation id="1062407476771304334">Remplacer</translation>
+  <translation id="8281886186245836920">Ignorer</translation>
+  <translation id="100951024926702248">Existe déjà : <ph name="PATH"/></translation>
+  <translation id="5810055407516268194">Échec du remplacement. L’élément d’origine est conservé dans : <ph name="PATH"/></translation>
+  <translation id="1270626948639993584">Compression…</translation>
+  <translation id="4525876713008994486">Compression terminée.</translation>
+  <translation id="7749397111688680685">Échec de la compression. Vérifiez les autorisations, l’espace disponible et les conflits de noms.</translation>
+<translation id="4802584673094436231">Préparation…</translation>
 </translationbundle>

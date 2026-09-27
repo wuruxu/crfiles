@@ -175,6 +175,10 @@
       <message name="IDS_CRFILES_COPY_TO" desc="File and folder context menu.">Copy to</message>
       <message name="IDS_CRFILES_RENAME" desc="File and folder context menu.">Rename</message>
       <message name="IDS_CRFILES_COMPRESS" desc="File and folder context menu.">Compress</message>
+      <message name="IDS_CRFILES_COMPRESS_PREPARING" desc="Scanning compression sources before showing percentage progress.">Preparing…</message>
+      <message name="IDS_CRFILES_COMPRESSING" desc="Compression progress bubble.">Compressing…</message>
+      <message name="IDS_CRFILES_COMPRESS_SUCCESS" desc="Compression result bubble.">Compression completed.</message>
+      <message name="IDS_CRFILES_COMPRESS_ERROR" desc="Compression result bubble.">Compression failed. Check permissions, available space, and conflicting names.</message>
       <message name="IDS_CRFILES_OPEN_TERMINAL" desc="File and folder context menu.">Open in Terminal</message>
       <message name="IDS_CRFILES_COPY_PATH" desc="File and folder context menu.">Copy File Path</message>
       <message name="IDS_CRFILES_PROPERTIES" desc="File and folder context menu.">Properties</message>
@@ -226,6 +230,30 @@
       <message name="IDS_CRFILES_SEARCH_OPEN_FOLDER" desc="Directory search page and background search status.">Open containing folder</message>
       <message name="IDS_CRFILES_SEARCH_HIDDEN" desc="Checkbox in the search filter menu to include hidden files and folders.">Hidden File</message>
       <message name="IDS_CRFILES_HOVER_IMAGE_PREVIEW" desc="General settings checkbox to enlarge an image while hovering over its file entry.">Preview images on hover</message>
+      <message name="IDS_CRFILES_INTERFACE" desc="Interface settings for breadcrumb navigation appearance.">Interface</message>
+      <message name="IDS_CRFILES_NAVIGATION_STYLE" desc="Interface settings for breadcrumb navigation appearance.">Navigation bar style</message>
+      <message name="IDS_CRFILES_NAVIGATION_MINIMAL" desc="Interface settings for breadcrumb navigation appearance.">Minimal path</message>
+      <message name="IDS_CRFILES_NAVIGATION_UNDERLINE" desc="Interface settings for breadcrumb navigation appearance.">Underlined path</message>
+      <message name="IDS_CRFILES_NAVIGATION_RAISED" desc="Interface settings for breadcrumb navigation appearance.">Raised segments</message>
+      <message name="IDS_CRFILES_COPIED" desc="Confirmation after copying the author email address.">Copied</message>
+      <message name="IDS_CRFILES_EXTRACT" desc="Archive extraction menu and progress dialog.">Extract</message>
+      <message name="IDS_CRFILES_EXTRACT_HERE" desc="Archive extraction menu and progress dialog.">Extract here</message>
+      <message name="IDS_CRFILES_EXTRACT_FOLDER" desc="Archive extraction menu and progress dialog.">Extract to same-name folder</message>
+      <message name="IDS_CRFILES_EXTRACT_TO" desc="Archive extraction menu and progress dialog.">Extract to…</message>
+      <message name="IDS_CRFILES_ARCHIVE_PASSWORD" desc="Archive extraction menu and progress dialog.">Password (optional)</message>
+      <message name="IDS_CRFILES_EXTRACT_NOTICE" desc="Archive extraction menu and progress dialog.">Existing files and folders will not be overwritten.</message>
+      <message name="IDS_CRFILES_EXTRACTING" desc="Archive extraction menu and progress dialog.">Extracting…</message>
+      <message name="IDS_CRFILES_EXTRACT_ERROR" desc="Archive extraction menu and progress dialog.">Extraction failed. Check the password, archive format, available space, and conflicting names.</message>
+      <message name="IDS_CRFILES_EXTRACT_SUCCESS" desc="Archive extraction menu and progress dialog.">Extraction completed.</message>
+      <message name="IDS_CRFILES_HISTORY_CANCELED" desc="Canceled file operation in History.">Canceled</message>
+      <message name="IDS_CRFILES_EXTRACT_CONFLICT" desc="Extraction blocked by an existing file or directory. PATH is the full conflicting path.">Already exists: <ph name="PATH">$1<ex>/Downloads/example</ex></ph>. Choose another destination.</message>
+      <message name="IDS_CRFILES_ARCHIVE_PASSWORD_REQUIRED" desc="Encrypted archive password prompt.">Enter a valid archive password to continue.</message>
+      <message name="IDS_CRFILES_EXTRACT_NAMED" desc="Extract into a directory named after the archive.">Extract to <ph name="NAME">$1<ex>example</ex></ph>/</message>
+      <message name="IDS_CRFILES_REPLACE_ALL" desc="Archive conflict confirmation and recovery.">Replace all</message>
+      <message name="IDS_CRFILES_REPLACE" desc="Archive conflict confirmation and recovery.">Replace</message>
+      <message name="IDS_CRFILES_SKIP" desc="Archive conflict confirmation and recovery.">Skip</message>
+      <message name="IDS_CRFILES_EXTRACT_EXISTS" desc="Archive conflict confirmation and recovery.">Already exists: <ph name="PATH">$1<ex>/Downloads/example</ex></ph></message>
+      <message name="IDS_CRFILES_EXTRACT_RECOVERY" desc="Archive conflict confirmation and recovery.">Replacement failed. The original entry is preserved in: <ph name="PATH">$1<ex>/Downloads/example</ex></ph></message>
     </messages>
   </release>
 </grit>

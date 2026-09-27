@@ -1,9 +1,10 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_file_operations.h"
+#include "crFiles/crfiles_archive.h"
 #include "crFiles/crfiles_context_actions.h"
 #include <set>
-#include "third_party/zlib/google/zip.h"
+#include <limits>
 #include "crFiles/crfiles_history.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
@@ -55,13 +56,42 @@ bool RegularEntry(const base::FilePath& path) {
   return lstat(path.value().c_str(), &info) == 0 && (S_ISREG(info.st_mode) || S_ISDIR(info.st_mode));
 #endif
 }
-bool SafeTree(const base::FilePath& path) {
+bool ArchiveSymbolicLink(const base::FilePath& path) {
+#if BUILDFLAG(IS_WIN)
+  WIN32_FIND_DATAW data;
+  const HANDLE handle = FindFirstFileW(path.value().c_str(), &data);
+  if (handle == INVALID_HANDLE_VALUE) return false;
+  FindClose(handle);
+  return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && data.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
+#else
+  return base::IsLink(path);
+#endif
+}
+bool SafeTree(const base::FilePath& path, const std::atomic_bool* canceled = nullptr, ArchiveProgress* progress = nullptr,
+    bool allow_archive_links = false) {
+  if (canceled && canceled->load()) return false;
   if (!RegularEntry(path)) return false;
+  auto count_entry = [&](const base::FilePath& entry, bool directory, int64_t size) {
+    if (!progress) return true;
+    progress->SetCurrentPath(entry);
+    if (++progress->total_entries > 100000) return false;
+    if (!directory && size > 0) {
+      const auto bytes = static_cast<uint64_t>(size);
+      if (bytes > std::numeric_limits<uint64_t>::max() - progress->total_bytes.load()) return false;
+      progress->total_bytes += bytes;
+    }
+    return true;
+  };
+  if (progress) {
+    base::File::Info info;
+    if (!base::GetFileInfo(path, &info) || !count_entry(path, info.is_directory, info.size)) return false;
+  }
   if (!base::DirectoryExists(path)) return true;
   // Check each level before recursing; never descend through symbolic links.
   std::vector<base::FilePath> pending{path};
   size_t count = 0;
   while (!pending.empty()) {
+    if (canceled && canceled->load()) return false;
     auto folder = pending.back(); pending.pop_back();
     int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
 #if BUILDFLAG(IS_POSIX)
@@ -71,7 +101,12 @@ bool SafeTree(const base::FilePath& path) {
         base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
         base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
     for (auto child = entries.Next(); !child.empty(); child = entries.Next()) {
-      if (++count > 100000 || !RegularEntry(child)) return false;
+      if (canceled && canceled->load()) return false;
+      if (++count > 100000) return false;
+      if (allow_archive_links && ArchiveSymbolicLink(child)) continue;
+      if (!RegularEntry(child)) return false;
+      const auto& info = entries.GetInfo();
+      if (!count_entry(child, info.IsDirectory(), info.GetSize())) return false;
       if (base::DirectoryExists(child)) pending.push_back(child);
     }
     if (entries.GetError() != base::File::FILE_OK) return false;
@@ -140,24 +175,118 @@ FileOperationResult RenameLocalFile(base::FilePath source, base::FilePath target
   if (!log.valid() || !IsValidEntryName(target.BaseName().AsUTF16Unsafe()) || source.DirName() != target.DirName() || source == target || !RegularEntry(source) || !Publish(source, target)) { result.failed = 1; return result; }
   log.Succeed(); result.changed.push_back(target); result.removed.push_back(source); return result;
 }
-FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base::FilePath target) {
+FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base::FilePath target,
+    std::shared_ptr<ArchiveProgress> progress) {
   FileOperationResult result;
   if (sources.empty()) { result.failed = 1; return result; }
   FileOperationLog log("compress", "menu", sources.front().DirName().AsUTF8Unsafe(), target.AsUTF8Unsafe());
   ScopedFileCacheMutation mutation({target});
   base::ScopedTempDir staging;
   if (!log.valid() || !IsValidEntryName(target.BaseName().AsUTF16Unsafe()) || base::PathExists(target) || !staging.CreateUniqueTempDirUnderPath(target.DirName())) { result.failed = 1; return result; }
-  zip::ZipParams params; params.src_dir = sources.front().DirName(); params.recursive = true;
-  params.dest_file = staging.GetPath().AppendASCII("archive.zip");
+  const auto source_directory = sources.front().DirName();
+  const auto staged_archive = staging.GetPath().AppendASCII("archive.zip");
   std::vector<base::FilePath> relative_paths;
   relative_paths.reserve(sources.size());
   for (const auto& source : sources) {
-    if (source.DirName() != params.src_dir || !SafeTree(source)) { result.failed = 1; return result; }
+    if (source.DirName() != source_directory || !SafeTree(source, &progress->canceled, progress.get())) {
+      if (progress->canceled) log.Cancel(); else result.failed = 1;
+      return result;
+    }
     relative_paths.push_back(source.BaseName());
   }
-  params.src_files = relative_paths;
-  if (!zip::Zip(params) || !Publish(params.dest_file, target)) { result.failed = 1; return result; }
+  progress->SetCurrentPath({});
+  progress->prepared = true;
+  if (!EncodeArchive(source_directory, std::move(relative_paths), staged_archive, progress) || progress->canceled) {
+    if (progress->canceled) log.Cancel(); else result.failed = 1;
+    return result;
+  }
+  if (!Publish(staged_archive, target)) { result.failed = 1; return result; }
   log.Succeed(); result.changed.push_back(target); return result;
+}
+
+FileOperationResult ExtractLocalArchive(base::FilePath archive, base::FilePath destination,
+    bool same_name_folder, std::string password, std::shared_ptr<ArchiveProgress> progress) {
+  FileOperationResult result;
+  FileOperationLog log("extract", "menu", archive.AsUTF8Unsafe(),
+      (same_name_folder ? destination.Append(ArchiveFolderName(archive)) : destination).AsUTF8Unsafe());
+  if (!log.valid() || !destination.IsAbsolute() || !base::CreateDirectory(destination)) { result.failed = 1; return result; }
+  const auto parent = base::MakeAbsoluteFilePath(destination);
+  const auto name = ArchiveFolderName(archive);
+  const auto target = same_name_folder ? parent.Append(name) : parent;
+  log.SetDestination(target.AsUTF8Unsafe());
+  if (!log.valid() || parent.empty() || !base::DirectoryExists(parent) ||
+      !IsExtractableArchive(archive) || !RegularEntry(archive) ||
+      (same_name_folder && !IsValidEntryName(name.AsUTF16Unsafe()))) {
+    result.failed = 1; return result;
+  }
+  base::ScopedTempDir staging;
+  if (!staging.CreateUniqueTempDirUnderPath(parent)) { result.failed = 1; return result; }
+  const auto payload = staging.GetPath().AppendASCII("payload");
+  if (!base::CreateDirectory(payload) || !DecodeArchive(archive, payload, password, progress) || !SafeTree(payload, &progress->canceled, nullptr, true)) {
+    if (progress->canceled) log.Cancel();
+    result.failed = progress->canceled ? 0 : 1; return result;
+  }
+  std::vector<std::pair<base::FilePath, base::FilePath>> pending;
+  auto children = [&](const base::FilePath& from, const base::FilePath& to) {
+    int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
+#if BUILDFLAG(IS_POSIX)
+    types |= base::FileEnumerator::SHOW_SYM_LINKS;
+#endif
+    base::FileEnumerator entries(from, false, types, base::FilePath::StringType(),
+        base::FileEnumerator::FolderSearchPolicy::ALL, base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+    for (auto entry = entries.Next(); !entry.empty(); entry = entries.Next())
+      pending.emplace_back(entry, to.Append(entry.BaseName()));
+    return entries.GetError() == base::File::FILE_OK;
+  };
+  if (same_name_folder) pending.emplace_back(payload, target);
+  else if (!children(payload, parent)) { result.failed = 1; return result; }
+  ScopedFileCacheMutation mutation({target});
+  bool replace_all = false;
+  size_t backup_id = 0;
+  std::set<base::FilePath> changed;
+  auto mark_changed = [&](base::FilePath path) {
+    changed.insert(path);
+    // Refresh the visible top-level directory as well as the changed file.
+    while (parent.IsParent(path.DirName())) { path = path.DirName(); changed.insert(path); }
+  };
+  while (!pending.empty()) {
+    if (progress->canceled) break;
+    const auto [source, output] = pending.back(); pending.pop_back();
+    if (output == staging.GetPath() || output.IsParent(staging.GetPath())) { result.failed = 1; break; }
+    bool exists = base::PathExists(output) || base::IsLink(output);
+    // Merge real directories only; never traverse an existing link/junction.
+    if (exists && RegularEntry(output) && RegularEntry(source) && base::DirectoryExists(source) && base::DirectoryExists(output)) {
+      if (!children(source, output)) { result.failed = 1; break; }
+      continue;
+    }
+    if (!exists && Publish(source, output)) { mark_changed(output); continue; }
+    exists = base::PathExists(output) || base::IsLink(output);
+    if (!exists) { result.failed = 1; break; }
+    auto choice = replace_all ? ArchiveConflictChoice::kReplace : progress->WaitForConflict(output);
+    if (choice == ArchiveConflictChoice::kCancel || progress->canceled) { progress->canceled = true; break; }
+    if (choice == ArchiveConflictChoice::kSkip) continue;
+    if (choice == ArchiveConflictChoice::kReplaceAll) replace_all = true;
+    // Keep the old entry until the replacement has been successfully published.
+    const auto backup = staging.GetPath().AppendASCII("replaced-" + std::to_string(backup_id++));
+    if (!Publish(output, backup)) { result.failed = 1; break; }
+    if (progress->canceled || !Publish(source, output)) {
+      if (!Publish(backup, output)) {
+        // Never let temporary-directory cleanup delete the only remaining copy.
+        const auto preserved = staging.Take();
+        result.recovery_path = preserved;
+        log.SetDestination(preserved.AsUTF8Unsafe());
+        mark_changed(output);
+        result.failed = 1;
+      } else if (!progress->canceled) result.failed = 1;
+      break;
+    }
+    mark_changed(output);
+  }
+  result.changed.assign(changed.begin(), changed.end());
+  if (progress->canceled) { if (!result.failed) log.Cancel(); return result; }
+  if (result.failed) return result;
+  log.Succeed();
+  return result;
 }
 
 }

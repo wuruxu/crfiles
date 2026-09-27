@@ -184,4 +184,32 @@
   <translation id="5336759974910418265">Открыть содержащую папку</translation>
   <translation id="3133846425424266483">Скрытый файл</translation>
   <translation id="5320285390743896110">Предпросмотр изображений при наведении</translation>
+  <translation id="4330963668268145125">Интерфейс</translation>
+  <translation id="6977286314722865075">Стиль панели навигации</translation>
+  <translation id="9100530047575291676">Минималистичный путь</translation>
+  <translation id="1093746493556969906">Подчёркнутый путь</translation>
+  <translation id="7281652176702177523">Рельефные сегменты</translation>
+  <translation id="2704606927547763573">Скопировано</translation>
+  <translation id="1677453780898006361">Распаковать</translation>
+  <translation id="2216580316684184637">Распаковать здесь</translation>
+  <translation id="1541575667632527883">Распаковать в одноимённую папку</translation>
+  <translation id="3233966583429109333">Распаковать в…</translation>
+  <translation id="6949434160682548041">Пароль (необязательно)</translation>
+  <translation id="6691886083376373509">Существующие файлы и папки не будут перезаписаны.</translation>
+  <translation id="5949626560795690587">Распаковка…</translation>
+  <translation id="8525459362212271809">Не удалось распаковать. Проверьте пароль, формат архива, свободное место и совпадающие имена.</translation>
+  <translation id="8242754211022052209">Распаковка завершена.</translation>
+  <translation id="1018656279737460067">Отменено</translation>
+  <translation id="6450619332317296209">Уже существует: <ph name="PATH"/>. Выберите другую папку назначения.</translation>
+  <translation id="5209495381416891540">Для продолжения введите правильный пароль архива.</translation>
+  <translation id="1031034072534122915">Распаковать в <ph name="NAME"/>/</translation>
+  <translation id="670380500182402678">Заменить все</translation>
+  <translation id="1062407476771304334">Заменить</translation>
+  <translation id="8281886186245836920">Пропустить</translation>
+  <translation id="100951024926702248">Уже существует: <ph name="PATH"/></translation>
+  <translation id="5810055407516268194">Не удалось заменить. Исходный объект сохранён в: <ph name="PATH"/></translation>
+  <translation id="1270626948639993584">Сжатие…</translation>
+  <translation id="4525876713008994486">Сжатие завершено.</translation>
+  <translation id="7749397111688680685">Не удалось выполнить сжатие. Проверьте права доступа, свободное место и совпадения имён.</translation>
+<translation id="4802584673094436231">Подготовка…</translation>
 </translationbundle>

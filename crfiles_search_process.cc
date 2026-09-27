@@ -79,8 +79,13 @@ mojom::SearchBatchPtr ReadBatch(const std::shared_ptr<SearchJob>& job) {
       job->inherited_hidden = hidden_directory;
       if (Linked(directory)) { ++job->skipped; continue; }
       job->enumerating_root = directory == base::FilePath::FromUTF8Unsafe(job->options->root);
-      job->enumerator = std::make_unique<base::FileEnumerator>(directory, false,
-          base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES | base::FileEnumerator::SHOW_SYM_LINKS,
+      int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+      types |= base::FileEnumerator::SHOW_SYM_LINKS;
+#endif
+      // Windows reports reparse points without a separate enumeration flag;
+      // Linked() rejects them before content reads or directory traversal.
+      job->enumerator = std::make_unique<base::FileEnumerator>(directory, false, types,
           base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
           base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
     }

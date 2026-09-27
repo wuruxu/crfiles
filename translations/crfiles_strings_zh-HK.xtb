@@ -184,4 +184,32 @@
   <translation id="5336759974910418265">開啟所在資料夾</translation>
   <translation id="3133846425424266483">隱藏檔案</translation>
   <translation id="5320285390743896110">滑鼠懸停時放大預覽圖片</translation>
+  <translation id="4330963668268145125">介面</translation>
+  <translation id="6977286314722865075">導覽列風格</translation>
+  <translation id="9100530047575291676">極簡路徑</translation>
+  <translation id="1093746493556969906">底線路徑</translation>
+  <translation id="7281652176702177523">立體分段</translation>
+  <translation id="2704606927547763573">已複製</translation>
+  <translation id="1677453780898006361">解壓縮</translation>
+  <translation id="2216580316684184637">解壓縮至目前目錄</translation>
+  <translation id="1541575667632527883">解壓縮至同名資料夾</translation>
+  <translation id="3233966583429109333">解壓縮至指定位置…</translation>
+  <translation id="6949434160682548041">密碼（選填）</translation>
+  <translation id="6691886083376373509">不會覆寫現有檔案和資料夾。</translation>
+  <translation id="5949626560795690587">正在解壓縮…</translation>
+  <translation id="8525459362212271809">解壓縮失敗。請檢查密碼、壓縮格式、可用空間及重複名稱。</translation>
+  <translation id="8242754211022052209">解壓縮完成。</translation>
+  <translation id="1018656279737460067">已取消</translation>
+  <translation id="6450619332317296209">已存在：<ph name="PATH"/>。請選擇其他目標位置。</translation>
+  <translation id="5209495381416891540">請輸入正確的壓縮檔密碼以繼續。</translation>
+  <translation id="1031034072534122915">解壓縮至 <ph name="NAME"/>/</translation>
+  <translation id="670380500182402678">全部取代</translation>
+  <translation id="1062407476771304334">取代</translation>
+  <translation id="8281886186245836920">略過</translation>
+  <translation id="100951024926702248">已存在：<ph name="PATH"/></translation>
+  <translation id="5810055407516268194">取代失敗。原項目已保存在：<ph name="PATH"/></translation>
+  <translation id="1270626948639993584">正在壓縮…</translation>
+  <translation id="4525876713008994486">壓縮完成。</translation>
+  <translation id="7749397111688680685">壓縮失敗。請檢查權限、可用空間及是否存在同名檔案。</translation>
+<translation id="4802584673094436231">正在準備…</translation>
 </translationbundle>

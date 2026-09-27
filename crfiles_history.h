@@ -18,6 +18,7 @@ class FileOperationLog {
   bool valid() const { return suppressed_ || id_ != 0; }
   void SetDestination(std::string destination);
   void Succeed() { result_ = "success"; }
+  void Cancel() { result_ = "canceled"; }
   void SourceRetained() { result_ = "source_retained"; }
  private:
   bool suppressed_ = false;

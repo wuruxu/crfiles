@@ -4,19 +4,26 @@
 #include <vector>
 #include <string>
 #include <cstddef>
+#include <memory>
 #include "base/files/file_path.h"
 namespace crfiles {
+struct ArchiveProgress;
 struct FileOperationResult {
   std::vector<base::FilePath> changed;
   // Only sources actually removed by a successful move.
   std::vector<base::FilePath> removed;
   size_t failed = 0;
+  // Populated for extraction conflicts; existing entries are never overwritten.
+  base::FilePath conflict_path;
+  // An original entry retained here if replacement rollback could not finish.
+  base::FilePath recovery_path;
 };
 // Worker-only. Never merge or overwrite an existing destination. Symlinks and
 // special files are rejected; moves publish a complete copy before removing input.
 FileOperationResult TransferLocalFiles(std::vector<base::FilePath> sources,
                                       base::FilePath destination, bool move, std::string trigger = "drag");
 FileOperationResult RenameLocalFile(base::FilePath source, base::FilePath target);
-FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base::FilePath target);
+FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base::FilePath target,
+    std::shared_ptr<ArchiveProgress> progress);
 }
 #endif

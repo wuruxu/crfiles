@@ -5,6 +5,7 @@
 #include <string>
 #include <array>
 #include "base/values.h"
+#include "base/functional/callback_forward.h"
 #include "libcr/theme_mode.h"
 namespace crfiles {
 using CrFilesThemeMode = libcr::ThemeMode;
@@ -18,6 +19,10 @@ struct NearbySharingPreferences {
 };
 inline constexpr std::array<const char*, 6> kHistoryActions = {"move", "trash", "access", "open_file", "send", "receive"};
 inline constexpr std::array<int, 4> kHistoryRetentionDays = {7, 30, 90, 365};
+// Value 1 replaces the former capsule style, preserving saved selections.
+enum class NavigationStyle { kMinimal = 0, kUnderline = 1, kRaised = 2 };
+NavigationStyle GetNavigationStyle();
+bool SetNavigationStyle(NavigationStyle style);
 struct FileViewPreferences {
   bool auto_hide_toolbar = true;
   bool animate_folders = true;
@@ -34,7 +39,8 @@ bool SetHistoryPreferences(const HistoryPreferences& preferences);
 base::DictValue GetCrFilesBookmarks();
 bool SetCrFilesBookmarks(base::DictValue bookmarks);
 base::DictValue GetCrFilesWorkspace();
-bool SetCrFilesWorkspace(base::DictValue workspace);
+// Returns whether the write was queued. Completion reports disk errors.
+bool SetCrFilesWorkspace(base::DictValue workspace, base::OnceCallback<void(bool)> reply);
 void InitializeCrFilesTheme();
 CrFilesThemeMode GetCrFilesThemeMode();
 void SetCrFilesThemeMode(CrFilesThemeMode mode);

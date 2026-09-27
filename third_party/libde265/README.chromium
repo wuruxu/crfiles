@@ -1,0 +1,12 @@
+Name: libde265 public API header
+URL: https://github.com/strukturag/libde265
+Version: 1.0.16
+License: LGPL-3.0-or-later
+License File: COPYING
+Security Critical: yes
+
+Only API declarations are vendored, not the decoder implementation.
+Linux loads the maintained system libde265.so.0; Windows loads app-local
+libde265.dll or de265.dll and its dependencies. Keep runtime libraries updated.
+Local modification: removed the generated de265-version.h include; no version
+macros are used. Runtime version is checked before using the decoder.

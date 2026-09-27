@@ -85,7 +85,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
   through the operating system. Open also opens a single selected item.
   Size changes update existing icon tiles in place without rebuilding or resorting
   the directory. The slider thumb follows the snapped value immediately, with
-  extra edge padding for its highlight. Icon mode loads image thumbnails asynchronously for visible and nearby entries and
+  extra edge padding for its highlight. List and Icon modes load image, PDF and video thumbnails asynchronously for visible and nearby entries and
   retains MIME icons when decoding fails. Previews preserve aspect ratio and
   raster EXIF orientation. Decoding is limited to 64 MiB encoded data and
   64 megapixels of decoded raster data; unsupported images report an open error.
@@ -279,12 +279,19 @@ status changes. Completion renders the new directory once. File view updates do
 not rebuild the tabs or breadcrumbs; those controls compare their pane/path/title
 state before replacing children. The redundant enumeration-time name sort is gone.
 
-One scheduler for the window allows at most two visual worker jobs, each returning
-at most two entries. It prioritizes visible rows across all visible splits before
-prefetching up to one viewport above/below. Scrolling and layout changes coalesce
-into a 16 ms scheduling request. Cached MIME icons can be reused immediately on
-the UI sequence; SVG reads and thumbnail decoding stay on workers. Results update
-only the affected buttons, preserving row widgets, selection and scroll position.
+One scheduler for the window gives cache lookups their own worker, checking up
+to 32 visible paths per batch without decoding. Cache misses are independent
+single-file jobs: up to four images/icons, one PDF and one video can run at once.
+Images with an encoded size of at least 8 MiB share one image slot, and concurrent
+raster bitmap allocations have a shared 320 MiB budget (excluding encoded data
+and codec-internal scratch). Workers refill immediately on completion, so slow
+files no longer delay already-decoded neighbors.
+
+Visible entries across splits precede overscan. Results coalesce for 24 ms, then
+update at most 16 buttons / a 4 ms soft budget per flush; further results wait for
+the next 16 ms tick. Pending results are bounded by viewport scheduling and queue
+backpressure. This preserves row widgets, selection and scroll position while
+reducing scattered redraws. Filesystem cache validation stays on workers.
 
 Directory/tab changes, closing panes, and switching mode or icon size cancel old
 visual work. Cancellation is checked between entries and around image IO/decode
@@ -318,7 +325,19 @@ Path-scoped writes invalidate affected thumbnails too, and canceled decoding
 cannot populate the cache. Hover previews up to 720 px share this budget; larger
 image previews bypass the thumbnail cache. These
 budgets bound retained cache storage, not images held by live file views or
-in-flight decoders. Both caches are process-local and are not workspace data.
+in-flight decoders. The directory and decoded-image LRUs are process-local and are not workspace data.
+
+Folder thumbnails also have a persistent cache of at most 4096 entries / 256 MiB.
+It covers images, SVG, PDF and video thumbnails up to 128 px; hover previews
+remain memory-only. Cache keys include the path, size, modification/creation
+timestamps and requested edge. Bounded pixel records validate dimensions and
+a SHA-256 checksum before allocation. Corrupt records are discarded, and misses
+fall back to decoding. Writes run on a separate best-effort sequence with at
+most 32 pending images (up to 2 MiB of pixel payload), so disk writes do not delay
+thumbnail delivery. Pending writes recheck source metadata and mutation epochs.
+Writes use atomic replacement and eviction follows recent use. Linux stores records under `$XDG_CACHE_HOME/crFiles/thumbnails-v1` (or
+`~/.cache/crFiles/thumbnails-v1`); Windows uses
+`%LOCALAPPDATA%/crFiles/Cache/thumbnails-v1`. Cache lookup and IO run on workers.
 
 
 ## Virtual file views
@@ -362,7 +381,7 @@ Selection belongs to file paths in the model. Rubber-band selection intersects
 logical item bounds, including rows that have already scrolled out of view.
 Completed moves and Trash operations remove affected rows and update the virtual
 extent while preserving the remaining views and header. Thumbnail scheduling
-still prioritizes visible rows, with two worker jobs of two entries each. Recycled
+still prioritizes visible rows, with separate cache, image, PDF and video lanes. Recycled
 rows release their image references to the bounded caches, and late worker
 results do not attach images to offscreen metadata entries. History retains its
 separate database pagination.
@@ -393,7 +412,19 @@ Initial enumeration returns sorted, filtered indices from the worker. Later sort
 or hidden-file changes sort metadata snapshots on workers, using cancellable merge
 passes. Request tokens reject obsolete sort results when options or metadata
 change. UI rendering consumes these indices; it no longer performs the full sort.
-Metadata snapshot copies and final UI bookkeeping remain on the UI thread.
+Directory reads, cache entries and panes share immutable metadata snapshots.
+Selections, deletion markers and visible image state stay private to each pane.
+Live updates compare snapshots and build path/position indices on workers; the
+UI applies the diff to existing rows, retaining selection, focus and scroll
+anchors. Request tokens and model generations reject obsolete comparisons.
+Large snapshots and diff indices are also released on workers. Per-pane sorted
+indices and final view/layout bookkeeping remain on the UI thread.
+
+Workspace saves keep the existing debounce and serialize JSON/write files on a
+background sequence. Superseded queued snapshots are skipped; a shared write
+lock prevents older workspace saves from overwriting explicit Settings changes.
+The final close snapshot uses a shutdown-blocking task, and save failures are
+reported to the live window or logged during shutdown.
 
 Cache validity is independent of History. Scoped mutations cover local transfer
 batches, Trash/restore, folder creation and inbound sharing, including error and
@@ -466,7 +497,7 @@ sidebar and its resize edge without changing the saved sidebar preference.
 
 PDF thumbnails
 --------------
-Icon mode previews the first page of PDFs through the bundled PDFium library.
+List and Icon modes preview the first page of PDFs through the bundled PDFium library.
 Rendering fits the page on a white background within the existing 128 px thumbnail
 limit. It uses the visible-first file-visual queue and shared 64 MiB / 1024-entry
 thumbnail LRU, with metadata and mutation checks before caching. PDFium is lazily
@@ -569,3 +600,161 @@ boxes, 4 MiB of metadata and two seconds per file. Symlinks, Windows reparse
 points and POSIX special files are skipped. The status line reports skipped/partially searched
 files and limits; results can therefore be incomplete for unsupported, protected,
 unreadable or oversized files. No persistent content index is created.
+
+
+## Video thumbnails
+
+List and Icon modes show a static video frame, fitted to the selected icon size.
+MP4, MOV, M4V, MKV and WebM are recognized. H.264 uses Chromium's bundled
+FFmpeg decoder. HEVC uses the dynamically loaded libde265 software decoder,
+including Main/Main10 content, without requiring GPU decoding or an external
+`ffmpeg` executable. Other codecs still depend on the bundled decoder selection.
+
+HDR10/PQ and HLG frames are sampled from 8/10/12-bit planar YUV into floating-point
+RGB before Chromium's global tone mapping converts them to SDR/sRGB. This keeps
+highlights and wide-gamut color information until the final conversion, matching
+the software thumbnail approach in crPhotos. Container HDR metadata is passed to
+the tone mapper when available; otherwise Chromium's default mapping is used.
+Rotation, mirroring and display aspect ratio are preserved. Dolby Vision dynamic
+metadata and HDR10+ dynamic metadata are not applied.
+
+HEVC runtime requirements (libde265 1.0.16 or newer):
+
+- Linux: install the maintained system `libde265.so.0` (Debian package
+  `libde265-0`). The Linux archive relies on this system library.
+- Windows: place `libde265.dll` (or `de265.dll`) and its runtime dependencies next
+  to `crFiles.exe`. Use a matching x64 build, preferably using the MSVC runtime.
+  `make wf0` includes either DLL when present and reports when neither is found.
+  No library is loaded from the current working directory or PATH.
+
+Only public API declarations and their license are vendored. Missing/older
+libraries, unsupported profiles and decoder errors retain the normal video icon.
+
+Video cache misses reuse one crFiles helper process, without a window or GPU
+context. A Mojo connection returns bounded native N32 pixels directly; no
+temporary PNG files, PNG encoding or re-decoding are needed. The helper retires
+after 30 idle seconds and restarts lazily after a timeout, cancellation or crash. H.264 seeks near the start; HEVC starts from the initial
+parameter sets and decodes the first available frame, preserving aspect ratio, rotation and mirroring. The
+helper uses local-file-only custom I/O, at most 64 MiB of reads, one decoder
+thread, a 16-megapixel frame limit and a 128 px output edge. Cancellation or an
+eight-second deadline terminates the helper. HEVC picture-buffer allocations
+are additionally capped at 32 pictures and a conservative 384 MiB budget. This is process isolation, not an
+OS security sandbox.
+
+Only one video job runs at a time, independently of cache probes and the
+image/PDF workers. Visible rows precede overscan requests;
+navigation cancels obsolete work. Successful frames share the existing bounded
+64 MiB / 1024-entry thumbnail cache and file-change invalidation. Unsupported,
+damaged or timed-out videos keep their file-type icon.
+
+## Navigation appearance
+
+**Settings → Interface → Navigation bar style** offers three radio choices:
+**Minimal path** (default), **Underlined path**, and **Raised segments**.
+The setting is saved and applied immediately. Minimal paths use subtle separators
+and individual hover highlights; underlined paths mark the current folder with
+a theme-colored line and use a 140 ms reveal animation. The existing raised breadcrumb style remains available. Saved capsule selections
+now select the underlined style.
+All styles use theme colors for light/dark mode and retain path editing, horizontal
+scrolling for long paths, and the existing transition between breadcrumbs and the
+path input. Hover/press feedback does not change segment widths.
+
+## Plain-text thumbnails
+
+In **Icon** mode, sizes **64, 96 and 128** can show a paper-style content preview
+for recognized text extensions, including `.conf`, `.md`, `.txt`, `.bat`, `.sh`,
+`.ini`, `.json`, `.yaml`, `.yml`, `.log`, `.cfg`, `.toml`, `.csv`, `.xml`,
+`.markdown`, `.bash`, `.zsh`, `.cmd` and `.ps1`. List mode and icon sizes of
+48 or below keep the normal type icon, even if a text thumbnail is cached.
+
+A worker reads at most the first **16 KiB** and draws at most the first **5 lines**,
+with tabs expanded and long lines clipped. UTF-8 and BOM-marked UTF-16 are
+supported; binary controls or invalid encoding fall back to the type icon.
+Text is drawn without syntax highlighting or Markdown formatting, using basic
+glyph rendering with font fallback (not full bidirectional/complex-script layout).
+Linux resolves missing glyphs with worker-local Fontconfig queries and reuses
+resolved typefaces within each thumbnail; unavailable glyphs use a replacement.
+No script is executed. Text previews share the bounded memory cache and file-change
+validation, but are never read from or written to the persistent thumbnail cache.
+
+### Windows HEVC packaging
+
+`make wf0` also discovers existing codecs in `out/win10/hevc-runtime` or
+crPhotos' `out/win10/heif-runtime`, then falls back to the output directory.
+Override this with `make wf0 CRFILES_HEVC_RUNTIME_DIR=/path/to/runtime`; the
+shared `HEIF_RUNTIME_DIR` override is also accepted. No compilation or downloads
+are performed. The packager validates x64 PE files and the decoder API exports,
+follows non-system DLL imports recursively (including MinGW threading runtimes),
+and rejects missing dependencies or conflicting DLLs. Only the decoder and its
+required DLLs are copied; unrelated `heif.dll` is not included. Runtime license
+and source notices are retained under `licenses/hevc-runtime`. The existing
+exclusion of `dxcompiler.dll` and `dxil.dll` remains in place.
+
+An explicitly supplied or auto-detected runtime directory must be complete.
+If no codec runtime exists, packaging warns and continues without HEVC support.
+The decoder must still satisfy crFiles' runtime version check (libde265 >= 1.0.16);
+DLL loading and decoding should be verified on Windows.
+
+### Archive extraction
+
+**Compress** creates ZIP files in a separate archive helper process over Mojo.
+The parent performs source checks and records History; the helper reads and
+compresses the files, reporting processed bytes through IPC. Results are written
+to a private temporary directory and published only after success. Helper launch
+failures, disconnections and the 30-minute timeout fail the operation without
+publishing an incomplete ZIP. After confirming the ZIP name, an anchored bubble
+shows a preparation phase while collecting source sizes, then byte-based progress
+(or entry-based progress for empty files), the current filename and a Cancel
+button. Progress reaches 100% only after the ZIP is finalized and published. The
+bubble points to the first selected filename and keeps the completion or failure
+result visible until Close is clicked.
+Canceling also stops source checks and cleans up the temporary ZIP; canceled
+operations are recorded in History.
+
+Right-click a single `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, or `.tar.xz` file to **Extract here**,
+**Extract to same-name folder**, or **Extract to…**. Extraction starts immediately in an anchored progress bubble showing the file
+name and extracted bytes, with cancellation support. ZIP and RAR password input
+appears only when required. The bubble changes to a completion notice when done;
+success notices dismiss after five seconds, while errors remain for review. Operations are recorded in History.
+
+- ZIP: Store/Deflate and traditional ZIP passwords; AES-encrypted ZIP is not supported.
+- 7z: formats supported by Chromium's LZMA SDK; encrypted 7z is not supported.
+- RAR: single-volume archives, including password-protected archives; multipart RAR is rejected.
+- TAR: regular files and directories in classic TAR, USTAR, PAX and GNU long-name archives.
+- TAR.GZ / TGZ and TAR.XZ: streamed through Chromium's zlib and LZMA SDK libraries,
+  without external commands or an intermediate TAR file. Compression checksums
+  are validated before publishing. Standalone `.gz` and `.xz` files are not included.
+- TAR symbolic links (including dangling links) and hard links are supported.
+  Regular files are written first, then hard-link chains are resolved, and symbolic
+  links are created last. Hard-link targets must be regular files inside the
+  archive; missing targets and cycles fail extraction. Sparse files and device
+  entries are rejected. Windows symbolic links require developer mode or suitable
+  privileges; dangling links use the file-link type when the type is unknown.
+  Permissions, ownership,
+  extended attributes and timestamps are not restored. Entry names must be UTF-8.
+  The same-name destination strips the complete suffix: `photos.tar.gz` becomes `photos/`.
+
+Decoding runs in a disposable helper process, not on the UI thread. This helper
+uses the existing crFiles process infrastructure and is not an OS-sandboxed
+utility service. Entries are written as regular files and directories into a
+private staging tree. TAR links are preserved during publication without following
+them; special attributes are not restored.
+Only successfully decoded contents are published. Existing real directories are
+merged; each conflicting entry prompts for Replace all, Replace, Skip, or Cancel.
+Replace all applies only to the current extraction. Originals are temporarily
+backed up until their replacement is published; failed rollback preserves the
+backup and reports its location. Cancellation stops remaining work, cleans staging
+data, and keeps files that have already been successfully published. The current limits are 100,000
+entries, 16 GiB of extracted file data and 30 minutes of decoding. Solid 7z
+and RAR decoding can require additional temporary disk space.
+TAR also limits headers to 100,000, extended metadata to 1 MiB per record and
+64 MiB in total, and the decoded stream (including padding) to 17 GiB. XZ
+decoder allocations larger than 128 MiB are rejected.
+
+The Chromium UnRAR wrapper also needs `patches/unrar-extraction.patch` when
+installing crFiles into a fresh Chromium checkout. It exposes sticky extraction
+errors and volume status, and fixes UTF-8 conversion of RAR filenames on Linux.
+Apply it from the Chromium source root with
+`git apply crFiles/patches/unrar-extraction.patch` (the current workspace already
+contains these changes). Both Linux and Windows packages include the UnRAR and
+LZMA SDK license texts.

@@ -1,0 +1,14 @@
+// Copyright 2026 The Chromium Authors
+module crfiles.mojom;
+import "mojo/public/mojom/base/file_path.mojom";
+// Tightly packed native N32 pixels, converted to SDR/sRGB by the decoder.
+struct VideoThumbnail {
+  uint32 width;
+  uint32 height;
+  // Fixed IPC bound; unused bytes are zero, only width * height * 4 are read.
+  array<uint8, 65536> pixels;
+};
+// One outstanding request per connection; the parent kills a hung decoder.
+interface VideoThumbnailService {
+  Decode(mojo_base.mojom.FilePath path, uint32 edge) => (VideoThumbnail? image);
+};

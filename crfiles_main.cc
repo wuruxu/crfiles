@@ -38,6 +38,8 @@
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_search.h"
+#include "crFiles/crfiles_archive.h"
+#include "crFiles/crfiles_video_thumbnail.h"
 #include "crFiles/crfiles_version.h"
 #include "crFiles/crfiles_window.h"
 #include "libcr/viz_context_factory.h"
@@ -312,7 +314,15 @@ int CrFilesEntry(int argc, char** argv) {
   mojo::core::Configuration mojo_configuration;
   mojo_configuration.is_broker_process = true;
   mojo::core::Init(mojo_configuration);
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kVideoThumbnailProcessSwitch)) {
+    base::FeatureList::InitInstance("", "");
+    return crfiles::RunVideoThumbnailProcess();
+  }
   base::i18n::InitializeICU();
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kArchiveProcessSwitch)) {
+    base::FeatureList::InitInstance("", "");
+    return crfiles::RunArchiveProcess();
+  }
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kSearchProcessSwitch)) {
     base::FeatureList::InitInstance("", "");
     return crfiles::RunSearchProcess();

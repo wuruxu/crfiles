@@ -7,6 +7,8 @@ crfileswin:
 	autoninja -C out/win10 crFiles
 
 # Package existing Windows outputs on the Linux cross-build host.
+# Reuse the same optional runtime override as crPhotos unless explicitly set.
+CRFILES_HEVC_RUNTIME_DIR ?= $(HEIF_RUNTIME_DIR)
 .PHONY: wf0
 wf0:
 	@set -eu; \
@@ -25,6 +27,10 @@ wf0:
 	for file in "$(CRFILES_WIN_OUT_DIR)"/vcruntime140*.dll "$(CRFILES_WIN_OUT_DIR)"/msvcp140*.dll; do \
 		if test -f "$$file"; then cp "$$file" "$$package/"; fi; \
 	done; \
+	python3 crFiles/tools/package_windows_codecs.py --out-dir "$(CRFILES_WIN_OUT_DIR)" --runtime "$(CRFILES_HEVC_RUNTIME_DIR)" --destination "$$package"; \
+	cp crFiles/third_party/libde265/COPYING "$$package/licenses/libde265-COPYING"; \
+	cp third_party/unrar/src/license.txt "$$package/licenses/UnRAR-LICENSE"; \
+	cp third_party/lzma_sdk/LICENSE "$$package/licenses/LZMA-SDK-LICENSE"; \
 	cp crFiles/README.md crFiles/VERSION crFiles/LICENSE "$$package/"; \
 	cp LICENSE "$$package/licenses/Chromium-LICENSE"; \
 	(cd "$$staging" && zip -r "$(CRFILES_WIN_PACKAGE_NAME).zip" "$(CRFILES_WIN_PACKAGE_NAME)"); \

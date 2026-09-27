@@ -23,6 +23,9 @@
 #include <string_view>
 #include <vector>
 #include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/process/kill.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/process/launch.h"
@@ -39,9 +42,15 @@
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/bubble/info_bubble.h"
+#include "ui/views/view_tracker.h"
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include <shellapi.h>
+#include "base/win/shell_util.h"
+#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#include "base/nix/xdg_util.h"
 #endif
 #include "crFiles/crfiles_app_icon.h"
 #include "crFiles/crfiles_history.h"
@@ -60,6 +69,7 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
+#include "ui/views/controls/button/radio_button.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/highlight_path_generator.h"
@@ -105,21 +115,109 @@ std::unique_ptr<views::View> Page(int title, std::unique_ptr<views::View> action
   divider->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(8, 0, 16, 0)));
   return page;
 }
-void OpenProject() {
-  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock()}, base::BindOnce([] {
-#if BUILDFLAG(IS_WIN)
-    ShellExecuteW(nullptr, L"open", L"https://github.com/libcr/crFiles", nullptr, nullptr, SW_SHOWNORMAL);
-#else
-#if BUILDFLAG(IS_MAC)
-    const char* opener = "/usr/bin/open";
-#else
-    const char* opener = "xdg-open";
-#endif
-    base::LaunchProcess(std::vector<std::string>{opener, "https://github.com/libcr/crFiles"}, base::LaunchOptions());
-#endif
-  }));
+constexpr char kProjectUrl[] = "https://github.com/libcr/crFiles";
+constexpr char16_t kAuthorEmail[] = u"wrxzzj@gmail.com";
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+void LaunchCrFilesProjectPageWithActivation(base::LaunchOptions options) {
+  options.allow_new_privs = true;
+  options.environment["MM_NOTTTY"] = "1";
+  std::vector<std::string> argv = {"xdg-open", kProjectUrl};
+  base::Process process = base::LaunchProcess(argv, options);
+  if (!process.IsValid()) {
+    LOG(ERROR) << "crFiles failed to open project URL";
+    return;
+  }
+  base::EnsureProcessGetsReaped(std::move(process));
 }
-void CopyAuthor() { ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste).WriteText(u"wrxzzj@gmail.com"); }
+#endif
+
+#if BUILDFLAG(IS_WIN)
+void OpenCrFilesProjectPageViaExplorer() {
+  base::win::ShellExecuteOptions options;
+  options.verb = L"open";
+  const HRESULT result = base::win::RunShellExecuteViaExplorer(
+      base::UTF8ToWide(kProjectUrl), std::wstring(), options);
+  if (SUCCEEDED(result)) {
+    return;
+  }
+  const std::wstring project_url = base::UTF8ToWide(kProjectUrl);
+  const HINSTANCE fallback_result = ::ShellExecuteW(
+      nullptr, L"open", project_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  if (reinterpret_cast<INT_PTR>(fallback_result) <= 32) {
+    LOG(ERROR) << "crFiles failed to open project URL";
+  }
+}
+#endif
+
+void OpenProject() {
+#if BUILDFLAG(IS_WIN)
+  base::ThreadPool::CreateCOMSTATaskRunner(
+      {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(&OpenCrFilesProjectPageViaExplorer));
+#elif BUILDFLAG(IS_MAC)
+  base::CommandLine command_line(base::FilePath(FILE_PATH_LITERAL("open")));
+  command_line.AppendArg(kProjectUrl);
+  base::Process process =
+      base::LaunchProcess(command_line, base::LaunchOptions());
+  if (!process.IsValid()) {
+    LOG(ERROR) << "crFiles failed to open project URL";
+    return;
+  }
+#if BUILDFLAG(IS_POSIX)
+  base::EnsureProcessGetsReaped(std::move(process));
+#endif
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  base::nix::CreateLaunchOptionsWithXdgActivation(
+      base::BindOnce(&LaunchCrFilesProjectPageWithActivation));
+#else
+  LOG(ERROR) << "crFiles cannot open the project URL on this platform";
+#endif
+}
+
+class AuthorEmailLink : public views::Link {
+  METADATA_HEADER(AuthorEmailLink, views::Link)
+ public:
+  AuthorEmailLink() : views::Link(kAuthorEmail) {
+    SetFocusBehavior(views::View::FocusBehavior::NEVER);
+    SetForceUnderline(false);
+    SetCallback(base::BindRepeating(&AuthorEmailLink::CopyEmail, weak_.GetWeakPtr()));
+  }
+  ~AuthorEmailLink() override {
+    timer_.Stop();
+    HideCopiedBubble();
+  }
+ protected:
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    views::Link::VisibilityChanged(starting_from, is_visible);
+    if (!is_visible) {
+      timer_.Stop();
+      HideCopiedBubble();
+    }
+  }
+ private:
+  void CopyEmail() {
+    ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste).WriteText(kAuthorEmail);
+    HideCopiedBubble();
+    auto* bubble = new views::InfoBubble(this, views::BubbleBorder::Arrow::TOP_CENTER,
+        Text(IDS_CRFILES_COPIED));
+    bubble_.SetView(bubble);
+    bubble->Show();
+    timer_.Start(FROM_HERE, base::Seconds(2),
+        base::BindOnce(&AuthorEmailLink::HideCopiedBubble, weak_.GetWeakPtr()));
+  }
+  void HideCopiedBubble() {
+    views::View* bubble = bubble_.view();
+    bubble_.SetView(nullptr);
+    if (bubble) static_cast<views::InfoBubble*>(bubble)->Hide();
+  }
+  views::ViewTracker bubble_;
+  base::OneShotTimer timer_;
+  base::WeakPtrFactory<AuthorEmailLink> weak_{this};
+};
+BEGIN_METADATA(AuthorEmailLink)
+END_METADATA
 std::unique_ptr<views::View> AboutBody(bool large) {
   auto body = std::make_unique<views::View>();
   auto* layout = body->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -136,15 +234,17 @@ std::unique_ptr<views::View> AboutBody(bool large) {
   if (large) for (auto* label : {description, version, build})
     label->SetFontList(label->font_list().DeriveWithSizeDelta(2));
   auto* project = column->AddChildView(std::make_unique<views::View>());
-  project->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+  project->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4))
+      ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
   auto* project_title = Label(project, Text(IDS_CRFILES_PROJECT));
   auto* project_link = project->AddChildView(std::make_unique<views::Link>(u"https://github.com/libcr/crFiles"));
   project_link->SetCallback(base::BindRepeating(&OpenProject)); project_link->SetForceUnderline(false);
+  project_link->SetFocusBehavior(views::View::FocusBehavior::NEVER);
   auto* author = column->AddChildView(std::make_unique<views::View>());
-  author->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal));
+  author->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal))
+      ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
   auto* author_title = Label(author, Text(IDS_CRFILES_AUTHOR) + u": wuruxu (");
-  auto* email = author->AddChildView(std::make_unique<views::Link>(u"wrxzzj@gmail.com"));
-  email->SetCallback(base::BindRepeating(&CopyAuthor)); email->SetForceUnderline(false);
+  views::Link* email = author->AddChildView(std::make_unique<AuthorEmailLink>());
   auto* suffix = Label(author, u")");
   for (auto* label : {project_title, author_title, suffix}) {
     label->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
@@ -193,7 +293,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     navigation->SetBackground(views::CreateSolidBackground(ui::kColorSysSurface2));
     navigation->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(18, 14), 6));
-    constexpr std::array titles = {IDS_CRFILES_GENERAL, IDS_CRFILES_NEARBY_SETTINGS, IDS_CRFILES_HISTORY, IDS_CRFILES_ABOUT};
+    constexpr std::array titles = {IDS_CRFILES_GENERAL, IDS_CRFILES_INTERFACE, IDS_CRFILES_NEARBY_SETTINGS, IDS_CRFILES_HISTORY, IDS_CRFILES_ABOUT};
     for (size_t i = 0; i < titles.size(); ++i)
       navigation_[i] = navigation->AddChildView(std::make_unique<NavigationButton>(
           base::BindRepeating(&Settings::SelectPage, base::Unretained(this), i), Text(titles[i])));
@@ -209,10 +309,11 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     right_layout->SetFlexForView(scroll, 1);
     auto host = std::make_unique<views::View>(); host->SetLayoutManager(std::make_unique<views::FillLayout>());
     pages_[0] = host->AddChildView(GeneralPage());
-    pages_[1] = host->AddChildView(NearbyPage());
-    pages_[2] = host->AddChildView(HistoryPage());
+    pages_[1] = host->AddChildView(InterfacePage());
+    pages_[2] = host->AddChildView(NearbyPage());
+    pages_[3] = host->AddChildView(HistoryPage());
     auto about = Page(IDS_CRFILES_ABOUT); about->AddChildView(AboutBody(false));
-    pages_[3] = host->AddChildView(std::move(about));
+    pages_[4] = host->AddChildView(std::move(about));
     scroll->SetContents(std::move(host));
     auto* footer = right->AddChildView(std::make_unique<views::View>());
     footer->SetPreferredSize(gfx::Size(0, 52));
@@ -309,6 +410,29 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
       checkbox->SetCallback(base::BindRepeating(&Settings::FileViewChanged, base::Unretained(this)));
     }
     return page;
+  }
+  std::unique_ptr<views::View> InterfacePage() {
+    auto page = Page(IDS_CRFILES_INTERFACE);
+    Label(page.get(), Text(IDS_CRFILES_NAVIGATION_STYLE));
+    constexpr std::array labels = {IDS_CRFILES_NAVIGATION_MINIMAL, IDS_CRFILES_NAVIGATION_UNDERLINE, IDS_CRFILES_NAVIGATION_RAISED};
+    const auto selected = GetNavigationStyle();
+    for (size_t i = 0; i < labels.size(); ++i) {
+      auto* radio = page->AddChildView(std::make_unique<views::RadioButton>(Text(labels[i]), 1));
+      navigation_styles_[i] = radio;
+      radio->SetPreferredSize(gfx::Size(0, 44));
+      radio->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+      radio->SetChecked(static_cast<NavigationStyle>(i) == selected);
+      radio->SetCallback(base::BindRepeating(&Settings::NavigationStyleChanged, base::Unretained(this), static_cast<NavigationStyle>(i)));
+    }
+    return page;
+  }
+  void NavigationStyleChanged(NavigationStyle style) {
+    const bool saved = SetNavigationStyle(style);
+    error_->SetVisible(!saved);
+    const auto selected = GetNavigationStyle();
+    for (size_t i = 0; i < navigation_styles_.size(); ++i)
+      navigation_styles_[i]->SetChecked(static_cast<NavigationStyle>(i) == selected);
+    if (saved) ApplyCrFilesViewSettings();
   }
   void FileViewChanged() {
     const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked(), hover_image_preview_->GetChecked()});
@@ -488,7 +612,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     if (closing_ || IsCrFilesSharingBusy()) return;
     if (choosing_avatar_) {
       choosing_avatar_ = false; CancelAvatarDecode();
-      base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
           base::BindOnce(&LoadImagePreviewCancelable, file.path(), 256, avatar_decode_cancel_),
           base::BindOnce(&Settings::AvatarDecoded, weak_.GetWeakPtr(), avatar_decode_generation_));
       return;
@@ -574,12 +698,13 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE}, base::BindOnce(&PruneFileHistory));
   }
   void SelectPage(size_t page) {
-    if (page != 1) CloseAvatars();
+    if (page != 2) CloseAvatars();
     for (size_t i = 0; i < pages_.size(); ++i) { pages_[i]->SetVisible(i == page); navigation_[i]->Select(i == page); }
   }
   void Close() { StopSharingUpdates(); CloseAvatars(); GetWidget()->Close(); }
-  std::array<raw_ptr<views::View>, 4> pages_ = {};
-  std::array<raw_ptr<NavigationButton>, 4> navigation_ = {};
+  std::array<raw_ptr<views::View>, 5> pages_ = {};
+  std::array<raw_ptr<NavigationButton>, 5> navigation_ = {};
+  std::array<raw_ptr<views::RadioButton>, 3> navigation_styles_ = {};
   std::array<raw_ptr<views::Checkbox>, 6> checks_ = {};
   std::vector<raw_ptr<libcr::ThemeToggleButton>> themes_;
   raw_ptr<views::Combobox> language_ = nullptr, retention_ = nullptr;

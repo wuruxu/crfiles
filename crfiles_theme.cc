@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_history.h"
+#include <atomic>
+#include "base/logging.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "base/base_paths.h"
@@ -45,10 +48,33 @@ base::DictValue& Settings() {
   static base::NoDestructor<base::DictValue> settings(ReadSettings());
   return *settings;
 }
-bool Save() {
-  auto json = base::WriteJson(Settings());
+// Serialize all writes, including explicit synchronous Settings changes, so
+// an older workspace task can never overwrite a newer preferences snapshot.
+base::Lock& SettingsWriteLock() { static base::NoDestructor<base::Lock> lock; return *lock; }
+std::atomic<uint64_t> settings_version{0};
+bool WriteSettings(const base::DictValue& settings) {
+  auto json = base::WriteJson(settings);
   return json && base::CreateDirectory(SettingsPath().DirName()) &&
       base::ImportantFileWriter::WriteFileAtomically(SettingsPath(), *json);
+}
+bool Save() {
+  base::AutoLock write_lock(SettingsWriteLock());
+  if (!WriteSettings(Settings())) return false;
+  ++settings_version;
+  return true;
+}
+scoped_refptr<base::SequencedTaskRunner> WorkspaceWriter() {
+  static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
+      base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+          base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
+  return *runner;
+}
+bool WriteWorkspaceSnapshot(base::DictValue settings, uint64_t version) {
+  base::AutoLock write_lock(SettingsWriteLock());
+  if (settings_version.load() != version) return true;
+  const bool saved = WriteSettings(settings);
+  if (!saved) LOG(ERROR) << "Cannot save crFiles workspace";
+  return saved || settings_version.load() != version;
 }
 void ApplyThemeMode(CrFilesThemeMode theme_mode, bool notify) {
   ui::NativeTheme* native_theme = ui::NativeTheme::GetInstanceForNativeUi();
@@ -138,6 +164,20 @@ bool SetNearbySharingPreferences(const NearbySharingPreferences& p) {
   if (Save()) return true;
   Settings() = std::move(previous); return false;
 }
+NavigationStyle GetNavigationStyle() {
+  base::AutoLock lock(SettingsLock());
+  const int style = Settings().FindInt("navigation_style").value_or(0);
+  return style >= 0 && style <= 2 ? static_cast<NavigationStyle>(style) : NavigationStyle::kMinimal;
+}
+bool SetNavigationStyle(NavigationStyle style) {
+  const int value = static_cast<int>(style);
+  if (value < 0 || value > 2) return false;
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().Clone();
+  Settings().Set("navigation_style", value);
+  if (Save()) return true;
+  Settings() = std::move(previous); return false;
+}
 FileViewPreferences GetFileViewPreferences() {
   base::AutoLock lock(SettingsLock());
   return {Settings().FindBool("auto_hide_toolbar").value_or(true),
@@ -194,10 +234,12 @@ base::DictValue GetCrFilesWorkspace() {
   const auto* workspace = Settings().FindDict("workspace");
   return workspace ? workspace->Clone() : base::DictValue();
 }
-bool SetCrFilesWorkspace(base::DictValue workspace) {
+bool SetCrFilesWorkspace(base::DictValue workspace, base::OnceCallback<void(bool)> reply) {
   base::AutoLock lock(SettingsLock());
   Settings().Set("workspace", std::move(workspace));
-  return Save();
+  const uint64_t version = ++settings_version;
+  return WorkspaceWriter()->PostTaskAndReplyWithResult(FROM_HERE,
+      base::BindOnce(&WriteWorkspaceSnapshot, Settings().Clone(), version), std::move(reply));
 }
 
 }

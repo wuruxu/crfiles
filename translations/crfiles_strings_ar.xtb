@@ -184,4 +184,32 @@
   <translation id="5336759974910418265">فتح المجلد الحاوي</translation>
   <translation id="3133846425424266483">ملف مخفي</translation>
   <translation id="5320285390743896110">معاينة الصور عند تمرير المؤشر</translation>
+  <translation id="4330963668268145125">الواجهة</translation>
+  <translation id="6977286314722865075">نمط شريط التنقل</translation>
+  <translation id="9100530047575291676">مسار بسيط</translation>
+  <translation id="1093746493556969906">مسار مسطّر</translation>
+  <translation id="7281652176702177523">مقاطع بارزة</translation>
+  <translation id="2704606927547763573">تم النسخ</translation>
+  <translation id="1677453780898006361">استخراج</translation>
+  <translation id="2216580316684184637">استخراج هنا</translation>
+  <translation id="1541575667632527883">استخراج إلى مجلد بالاسم نفسه</translation>
+  <translation id="3233966583429109333">استخراج إلى…</translation>
+  <translation id="6949434160682548041">كلمة المرور (اختيارية)</translation>
+  <translation id="6691886083376373509">لن تتم الكتابة فوق الملفات والمجلدات الموجودة.</translation>
+  <translation id="5949626560795690587">جارٍ الاستخراج…</translation>
+  <translation id="8525459362212271809">فشل الاستخراج. تحقق من كلمة المرور وتنسيق الأرشيف والمساحة المتاحة والأسماء المتعارضة.</translation>
+  <translation id="8242754211022052209">اكتمل الاستخراج.</translation>
+  <translation id="1018656279737460067">تم الإلغاء</translation>
+  <translation id="6450619332317296209">موجود بالفعل: <ph name="PATH"/>. اختر وجهة أخرى.</translation>
+  <translation id="5209495381416891540">أدخل كلمة مرور صحيحة للأرشيف للمتابعة.</translation>
+  <translation id="1031034072534122915">استخراج إلى <ph name="NAME"/>/</translation>
+  <translation id="670380500182402678">استبدال الكل</translation>
+  <translation id="1062407476771304334">استبدال</translation>
+  <translation id="8281886186245836920">تخطي</translation>
+  <translation id="100951024926702248">موجود بالفعل: <ph name="PATH"/></translation>
+  <translation id="5810055407516268194">فشل الاستبدال. تم الاحتفاظ بالعنصر الأصلي في: <ph name="PATH"/></translation>
+  <translation id="1270626948639993584">جارٍ الضغط…</translation>
+  <translation id="4525876713008994486">اكتمل الضغط.</translation>
+  <translation id="7749397111688680685">فشل الضغط. تحقق من الأذونات والمساحة المتاحة والأسماء المتعارضة.</translation>
+<translation id="4802584673094436231">جارٍ التحضير…</translation>
 </translationbundle>

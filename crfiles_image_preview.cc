@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_image_preview.h"
+#include "crFiles/crfiles_thumbnail_cache.h"
+#include "crFiles/crfiles_text_thumbnail.h"
+#include "crFiles/crfiles_video_thumbnail.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +23,7 @@
 #include "third_party/pdfium/public/fpdf_progressive.h"
 #include "third_party/pdfium/public/fpdfview.h"
 #include "base/synchronization/lock.h"
+#include "base/synchronization/condition_variable.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "third_party/skia/include/codec/SkCodec.h"
 #include "third_party/skia/include/codec/SkEncodedOrigin.h"
@@ -35,6 +39,46 @@
 #include "third_party/skia/modules/svg/include/SkSVGSVG.h"
 namespace crfiles {
 namespace {
+// Bound simultaneous raster bitmap allocations even when small compressed
+// files expand to large images. Encoded buffers and codec scratch are separate.
+struct RasterBudget {
+  RasterBudget();
+  ~RasterBudget();
+  base::Lock lock;
+  base::ConditionVariable available{&lock};
+  size_t used = 0;
+};
+RasterBudget::RasterBudget() = default;
+RasterBudget::~RasterBudget() = default;
+RasterBudget& GetRasterBudget() {
+  static base::NoDestructor<RasterBudget> budget;
+  return *budget;
+}
+class RasterMemory {
+ public:
+  RasterMemory(size_t bytes, const std::shared_ptr<std::atomic_bool>& canceled);
+  ~RasterMemory();
+  bool acquired() const { return bytes_ != 0; }
+ private:
+  size_t bytes_ = 0;
+};
+RasterMemory::RasterMemory(size_t bytes, const std::shared_ptr<std::atomic_bool>& canceled) {
+  constexpr size_t limit = 320 * 1024 * 1024;
+  if (!bytes || bytes > limit) return;
+  auto& budget = GetRasterBudget();
+  base::AutoLock guard(budget.lock);
+  while (!canceled || !canceled->load(std::memory_order_relaxed)) {
+    if (bytes <= limit - budget.used) { budget.used += bytes; bytes_ = bytes; return; }
+    budget.available.TimedWait(base::Milliseconds(50));
+  }
+}
+RasterMemory::~RasterMemory() {
+  if (!bytes_) return;
+  auto& budget = GetRasterBudget();
+  base::AutoLock guard(budget.lock);
+  budget.used -= bytes_; budget.available.Broadcast();
+}
+
 // crFiles owns its PDFium instance. All PDF handles, including destruction,
 // stay under this lock; workers may change between requests. Keep the SDK alive
 // for the process lifetime so shutdown cannot race with a file worker.
@@ -116,8 +160,9 @@ ThumbnailCache& Thumbnails() {
   return *cache;
 }
 }
-gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
-    const std::shared_ptr<std::atomic_bool>& canceled) {
+namespace {
+gfx::ImageSkia LoadThumbnailImpl(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled, bool decode) {
   auto stopped = [&] { return canceled && canceled->load(std::memory_order_relaxed); };
   if (stopped() || maximum_edge <= 0 || maximum_edge > 720) return {};
   auto epoch = ObserveFileCachePath(path, false);
@@ -137,12 +182,22 @@ gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
       return found->second->image;
     }
   }
-  // Neither filesystem IO nor image decoding holds the shared cache lock.
-  auto image = LoadImagePreviewCancelable(path, maximum_edge, canceled);
+  if (!epoch->Matches(revision)) return {};
+  // Disk hits share the cache-probe lane and bypass decoder slots entirely.
+  // Neither filesystem IO nor image decoding holds the shared memory lock.
+  const bool text = IsTextThumbnailPath(path);
+  auto image = text ? gfx::ImageSkia() : ReadDiskThumbnail(path, before, maximum_edge, canceled);
+  const bool disk_hit = !image.isNull();
+  if (!disk_hit) {
+    if (!decode || stopped()) return {};
+    image = LoadImagePreviewCancelable(path, maximum_edge, canceled);
+  }
   if (stopped() || image.isNull()) return {};
   base::File::Info after;
   if (!base::GetFileInfo(path, &after) || after.is_directory || before.size != after.size ||
       before.last_modified != after.last_modified || before.creation_time != after.creation_time) return {};
+  if (!epoch->Matches(revision) || stopped()) return {};
+  if (!disk_hit && !text) WriteDiskThumbnail(path, after, maximum_edge, image, canceled);
   const size_t bytes = sizeof(ThumbnailItem) + sizeof(ThumbnailKey) + 8 * sizeof(void*) +
       2 * path.value().capacity() * sizeof(base::FilePath::CharType) +
       image.GetRepresentation(1.f).GetBitmap().computeByteSize();
@@ -164,6 +219,15 @@ gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
   cache.index.emplace(key, cache.recent.begin()); cache.bytes += bytes;
   return image;
 }
+}
+gfx::ImageSkia FindCachedThumbnail(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled) {
+  return LoadThumbnailImpl(path, maximum_edge, canceled, false);
+}
+gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled) {
+  return LoadThumbnailImpl(path, maximum_edge, canceled, true);
+}
 gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge) {
   return LoadImagePreviewCancelable(path, maximum_edge, {});
 }
@@ -172,6 +236,8 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
   auto stopped = [&] { return canceled && canceled->load(std::memory_order_relaxed); };
   if (stopped()) return {};
   if (maximum_edge <= 0 || maximum_edge > 2048) return {};
+  if (IsTextThumbnailPath(path)) return LoadTextThumbnail(path, maximum_edge, canceled);
+  if (IsVideoThumbnailPath(path)) return LoadVideoThumbnail(path, maximum_edge, canceled);
   std::string encoded;
   if (!base::ReadFileToStringWithMaxSize(path, &encoded, 64 * 1024 * 1024)) return {};
   if (stopped()) return {};
@@ -219,6 +285,9 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
     // Some codecs must decode at full resolution before downsampling.
     if (dimensions.width() <= 0 || dimensions.height() <= 0 ||
         static_cast<int64_t>(dimensions.width()) * dimensions.height() > 64 * 1024 * 1024) return {};
+    RasterMemory memory(static_cast<size_t>(dimensions.width()) * dimensions.height() * 4 +
+        static_cast<size_t>(maximum_edge) * maximum_edge * 4, canceled);
+    if (!memory.acquired() || stopped()) return {};
     auto info = SkImageInfo::MakeN32Premul(dimensions.width(), dimensions.height());
     SkBitmap bitmap;
     if (!bitmap.tryAllocPixels(info)) return {};

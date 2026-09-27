@@ -4,6 +4,7 @@
 import("//build/config/ui.gni")
 import("//build/util/process_version.gni")
 import("//libcr/locales.gni")
+import("//media/media_options.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//tools/grit/grit_rule.gni")
 import("//tools/grit/repack.gni")
@@ -122,6 +123,13 @@ crfiles_sources = [
     "crfiles_app_icon.h",
     "crfiles_file_icons.cc",
     "crfiles_file_icons.h",
+    "crfiles_archive.cc",
+    "crfiles_archive.h",
+    "crfiles_archive_process.cc",
+    "crfiles_tar.cc",
+    "crfiles_tar.h",
+    "crfiles_archive_dialog.cc",
+    "crfiles_archive_dialog.h",
     "crfiles_search.cc",
     "crfiles_search.h",
     "crfiles_search_process.cc",
@@ -129,8 +137,16 @@ crfiles_sources = [
     "crfiles_search_content.h",
     "crfiles_search_view.cc",
     "crfiles_search_view.h",
+    "crfiles_text_thumbnail.cc",
+    "crfiles_text_thumbnail.h",
+    "crfiles_thumbnail_cache.cc",
+    "crfiles_thumbnail_cache.h",
     "crfiles_image_preview.cc",
     "crfiles_image_preview.h",
+    "crfiles_video_thumbnail.cc",
+    "crfiles_video_thumbnail.h",
+    "crfiles_video_thumbnail_client.cc",
+    "third_party/libde265/de265.h",
     "crfiles_frame_view.cc",
     "crfiles_frame_view.h",
     "crfiles_main.cc",
@@ -158,13 +174,23 @@ crfiles_sources = [
     "sharing/phone_sender.h",
   ]
 
+mojom("crfiles_archive_mojom") {
+  sources = [ "crfiles_archive.mojom" ]
+  public_deps = [ "//mojo/public/mojom/base" ]
+}
+
 mojom("crfiles_search_mojom") {
   sources = [ "crfiles_search.mojom" ]
 }
 
+mojom("crfiles_video_thumbnail_mojom") {
+  sources = [ "crfiles_video_thumbnail.mojom" ]
+  public_deps = [ "//mojo/public/mojom/base" ]
+}
+
 action("crfiles_buildtime") {
   script = "tools/generate_buildtime.py"
-  inputs = crfiles_sources + [ "crfiles_search.mojom", "VERSION", "crfiles_strings.grd", "BUILD.gn", "crfiles_windows.cc", "crfiles_windows.h", "crfiles_exe.rc", "sharing/nearby_files_win.cc" ]
+  inputs = crfiles_sources + [ "crfiles_archive.mojom", "crfiles_search.mojom", "crfiles_video_thumbnail.mojom", "VERSION", "crfiles_strings.grd", "BUILD.gn", "crfiles_windows.cc", "crfiles_windows.h", "crfiles_exe.rc", "sharing/nearby_files_win.cc" ]
   outputs = [ "$target_gen_dir/crfiles_buildtime.h" ]
   args = [ "--output", rebase_path(outputs[0], root_build_dir) ]
 }
@@ -174,7 +200,13 @@ executable("crFiles") {
   include_dirs = [ "//third_party/pdfium" ]
   deps = [
     ":crfiles_buildtime",
+    ":crfiles_archive_mojom",
+    "//third_party/lzma_sdk/google:seven_zip_reader",
+    "//third_party/lzma_sdk",
+    "//third_party/lzma_sdk:lzma_sdk_xz",
+    "//third_party/unrar",
     ":crfiles_search_mojom",
+    ":crfiles_video_thumbnail_mojom",
     ":crfiles_strings",
     ":crfiles_version",
     "//base",
@@ -186,6 +218,7 @@ executable("crFiles") {
     "//crypto",
     "//libcr",
     "//libcr:viz",
+    "//media",
     "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/platform",
@@ -215,8 +248,12 @@ executable("crFiles") {
     "//ui/menus",
     "//url",
   ]
+  if (media_use_ffmpeg) {
+    deps += [ "//third_party/ffmpeg", "//third_party/ffmpeg:ffmpeg_features" ]
+  }
   if (is_linux) {
     configs += [ ":context_gio" ]
+    deps += [ "//third_party/fontconfig" ]
   }
   data_deps = [
     ":app_icon",

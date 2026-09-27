@@ -184,4 +184,32 @@
   <translation id="5336759974910418265">打开所在文件夹</translation>
   <translation id="3133846425424266483">隐藏文件</translation>
   <translation id="5320285390743896110">悬停时放大预览图片</translation>
+  <translation id="4330963668268145125">界面</translation>
+  <translation id="6977286314722865075">导航栏风格</translation>
+  <translation id="9100530047575291676">极简路径</translation>
+  <translation id="1093746493556969906">下划线路径</translation>
+  <translation id="7281652176702177523">立体分段</translation>
+  <translation id="2704606927547763573">已复制</translation>
+  <translation id="1677453780898006361">解压</translation>
+  <translation id="2216580316684184637">解压到当前目录</translation>
+  <translation id="1541575667632527883">解压到同名文件夹</translation>
+  <translation id="3233966583429109333">解压到指定位置…</translation>
+  <translation id="6949434160682548041">密码（可选）</translation>
+  <translation id="6691886083376373509">不会覆盖现有的文件和文件夹。</translation>
+  <translation id="5949626560795690587">正在解压…</translation>
+  <translation id="8525459362212271809">解压失败。请检查密码、压缩格式、可用空间和重名条目。</translation>
+  <translation id="8242754211022052209">解压完成。</translation>
+  <translation id="1018656279737460067">已取消</translation>
+  <translation id="6450619332317296209">已存在：<ph name="PATH"/>。请选择其他目标位置。</translation>
+  <translation id="5209495381416891540">请输入正确的压缩包密码以继续。</translation>
+  <translation id="1031034072534122915">解压到 <ph name="NAME"/>/</translation>
+  <translation id="670380500182402678">全部替换</translation>
+  <translation id="1062407476771304334">替换</translation>
+  <translation id="8281886186245836920">跳过</translation>
+  <translation id="100951024926702248">已存在：<ph name="PATH"/></translation>
+  <translation id="5810055407516268194">替换失败。原条目已保存在：<ph name="PATH"/></translation>
+  <translation id="1270626948639993584">正在压缩…</translation>
+  <translation id="4525876713008994486">压缩完成。</translation>
+  <translation id="7749397111688680685">压缩失败。请检查权限、可用空间以及是否存在同名文件。</translation>
+<translation id="4802584673094436231">正在准备…</translation>
 </translationbundle>

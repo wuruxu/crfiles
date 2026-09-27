@@ -1,0 +1,79 @@
+diff --git a/third_party/unrar/google/unrar_wrapper.cc b/third_party/unrar/google/unrar_wrapper.cc
+index 762925a537fe8..ed31a6ae3f9b4 100644
+--- a/third_party/unrar/google/unrar_wrapper.cc
++++ b/third_party/unrar/google/unrar_wrapper.cc
+@@ -53,6 +53,7 @@ RarReader::~RarReader() {
+ 
+ bool RarReader::Open(std::unique_ptr<RarReaderDelegate> delegate,
+                      base::File temp_file) {
++  extraction_error_ = false;
+   reader_ = std::move(delegate);
+   temp_file_ = std::move(temp_file);
+ 
+@@ -85,6 +86,7 @@ bool RarReader::Open(std::unique_ptr<RarReaderDelegate> delegate,
+   bool is_valid_archive = archive_->IsArchive(/*EnableBroken=*/true);
+   if (!is_valid_archive)
+     return false;
++  extraction_error_ = archive_->BrokenHeader;
+ 
+   extractor_ = std::make_unique<CmdExtract>(command_.get());
+   extractor_->ExtractArchiveInit(*archive_);
+@@ -103,13 +105,18 @@ bool RarReader::ExtractNextEntry() {
+     success = extractor_->ExtractCurrentFile(
+         *archive_, header_size, repeat);  // |repeat| is passed by reference
+ 
++    if (ErrHandler.GetErrorCode() != RARX_SUCCESS || extractor_->IsMissingNextVolume())
++      extraction_error_ = true;
++    if (archive_->BrokenHeader ||
++        (archive_->GetHeaderType() == HEAD_ENDARC && archive_->EndArcHead.NextVolume))
++      extraction_error_ = true;
+     if (archive_->GetHeaderType() == HEAD_FILE) {
++      if (archive_->FileHead.SplitBefore || archive_->FileHead.SplitAfter)
++        extraction_error_ = true;
+ #if defined(OS_WIN)
+       current_entry_.file_path = base::FilePath(archive_->FileHead.FileName);
+ #else
+-      std::wstring wide_filename(archive_->FileHead.FileName);
+-      std::string filename(wide_filename.begin(), wide_filename.end());
+-      current_entry_.file_path = base::FilePath(filename);
++      current_entry_.file_path = base::FilePath(base::WideToUTF8(archive_->FileHead.FileName));
+ #endif
+       current_entry_.is_directory = archive_->FileHead.Dir;
+       current_entry_.is_encrypted = archive_->FileHead.Encrypted;
+@@ -161,6 +168,14 @@ bool RarReader::HeaderDecryptionFailed() const {
+   return archive_->FailedHeaderDecryption;
+ }
+ 
++bool RarReader::HasExtractionError() const {
++  return extraction_error_;
++}
++
++bool RarReader::IsVolume() const {
++  return archive_->Volume;
++}
++
+ bool RarReader::HasWriteError() const {
+    return write_error_;
+ }
+diff --git a/third_party/unrar/google/unrar_wrapper.h b/third_party/unrar/google/unrar_wrapper.h
+index 40e0b3f36316f..9f553a18fecc4 100644
+--- a/third_party/unrar/google/unrar_wrapper.h
++++ b/third_party/unrar/google/unrar_wrapper.h
+@@ -95,6 +95,9 @@ class RarReader {
+   bool HeaderDecryptionFailed() const;
+   // Indicates whether there was a disk error since the last ExtractNextEntry().
+   bool HasWriteError() const;
++  // Sticky status, including malformed headers, CRC errors and missing volumes.
++  bool HasExtractionError() const;
++  bool IsVolume() const;
+ 
+  private:
+   // The temporary file used for extracting each entry. This allows RAR
+@@ -120,6 +123,7 @@ class RarReader {
+ 
+   // Whether a write error occurred.
+   bool write_error_ = false;
++  bool extraction_error_ = false;
+ };
+ 
+ }  // namespace third_party_unrar
