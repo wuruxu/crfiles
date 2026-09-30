@@ -1,4 +1,5 @@
 // Copyright 2026 The Chromium Authors
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_archive.h"
 #include "crFiles/crfiles_tar.h"
 #include "crFiles/crfiles_archive.mojom.h"
@@ -333,7 +334,10 @@ class ArchiveDecoder : public mojom::ArchiveDecoder {
   ~ArchiveDecoder() override;
   void Compress(const base::FilePath& source_directory,
       const std::vector<base::FilePath>& relative_sources, const base::FilePath& destination,
+      const std::vector<uint8_t>& source_bookmark, const std::vector<uint8_t>& output_bookmark,
       mojo::PendingRemote<mojom::ArchiveProgressListener> listener, CompressCallback callback) override {
+    auto source_grant = ResolveFileAccessBookmark(source_bookmark);
+    auto output_grant = ResolveFileAccessBookmark(output_bookmark);
     if (!source_directory.IsAbsolute() || !destination.IsAbsolute() || relative_sources.empty() ||
         !base::DirectoryExists(source_directory) || base::PathExists(destination)) {
       std::move(callback).Run(false); return;
@@ -352,6 +356,7 @@ class ArchiveDecoder : public mojom::ArchiveDecoder {
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
         {base::MayBlock(), base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
         base::BindOnce([](base::FilePath root, std::vector<base::FilePath> sources, base::FilePath target,
+            base::ScopedClosureRunner source_grant, base::ScopedClosureRunner output_grant,
             std::shared_ptr<std::atomic_bool> canceled,
             base::RepeatingCallback<void(uint64_t, uint64_t, base::FilePath)> progress) {
           if (canceled->load()) return false;
@@ -370,12 +375,14 @@ class ArchiveDecoder : public mojom::ArchiveDecoder {
                 return true;
               }, canceled, std::cref(accessor.current_path), std::move(progress));
           return zip::Zip(params) && !canceled->load();
-        }, source_directory, relative_sources, destination, compression_canceled_, std::move(report)),
+        }, source_directory, relative_sources, destination, std::move(source_grant),
+            std::move(output_grant), compression_canceled_, std::move(report)),
         base::BindOnce(&ArchiveDecoder::CompressionDone, weak_.GetWeakPtr(), std::move(callback)));
   }
   void Extract(base::File archive, const std::string& format, const base::FilePath& staging,
-      const std::string& password, mojo::PendingRemote<mojom::ArchiveProgressListener> listener,
+      const std::string& password, const std::vector<uint8_t>& staging_bookmark, mojo::PendingRemote<mojom::ArchiveProgressListener> listener,
       ExtractCallback callback) override {
+    auto access_grant = ResolveFileAccessBookmark(staging_bookmark);
     bool success = false;
     bool needs_password = false;
     if (archive.IsValid() && staging.IsAbsolute() && base::DirectoryExists(staging)) {

@@ -1,4 +1,5 @@
 // Copyright 2026 The Chromium Authors
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_archive.h"
 #include "crFiles/crfiles_archive.mojom.h"
 #include <functional>
@@ -71,7 +72,7 @@ using ArchiveRequest = base::OnceCallback<void(mojom::ArchiveDecoder*,
     mojo::PendingRemote<mojom::ArchiveProgressListener>, base::OnceCallback<void(bool, bool)>)>;
 bool RunArchiveOnIO(ArchiveProgress& progress, ArchiveRequest request) {
   base::FilePath executable;
-  if (progress.canceled || !base::PathService::Get(base::FILE_EXE, &executable)) return false;
+  if (progress.canceled || !GetCrFilesHelperExecutable(&executable)) return false;
   base::CommandLine command(executable);
   command.AppendSwitch(kArchiveProcessSwitch);
   base::LaunchOptions options;
@@ -119,7 +120,7 @@ bool DecodeOnIO(const base::FilePath& archive, const base::FilePath& staging,
       [](base::File file, std::string format, base::FilePath directory, std::string secret,
           mojom::ArchiveDecoder* decoder, mojo::PendingRemote<mojom::ArchiveProgressListener> listener,
           base::OnceCallback<void(bool, bool)> completed) {
-        decoder->Extract(std::move(file), format, directory, secret, std::move(listener), std::move(completed));
+        decoder->Extract(std::move(file), format, directory, secret, CreateFileAccessBookmark(directory), std::move(listener), std::move(completed));
       }, std::move(input), ArchiveFormat(archive), staging, password));
 }
 }
@@ -170,7 +171,8 @@ bool EncodeArchive(const base::FilePath& source_directory,
             [](base::FilePath root, std::vector<base::FilePath> paths, base::FilePath destination,
                 mojom::ArchiveDecoder* decoder, mojo::PendingRemote<mojom::ArchiveProgressListener> listener,
                 base::OnceCallback<void(bool, bool)> callback) {
-              decoder->Compress(root, paths, destination, std::move(listener), base::BindOnce(
+              decoder->Compress(root, paths, destination, CreateFileAccessBookmark(root),
+                  CreateFileAccessBookmark(destination.DirName()), std::move(listener), base::BindOnce(
                   [](base::OnceCallback<void(bool, bool)> reply, bool ok) { std::move(reply).Run(ok, false); },
                   std::move(callback)));
             }, std::move(directory), std::move(sources), std::move(target)));

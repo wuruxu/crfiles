@@ -1,5 +1,9 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
+#if BUILDFLAG(IS_MAC)
+#include "crFiles/crfiles_mac.h"
+#endif
 #include "crFiles/crfiles_settings_dialog.h"
 #include "crFiles/crfiles_dialog.h"
 #include <array>
@@ -159,22 +163,7 @@ void OpenProject() {
       ->PostTask(FROM_HERE,
                  base::BindOnce(&OpenCrFilesProjectPageViaExplorer));
 #elif BUILDFLAG(IS_MAC)
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives(),
-                  base::TaskPriority::USER_VISIBLE,
-                  base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-      base::BindOnce([] {
-        base::CommandLine command_line(base::FilePath(FILE_PATH_LITERAL("/usr/bin/open")));
-        command_line.AppendArg(kProjectUrl);
-        base::Process process =
-            base::LaunchProcess(command_line, base::LaunchOptions());
-        if (!process.IsValid()) {
-          LOG(ERROR) << "crFiles failed to open project URL";
-          return;
-        }
-        // Reap the launcher without blocking the UI or terminating it.
-        process.WaitForExit(nullptr);
-      }));
+  if (!OpenProjectURLMac(kProjectUrl)) LOG(ERROR) << "crFiles failed to open project URL";
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   base::nix::CreateLaunchOptionsWithXdgActivation(
       base::BindOnce(&LaunchCrFilesProjectPageWithActivation));
@@ -362,6 +351,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     error_ = nullptr;
     auto_hide_toolbar_ = nullptr;
     windows_titlebar_style_ = nullptr;
+    system_tray_ = nullptr;
     animate_folders_ = nullptr;
     hover_image_preview_ = nullptr;
     discovery_ = nullptr;
@@ -450,6 +440,13 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   }
   std::unique_ptr<views::View> InterfacePage() {
     auto page = Page(IDS_CRFILES_INTERFACE);
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+    system_tray_ = page->AddChildView(std::make_unique<views::Checkbox>(
+        Text(IDS_CRFILES_ENABLE_SYSTEM_TRAY)));
+    system_tray_->SetChecked(GetSystemTrayEnabled());
+    system_tray_->SetCallback(base::BindRepeating(
+        &Settings::SystemTrayChanged, weak_.GetWeakPtr()));
+#endif
 #if BUILDFLAG(IS_MAC)
     windows_titlebar_style_ = page->AddChildView(std::make_unique<views::Checkbox>(
         Text(IDS_CRFILES_WINDOWS_TITLEBAR_STYLE)));
@@ -485,6 +482,12 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     error_->SetVisible(!saved);
     if (!saved)
       windows_titlebar_style_->SetChecked(GetWindowsTitlebarStyleEnabled());
+  }
+  void SystemTrayChanged() {
+    const bool saved = SetSystemTrayEnabled(system_tray_->GetChecked());
+    error_->SetVisible(!saved);
+    if (saved) ApplyCrFilesTraySettings();
+    else system_tray_->SetChecked(GetSystemTrayEnabled());
   }
   void FileViewChanged() {
     const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked(), hover_image_preview_->GetChecked()});
@@ -659,6 +662,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
         base::FilePath::FromUTF16Unsafe(directory_->GetText()), nullptr, 0, {}, GetWidget()->GetNativeWindow(), nullptr);
   }
   void FileSelected(const ui::SelectedFileInfo& file, int) override {
+    RememberFileAccess(file.path());
     folder_dialog_.reset();
     if (closing_ || IsCrFilesSharingBusy()) return;
     if (choosing_avatar_) {
@@ -699,9 +703,17 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     auto p = GetNearbySharingPreferences(); p.name = base::UTF16ToUTF8(name_->GetText()); p.directory = base::UTF16ToUTF8(directory_->GetText());
     p.avatar = avatar_; p.discovery_enabled = discovery_->GetChecked(); p.auto_accept_trusted = auto_accept_->GetChecked();
     p.custom_avatar = custom_avatar_;
-    const bool valid = NearbySharing::IsValidConfiguration(p.name, base::FilePath::FromUTF8Unsafe(p.directory)) && SetNearbySharingPreferences(p);
-    error_->SetVisible(!valid); if (!valid) return;
-    ApplyCrFilesSharingSettings(); RefreshSharing();
+    if (!NearbySharing::IsValidConfiguration(p.name, base::FilePath::FromUTF8Unsafe(p.directory))) {
+      error_->SetVisible(true); return;
+    }
+    const auto destination = base::FilePath::FromUTF8Unsafe(p.directory);
+    EnsureDirectoryAccess(GetWidget(), destination, true, base::BindOnce(
+        [](base::WeakPtr<Settings> view, NearbySharingPreferences preferences, bool allowed) {
+          if (!view || view->closing_) return;
+          const bool valid = allowed && !IsCrFilesSharingBusy() && SetNearbySharingPreferences(preferences);
+          view->error_->SetVisible(!valid);
+          if (valid) { ApplyCrFilesSharingSettings(); view->RefreshSharing(); }
+        }, weak_.GetWeakPtr(), std::move(p)));
   }
   std::unique_ptr<views::View> HistoryPage() {
     auto page = Page(IDS_CRFILES_HISTORY);
@@ -763,6 +775,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   raw_ptr<views::Label> error_ = nullptr;
   raw_ptr<views::Checkbox> auto_hide_toolbar_ = nullptr, animate_folders_ = nullptr, hover_image_preview_ = nullptr;
   raw_ptr<views::Checkbox> windows_titlebar_style_ = nullptr;
+  raw_ptr<views::Checkbox> system_tray_ = nullptr;
   raw_ptr<views::Checkbox> discovery_ = nullptr, auto_accept_ = nullptr;
   raw_ptr<views::MdTextButton> apply_ = nullptr;
   raw_ptr<views::ImageButton> avatar_button_ = nullptr, folder_ = nullptr;

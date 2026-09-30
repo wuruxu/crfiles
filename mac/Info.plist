@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.libcr.crfiles</string>
+	<key>CFBundleName</key>
+	<string>crFiles</string>
+	<key>CFBundleDisplayName</key>
+	<string>crFiles</string>
+	<key>CFBundleExecutable</key>
+	<string>crFiles</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.3.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>crFiles.icns</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>crFiles discovers nearby devices and sends and receives files on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_crphotos._tcp</string>
+		<string>_crphotos-media._tcp</string>
+		<string>_crphotos-connect._tcp</string>
+	</array>
+	<key>CrFilesIPCGroup</key>
+	<string>6JYK2B5HZ3.com.libcr.crfiles.ipc</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+</dict>
+</plist>

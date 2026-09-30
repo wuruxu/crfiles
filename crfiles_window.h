@@ -8,11 +8,16 @@ namespace views { class View; class Widget; }
 namespace crfiles {
 void ShowCrFilesWindow(base::OnceClosure quit);
 void DestroyCrFilesWindow();
+void RestoreCrFilesWindow();
+void HideCrFilesWindow();
+void QuitCrFiles();
 std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget* widget);
 void ApplyCrFilesSharingSettings();
 void ApplyCrFilesViewSettings();
+void ApplyCrFilesTraySettings();
 bool IsCrFilesSharingBusy();
 void ShowCrFilesHistory();
 void ShowCrFilesTrustedDevices();
+void ShowCrFilesSharingFolders();
 }
 #endif

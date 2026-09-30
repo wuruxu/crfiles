@@ -1,5 +1,8 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <translationbundle lang="zh-CN">
+  <translation id="3055813951328597609">开启系统托盘</translation>
+  <translation id="2632972949347350325">打开 crFiles</translation>
+  <translation id="244281084728121155">发送文件…</translation>
   <translation id="1116694919640316211">关于</translation>
   <translation id="4918086044614829423">接受</translation>
   <translation id="385051799172605136">返回</translation>

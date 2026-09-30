@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_thumbnail_cache.h"
 #include <algorithm>
 #include <functional>
@@ -44,6 +45,9 @@ bool Stopped(const std::shared_ptr<std::atomic_bool>& canceled) {
   return canceled && canceled->load(std::memory_order_relaxed);
 }
 base::FilePath CacheDirectory() {
+#if BUILDFLAG(IS_MAC)
+  if (IsCrFilesSandboxed()) return MacCacheDirectory().AppendASCII("thumbnails-v1");
+#endif
   base::FilePath root;
 #if BUILDFLAG(IS_WIN)
   if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &root)) return {};

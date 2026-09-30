@@ -11,9 +11,30 @@ controls, menu, SVG renderer, themes and Viz compositor.
   History tabs reuse their loaded data and scroll position. More appends 200
   records using a `(time, id)` cursor; a changed journal invalidates pagination
   and reloads the first page instead of mixing database versions.
+- On macOS and Windows, Settings → Interface includes an Enable system tray
+  checkbox, enabled by default and applied immediately. With it enabled,
+  closing the main window hides it while keeping nearby
+  discovery and file transfers running. The native menu bar / system tray icon
+  toggles the main window's visibility on left-click and has no right-click
+  menu. Closing the sending panel keeps
+  its transfer running; use its Cancel button to stop the transfer. Owned dialogs
+  are hidden without canceling their transfers and restored with the main window. Window objects
+  remain in memory. Disabling the tray restores the main window; closing then
+  exits normally, as it does if native icon creation fails.
+- Pairing, receive consent, and send/receive progress use one independent session
+  bubble. When the browser is visible it points to the shared directory or the
+  sender's device avatar. With the browser hidden or minimized, it points to the
+  native tray icon without restoring the browser. The anchor tracks menu-bar,
+  taskbar and display changes, including screen scaling. If the icon is hidden
+  or unavailable, the bubble uses the work-area edge and omits its arrow.
+  Moving between foreground and background preserves the pairing choices and
+  decisions. Completion and errors stay visible until dismissed. The normal
+  120-second consent timeout and trusted-device auto-accept preference still
+  apply. Nearby sharing must be enabled for background reception.
 - The macOS application menu includes About crFiles, Settings (`⌘,`), Hide
-  crFiles (`⌘H`), and Quit crFiles (`⌘Q`). Quit follows the normal window
-  shutdown path so background services and application state are cleaned up.
+  crFiles (`⌘H`), and Quit crFiles (`⌘Q`). Quit and the
+  application's quit accelerator explicitly exit and clean up background
+  services. Linux retains its existing close-to-exit behavior.
 - On macOS, opening a system-recognized package (including `.app` bundles)
   launches its default application. Use **Show Package Contents** in its context
   menu to browse it as a directory. Search results follow the same opening rule.
@@ -255,11 +276,18 @@ explicit folder arguments open those folders instead. Invalid or missing paths
 show a read error; missing shared paths are not silently redirected elsewhere.
 
 The footer Share toggle advertises a named receive target through the existing
-mDNS device service and its TLS identity catalog. The target directory is captured
-when sharing starts and does not follow subsequent navigation. The colored toggle
-and tooltip identify its state and receive path. Rename is available in the footer Show more menu. Workspace restoration also restores valid shared targets; closing a pane
-or disabling Share withdraws its target and cancels a transfer to that target.
-The Nearby panel lists each remote device's shared panes as explicit send targets.
+mDNS device service and its TLS identity catalog. Shares are registered by directory
+in the main window, with one stable target ID per path. All tabs and splits showing
+the same directory display the same toggle state; disabling it in any pane withdraws
+that directory's target and cancels a transfer to it. Navigating elsewhere updates
+the toggle for the new path, and closing a tab or pane does not revoke its shares.
+The target name is captured when sharing starts. Workspace restoration restores
+the directory registry, migrating and deduplicating older per-pane share records.
+The Nearby panel lists each remote device's shared directories as explicit send targets.
+The titlebar menu's Sharing folders entry, below Trusted devices, lists local
+shared directories. Remove stops sharing without deleting files; the folder icon
+closes the list and opens that directory in a new tab. The list updates after
+removal and shows an empty state when no folders remain shared.
 Receipts retain the existing isolated Received-* batch folders under the selected
 shared directory. Pairing and receive approval still apply. Catalogs refresh on
 identity probes (normally within 30 seconds), and revoked targets are checked at
@@ -462,9 +490,9 @@ no compilation, unit tests, GUI run or performance benchmark was performed.
 Workspace restoration retains hidden tabs as validated saved trees. Only the
 selected tab materializes its split views and enumerates its folders; switching
 to another tab materializes it on demand. Unopened trees remain serializable,
-including pane names, IDs, options, shared roots and scroll positions. Shared
-roots from lazy trees are validated on file workers and can be advertised without
-opening their views. Navigation, sidebar, nearby panel and fullscreen controls
+including pane names, IDs, options and scroll positions. Shared directories are
+saved separately from tab trees, validated on file workers, and can be advertised
+without opening their views. Navigation, sidebar, nearby panel and fullscreen controls
 belong to the shell and are no longer constructed inside every split.
 
 The UI-owned directory queue runs at most two reads concurrently and merges
@@ -857,6 +885,17 @@ explicit build and execution; adding the target does not establish a passing run
 
 Manual integration checks:
 
+Directory sharing: open the same directory in two tabs and two splits. Enable
+Share in one and verify every matching pane highlights and the remote catalog
+contains only one target. Disable it from another pane and verify all highlights
+clear. Navigate to another directory and back, close the original tab, reorder
+tabs during a receive, and restart with unvisited restored tabs; sharing and target
+IDs should remain stable. Restore an older workspace with duplicate per-pane
+shares, disable the directory before opening a deferred tab, and verify that
+opening it and restarting do not resurrect the share. Repeat with a path with a
+trailing separator. Explicitly revoking the active receive target should cancel
+that transfer, while changing another directory's share should not.
+
 1. Open view options, new-folder, settings avatar, archive, and sharing bubbles.
    Click outside, switch applications, replace a bubble, then close the parent.
    Check for crashes and dangling-pointer errors at exit.
@@ -888,3 +927,11 @@ Manual integration checks:
 - Move disposable files to crFiles Trash, restore them, and verify their contents.
   Check restore collisions do not overwrite existing files. Empty crFiles Trash
   and verify that Finder's system Trash remains unchanged.
+
+## Mac App Store
+
+The sandbox/bundle integration and signing inputs use `com.libcr.crfiles`
+(team `6JYK2B5HZ3`). See [mac/README.md](mac/README.md) for entitlements,
+folder authorization, inherited helpers, packaging commands and the required
+signed-build validation. Loose development builds retain their existing data
+paths and helper launch behavior. Packaging does not compile or submit the app.

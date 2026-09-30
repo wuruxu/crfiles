@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/crfiles_history.h"
@@ -464,6 +465,9 @@ bool SafeDeviceName(std::string_view name) {
 // Called only on blocking workers. A private directory and an interprocess
 // lock protect the durable identity and trust records across app instances.
 base::FilePath TrustDirectory() {
+#if BUILDFLAG(IS_MAC)
+  if (IsCrFilesSandboxed()) return MacApplicationSupportDirectory().AppendASCII("nearby");
+#endif
   base::FilePath home;
 #if BUILDFLAG(IS_WIN)
   if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &home)) return {};
@@ -887,6 +891,8 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
   {
     base::AutoLock lock(state->lock);
     state->snapshot.total = total;
+    state->snapshot.files.clear();
+    for (const auto& file : files) state->snapshot.files.push_back(file.name);
   }
   SetStage(state, Stage::kWaiting);
   // Allow receive consent, contention with another receiver, and name scanning.
@@ -918,6 +924,10 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
   std::vector<uint8_t> buffer(kChunkSize);
   for (auto& file : files) {
     if (!wanted.contains(file.name)) continue;
+    {
+      base::AutoLock lock(state->lock);
+      state->snapshot.current_file = file.name;
+    }
     std::string recipient;
     { base::AutoLock lock(state->lock); recipient = state->snapshot.peer_name; }
     FileOperationLog log("send", "menu", file.source.AsUTF8Unsafe(), recipient + "/" + state->outgoing_target + "/" + file.name);
@@ -1233,7 +1243,11 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
   std::vector<uint8_t> buffer(kChunkSize);
   for (const auto& [name, size] : files) {
     std::string sender;
-    { base::AutoLock lock(state->lock); sender = state->snapshot.peer_name; }
+    {
+      base::AutoLock lock(state->lock);
+      sender = state->snapshot.peer_name;
+      state->snapshot.current_file = name;
+    }
     FileOperationLog log("receive", "remote", sender + "/" + name,
         batch.Append(base::FilePath::FromUTF8Unsafe(name)).AsUTF8Unsafe());
     if (!log.valid()) return false;
@@ -1973,6 +1987,7 @@ void Run(std::shared_ptr<State> state) {
       }
       state->snapshot.receiving = !outgoing;
       state->snapshot.files.clear();
+      state->snapshot.current_file.clear();
       state->snapshot.receive_target.clear(); state->snapshot.receive_target_name.clear();
       state->outgoing_target = outgoing ? outgoing->target_id : std::string();
       state->snapshot.previews.clear();
@@ -2069,6 +2084,9 @@ std::vector<NearbySharing::LocalAddress> NearbySharing::GetLocalIPv4Addresses() 
   return result;
 }
 base::FilePath NearbySharing::DefaultReceiveDirectory() {
+#if BUILDFLAG(IS_MAC)
+  return MacDownloadsDirectory().AppendASCII("crFiles Received");
+#else
 #if BUILDFLAG(IS_WIN)
   PWSTR pictures = nullptr;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, nullptr, &pictures))) {
@@ -2080,6 +2098,7 @@ base::FilePath NearbySharing::DefaultReceiveDirectory() {
   base::FilePath home;
   if (!base::PathService::Get(base::DIR_HOME, &home)) return {};
   return home.AppendASCII("Downloads").AppendASCII("crFiles Received");
+#endif
 }
 bool NearbySharing::IsValidConfiguration(std::string_view name,
                                          const base::FilePath& directory) {
@@ -2255,6 +2274,7 @@ bool NearbySharing::Send(std::string address, std::vector<base::FilePath> paths,
   // Allocate before queueing so UI cancellation is scoped even during Connect().
   state_->snapshot.session = ++g_session;
   state_->snapshot.receiving = false;
+  state_->snapshot.current_file.clear();
   state_->snapshot.peer_name = phone ? phone->name : std::string();
   state_->snapshot.peer_avatar = phone ? phone->avatar : 0;
   state_->snapshot.peer_custom_avatar.clear();

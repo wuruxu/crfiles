@@ -1,4 +1,5 @@
 // Copyright 2026 The Chromium Authors
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_search.h"
 #include "base/base_paths.h"
 #include "base/command_line.h"
@@ -26,7 +27,7 @@ bool SearchConnection::Connect() {
   service_.reset();
   if (process_.IsValid()) base::EnsureProcessTerminated(std::move(process_));
   base::FilePath executable;
-  if (!base::PathService::Get(base::FILE_EXE, &executable)) return false;
+  if (!GetCrFilesHelperExecutable(&executable)) return false;
   base::CommandLine command(executable);
   command.AppendSwitch(kSearchProcessSwitch);
   base::LaunchOptions options;
@@ -49,6 +50,7 @@ void SearchConnection::Disconnected() {
 }
 uint64_t SearchConnection::Start(mojom::SearchOptionsPtr options, base::RepeatingClosure disconnected) {
   if (!Connect()) return 0;
+  options->access_bookmark = CreateFileAccessBookmark(base::FilePath::FromUTF8Unsafe(options->root));
   const uint64_t id = ++next_job_;
   jobs_.emplace(id, std::move(disconnected)); service_->Start(id, std::move(options));
   return id;

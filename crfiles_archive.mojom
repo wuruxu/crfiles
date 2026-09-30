@@ -10,8 +10,10 @@ interface ArchiveDecoder {
   Compress(mojo_base.mojom.FilePath source_directory,
            array<mojo_base.mojom.FilePath> relative_sources,
            mojo_base.mojom.FilePath output,
+           array<uint8> source_bookmark, array<uint8> output_bookmark,
            pending_remote<ArchiveProgressListener> listener) => (bool success);
   Extract(mojo_base.mojom.ReadOnlyFile archive, string format,
           mojo_base.mojom.FilePath staging, string password,
+          array<uint8> staging_bookmark,
           pending_remote<ArchiveProgressListener> listener) => (bool success, bool needs_password);
 };

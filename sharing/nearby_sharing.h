@@ -90,6 +90,7 @@ class NearbySharing {
     std::string peer_custom_avatar;
     size_t skipped_files = 0;
     std::vector<std::string> files;
+    std::string current_file;  // Last transfer entry, retained with the result.
     std::map<base::FilePath, gfx::ImageSkia> previews;
     uint64_t transferred = 0;
     uint64_t total = 0;

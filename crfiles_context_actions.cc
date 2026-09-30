@@ -264,15 +264,7 @@ bool OpenFileWith(const base::FilePath& path, const std::string& application) {
     }
   }
 #elif BUILDFLAG(IS_MAC)
-  std::vector<std::string> command{"/usr/bin/open"};
-  if (!application.empty()) {
-    if (!base::FilePath(application).IsAbsolute()) return false;
-    command.insert(command.end(), {"-a", application});
-  }
-  command.push_back(path.value());
-  auto process = base::LaunchProcess(command, base::LaunchOptions());
-  int exit_code = -1;
-  ok = process.IsValid() && process.WaitForExitWithTimeout(base::Seconds(10), &exit_code) && exit_code == 0;
+  ok = OpenFileWithMac(path, application);
 #endif
   if (ok) log.Succeed();
   return ok;
@@ -325,7 +317,7 @@ bool OpenFolderTerminal(const base::FilePath& path) {
 #if BUILDFLAG(IS_WIN)
   return base::LaunchProcess(std::wstring(L"cmd.exe"), options).IsValid();
 #elif BUILDFLAG(IS_MAC)
-  return base::LaunchProcess(std::vector<std::string>{"/usr/bin/open", "-a", "Terminal", path.value()}, options).IsValid();
+  return OpenFileWithMac(path, "Terminal");
 #else
   for (const char* command : {"xdg-terminal-exec", "x-terminal-emulator"})
     if (base::LaunchProcess(std::vector<std::string>{command}, options).IsValid()) return true;

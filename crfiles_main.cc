@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "crFiles/crfiles_file_access.h"
 #include <clocale>
 #include <memory>
 #include <string>
@@ -343,6 +344,9 @@ int CrFilesEntry(int argc, char** argv) {
   std::setlocale(LC_NUMERIC, "C");
 #endif
   base::AtExitManager at_exit;
+#if BUILDFLAG(IS_MAC)
+  crfiles::InitializeCrFilesBundle();
+#endif
   // Standalone processes must register memory consumers before creating them.
   base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
       memory_consumer_registry;
@@ -353,6 +357,13 @@ int CrFilesEntry(int argc, char** argv) {
     base::FeatureList::InitInstance("", "");
     return crfiles::RunVideoThumbnailProcess();
   }
+#if BUILDFLAG(IS_MAC)
+  // The inherited-sandbox executable is a worker, never another UI entry point.
+  const auto* launch = base::CommandLine::ForCurrentProcess();
+  if (launch->GetProgram().BaseName().value() == "crFiles Helper" &&
+      !launch->HasSwitch(crfiles::kArchiveProcessSwitch) &&
+      !launch->HasSwitch(crfiles::kSearchProcessSwitch)) return 1;
+#endif
   base::i18n::InitializeICU();
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kArchiveProcessSwitch)) {
     base::FeatureList::InitInstance("", "");
@@ -363,6 +374,9 @@ int CrFilesEntry(int argc, char** argv) {
     return crfiles::RunSearchProcess();
   }
   ui::RegisterPathProvider();
+#if BUILDFLAG(IS_MAC)
+  crfiles::RestoreFileAccess();
+#endif
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
   std::string configured_locale;

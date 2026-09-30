@@ -2,12 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_mac.h"
+#include "crFiles/crfiles_window.h"
 
 #import <Cocoa/Cocoa.h>
 #import <AVFoundation/AVFoundation.h>
 
 #include <memory>
+#include <atomic>
+#include "base/synchronization/waitable_event.h"
+#include "base/time/time.h"
 #include <algorithm>
 #include <cmath>
 
@@ -34,7 +39,7 @@
 
 // NSMenuItem does not retain its target. Keep this object alive until the
 // application menu is removed, and keep only a weak reference to the window.
-@interface CrFilesApplicationMenuTarget : NSObject <NSMenuItemValidation>
+@interface CrFilesApplicationMenuTarget : NSObject <NSMenuItemValidation, NSApplicationDelegate>
 - (instancetype)initWithWindow:(views::Widget*)window;
 - (void)showAbout:(id)sender;
 - (void)showSettings:(id)sender;
@@ -66,11 +71,24 @@
       }, _window));
 }
 - (void)quit:(id)sender {
-  // Use the existing close/shutdown path after AppKit menu dispatch unwinds.
+  // Exit explicitly; closing the main window may only hide it in the tray.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
       base::BindOnce([](base::WeakPtr<views::Widget> window) {
-        if (window && !window->IsClosed()) window->Close();
+        if (window && !window->IsClosed()) crfiles::QuitCrFiles();
       }, _window));
+}
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)application hasVisibleWindows:(BOOL)visible {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&crfiles::RestoreCrFilesWindow));
+  return YES;
+}
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)application {
+  return NO;
+}
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)application {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&crfiles::QuitCrFiles));
+  return NSTerminateCancel;
 }
 @end
 
@@ -158,6 +176,7 @@ void InitializeCrFilesApplicationMac() {
 
 void InstallCrFilesApplicationMenuMac(views::Widget* window) {
   g_application_menu_target = [[CrFilesApplicationMenuTarget alloc] initWithWindow:window];
+  if (!NSApp.delegate) NSApp.delegate = g_application_menu_target;
   g_application_menu = [[NSMenu alloc] initWithTitle:@""];
   NSMenuItem* app_item = [[NSMenuItem alloc] initWithTitle:@"crFiles" action:nil keyEquivalent:@""];
   NSMenu* app_menu = [[NSMenu alloc] initWithTitle:@"crFiles"];
@@ -178,8 +197,30 @@ void InstallCrFilesApplicationMenuMac(views::Widget* window) {
   [g_application_menu addItem:app_item];
   NSApp.mainMenu = g_application_menu;
 }
+void ActivateCrFilesApplicationMac() {
+  [NSApp unhide:nil];
+  [NSApp activateIgnoringOtherApps:YES];
+}
+bool IsCrFilesApplicationHiddenMac() { return NSApp.isHidden; }
+void PrepareCrFilesShareBubbleMac(views::Widget* widget, bool background) {
+  NSWindow* native = widget->GetNativeWindow().GetNativeNSWindow();
+  native.hidesOnDeactivate = NO;
+  auto behavior = native.collectionBehavior;
+  behavior &= ~NSWindowCollectionBehaviorFullScreenPrimary;
+  behavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
+  if (background) behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
+  else behavior &= ~NSWindowCollectionBehaviorCanJoinAllSpaces;
+  if (native.collectionBehavior != behavior) native.collectionBehavior = behavior;
+  if (background && NSApp.isHidden) {
+    // Cmd+H hides the application without updating Views' window visibility.
+    // Hide its main window explicitly before unhiding only the independent UI.
+    HideCrFilesWindow();
+    [NSApp unhideWithoutActivation];
+  }
+}
 
 void RemoveCrFilesApplicationMenuMac() {
+  if (NSApp.delegate == g_application_menu_target) NSApp.delegate = nil;
   if (NSApp.mainMenu == g_application_menu) NSApp.mainMenu = nil;
   g_application_menu = nil;
   g_application_menu_target = nil;
@@ -224,6 +265,37 @@ gfx::ImageSkia LoadApplicationIconMac(const base::FilePath& path, int edge) {
   }
 }
 
+bool OpenFileWithMac(const base::FilePath& path, const std::string& application) {
+  CHECK(!NSThread.isMainThread);
+  struct LaunchResult {
+    base::WaitableEvent done;
+    std::atomic_bool succeeded{false};
+  };
+  auto result = std::make_shared<LaunchResult>();
+  NSURL* url = base::apple::FilePathToNSURL(path);
+  NSURL* app = nil;
+  if (application == "Terminal")
+    app = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Terminal"];
+  else if (!application.empty()) {
+    if (!base::FilePath(application).IsAbsolute()) return false;
+    app = base::apple::FilePathToNSURL(base::FilePath(application));
+  }
+  if (!application.empty() && !app) return false;
+  auto completion = ^(NSRunningApplication* launched, NSError* error) {
+    result->succeeded.store(launched != nil && error == nil);
+    result->done.Signal();
+  };
+  if (app) [NSWorkspace.sharedWorkspace openURLs:@[url] withApplicationAtURL:app
+      configuration:NSWorkspaceOpenConfiguration.configuration completionHandler:completion];
+  else [NSWorkspace.sharedWorkspace openURL:url
+      configuration:NSWorkspaceOpenConfiguration.configuration completionHandler:completion];
+  return result->done.TimedWait(base::Seconds(10)) && result->succeeded.load();
+}
+bool OpenProjectURLMac(const std::string& url) {
+  NSURL* target = [NSURL URLWithString:base::SysUTF8ToNSString(url)];
+  return target && [NSWorkspace.sharedWorkspace openURL:target];
+}
+
 std::vector<FileApplication> FileApplicationsMac(const base::FilePath& path) {
   @autoreleasepool {
     NSURL* file = base::apple::FilePathToNSURL(path);
@@ -256,8 +328,10 @@ std::vector<base::FilePath> ReadFileClipboardMac() {
         options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
     for (NSURL* url in urls) {
       auto path = base::apple::NSURLToFilePath(url);
-      if (path.IsAbsolute() && !path.ReferencesParent())
+      if (path.IsAbsolute() && !path.ReferencesParent()) {
+        RememberFileAccess(path);
         paths.push_back(std::move(path));
+      }
     }
     return paths;
   }

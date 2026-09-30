@@ -10,5 +10,5 @@ struct VideoThumbnail {
 };
 // One outstanding request per connection; the parent kills a hung decoder.
 interface VideoThumbnailService {
-  Decode(mojo_base.mojom.FilePath path, uint32 edge) => (VideoThumbnail? image);
+  Decode(mojo_base.mojom.FilePath path, uint32 edge, array<uint8> access_bookmark) => (VideoThumbnail? image);
 };

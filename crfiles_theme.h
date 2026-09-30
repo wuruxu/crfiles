@@ -26,6 +26,8 @@ bool SetNavigationStyle(NavigationStyle style);
 // macOS titlebar preference, applied when the main window is created.
 bool GetWindowsTitlebarStyleEnabled();
 bool SetWindowsTitlebarStyleEnabled(bool enabled);
+bool GetSystemTrayEnabled();
+bool SetSystemTrayEnabled(bool enabled);
 struct FileViewPreferences {
   bool auto_hide_toolbar = true;
   bool animate_folders = true;

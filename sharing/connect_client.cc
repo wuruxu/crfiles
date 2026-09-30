@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/sharing/connect_client.h"
 
 #include <algorithm>
@@ -142,8 +143,11 @@ bool EndpointValid(const ConnectPeer& peer) {
 }
 base::FilePath CredentialFile(const std::string& id) {
   if (!HexId(id)) return {};
-  base::FilePath home;
-#if BUILDFLAG(IS_WIN)
+  [[maybe_unused]] base::FilePath home;
+#if BUILDFLAG(IS_MAC)
+  auto directory = IsCrFilesSandboxed() ? MacApplicationSupportDirectory().AppendASCII("connect") :
+      base::GetHomeDir().AppendASCII(".config").AppendASCII("crFiles").AppendASCII("connect");
+#elif BUILDFLAG(IS_WIN)
   if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &home)) return {};
   auto directory = home.AppendASCII("crFiles").AppendASCII("connect");
 #else

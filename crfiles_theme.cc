@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_history.h"
 #include <atomic>
@@ -29,6 +30,9 @@
 namespace crfiles {
 namespace {
 base::FilePath SettingsPath() {
+#if BUILDFLAG(IS_MAC)
+  if (IsCrFilesSandboxed()) return MacApplicationSupportDirectory().AppendASCII("settings.json");
+#endif
   base::FilePath path;
 #if BUILDFLAG(IS_WIN)
   base::PathService::Get(base::DIR_LOCAL_APP_DATA, &path);
@@ -187,6 +191,17 @@ FileViewPreferences GetFileViewPreferences() {
 bool GetWindowsTitlebarStyleEnabled() {
   base::AutoLock lock(SettingsLock());
   return Settings().FindBool("windows_titlebar_style").value_or(false);
+}
+bool GetSystemTrayEnabled() {
+  base::AutoLock lock(SettingsLock());
+  return Settings().FindBool("system_tray_enabled").value_or(true);
+}
+bool SetSystemTrayEnabled(bool enabled) {
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().Clone();
+  Settings().Set("system_tray_enabled", enabled);
+  if (Save()) return true;
+  Settings() = std::move(previous); return false;
 }
 bool SetWindowsTitlebarStyleEnabled(bool enabled) {
   base::AutoLock lock(SettingsLock());

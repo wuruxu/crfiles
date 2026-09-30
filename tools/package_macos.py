@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license in LICENSE.
+"""Stage a standalone GN output as a signed Mac App Store bundle.
+
+Never builds, uploads, installs, or overwrites an existing output. Signing is
+explicit; --unsigned is for inspecting layout only (not a sandbox test).
+"""
+import argparse
+import datetime
+import plistlib
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+PROJECT = Path(__file__).resolve().parents[1]
+
+
+def run(*args):
+    return subprocess.check_output([str(arg) for arg in args], text=True).strip()
+
+
+def load_plist(path):
+    with path.open('rb') as stream:
+        return plistlib.load(stream)
+
+
+def write_plist(path, value):
+    with path.open('wb') as stream:
+        plistlib.dump(value, stream, sort_keys=False)
+
+
+def version():
+    values = dict(line.split('=', 1) for line in
+                  (PROJECT / 'VERSION').read_text().splitlines() if '=' in line)
+    return '.'.join(values[key] for key in ('MAJOR', 'MINOR', 'PATCH'))
+
+
+def check_profile(path, bundle_id, team_id, distribution):
+    profile = plistlib.loads(subprocess.check_output(
+        ['security', 'cms', '-D', '-i', str(path)]))
+    entitlements = profile.get('Entitlements', {})
+    expected = f'{team_id}.{bundle_id}'
+    if team_id not in profile.get('TeamIdentifier', []):
+        raise ValueError('Provisioning profile belongs to a different team')
+    if entitlements.get('com.apple.application-identifier') != expected:
+        raise ValueError('Provisioning profile must match the explicit App ID')
+    expiry = profile.get('ExpirationDate')
+    if not expiry or expiry <= datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None):
+        raise ValueError('Provisioning profile has expired')
+    if distribution and (profile.get('ProvisionedDevices') or profile.get('ProvisionsAllDevices') or
+                         entitlements.get('get-task-allow')):
+        raise ValueError('A Mac App Store distribution profile is required for --pkg')
+    return entitlements
+
+
+def linked_libraries(binary):
+    return [line.strip().split(' (', 1)[0]
+            for line in run('otool', '-L', binary).splitlines()[1:]]
+
+
+def copy_libraries(build, executables, destination):
+    # ANGLE is loaded with dlopen and therefore does not appear in otool -L.
+    queue = list(executables)
+    copied = set()
+    for name in ('libEGL.dylib', 'libGLESv2.dylib'):
+        if (build / name).is_file():
+            shutil.copy2(build / name, destination / name)
+            copied.add(name)
+            queue.append(destination / name)
+    while queue:
+        binary = queue.pop()
+        for dependency in linked_libraries(binary):
+            if dependency.startswith(('/System/Library/', '/usr/lib/')):
+                continue
+            name = Path(dependency).name
+            # A dylib's first entry may be its own install name.
+            if name == binary.name and binary.suffix == '.dylib':
+                continue
+            if not dependency.startswith(('@rpath/', '@loader_path/', '@executable_path/')):
+                raise ValueError(f'Non-relocatable dependency: {dependency}')
+            if not name.endswith('.dylib') or not (build / name).is_file():
+                raise ValueError(f'Unsupported or missing dependency: {dependency}')
+            if name not in copied:
+                shutil.copy2(build / name, destination / name)
+                copied.add(name)
+                queue.append(destination / name)
+            # All private dylibs are adjacent to both executables via symlinks.
+            desired = f'@loader_path/{name}'
+            if dependency != desired:
+                run('install_name_tool', '-change', dependency, desired, binary)
+    for name in copied:
+        run('install_name_tool', '-id', f'@loader_path/{name}', destination / name)
+    return sorted(destination / name for name in copied)
+
+
+def package(args):
+    build = args.build_dir.resolve()
+    output = args.output.resolve()
+    if output.suffix != '.app' or output.exists():
+        raise ValueError('--output must be a new .app path')
+    if not re.fullmatch(r'[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+', args.bundle_id):
+        raise ValueError('Invalid bundle identifier')
+    if not re.fullmatch(r'[A-Z0-9]{10}', args.team_id):
+        raise ValueError('Invalid Apple Team ID')
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,2}', args.minimum_system_version):
+        raise ValueError('Invalid minimum macOS version')
+    if not re.fullmatch(r'[1-9][0-9]*(?:\.[0-9]+){0,2}', args.build_number):
+        raise ValueError('Invalid CFBundleVersion')
+    if not args.unsigned and not (args.identity and args.profile):
+        raise ValueError('Signing needs --identity and --profile; or explicitly use --unsigned')
+    if args.unsigned and (args.identity or args.profile or args.pkg or args.installer_identity):
+        raise ValueError('--unsigned cannot be combined with signing or installer arguments')
+    if args.pkg and (not args.installer_identity or args.pkg.exists()):
+        raise ValueError('--pkg requires --installer-identity and a new output path')
+    required = ['crFiles', 'icudtl.dat', 'crfiles_resources.pak', 'crfiles_resources',
+                'libEGL.dylib', 'libGLESv2.dylib']
+    for name in required:
+        if not (build / name).exists():
+            raise ValueError(f'Missing build resource: {name}')
+    if not list(build.glob('crfiles_resources_*.pak')):
+        raise ValueError('Missing localized resources')
+    if not args.icon.is_file() or args.icon.read_bytes()[:4] != b'icns':
+        raise ValueError('--icon must be an existing .icns file')
+    profile_entitlements = None
+    if not args.unsigned:
+        profile_entitlements = check_profile(args.profile, args.bundle_id, args.team_id, bool(args.pkg))
+    contents = output / 'Contents'
+    resources = contents / 'Resources'
+    macos = contents / 'MacOS'
+    helpers = contents / 'Helpers'
+    frameworks = contents / 'Frameworks'
+    for directory in (resources, macos, helpers, frameworks):
+        directory.mkdir(parents=True, exist_ok=True)
+    main = macos / 'crFiles'
+    helper = helpers / 'crFiles Helper'
+    shutil.copy2(build / 'crFiles', main)
+    shutil.copy2(build / 'crFiles', helper)
+    for source in build.glob('crfiles_resources*.pak'):
+        shutil.copy2(source, resources / source.name)
+    shutil.copytree(build / 'crfiles_resources', resources / 'crfiles_resources')
+    shutil.copy2(build / 'icudtl.dat', resources / 'icudtl.dat')
+    shutil.copy2(args.icon, resources / 'crFiles.icns')
+    libraries = copy_libraries(build, [main, helper], frameworks)
+    for library in libraries:
+        for directory in (macos, helpers):
+            (directory / library.name).symlink_to(Path('../Frameworks') / library.name)
+    info = load_plist(PROJECT / 'mac/Info.plist')
+    info.update(CrFilesIPCGroup=f'{args.team_id}.{args.bundle_id}.ipc',
+                CFBundleIdentifier=args.bundle_id,
+                CFBundleShortVersionString=version(), CFBundleVersion=args.build_number,
+                LSMinimumSystemVersion=args.minimum_system_version)
+    write_plist(contents / 'Info.plist', info)
+    (contents / 'PkgInfo').write_bytes(b'APPL????')
+    if args.unsigned:
+        print(f'Staged unsigned layout: {output}; not suitable for sandbox validation or upload')
+        return
+    shutil.copy2(args.profile, contents / 'embedded.provisionprofile')
+    # Keep generated entitlements next to the output for inspection, outside
+    # the sealed bundle. Sign nested code before the enclosing app, never --deep.
+    entitlement_path = output.with_suffix('.entitlements')
+    if entitlement_path.exists():
+        raise ValueError(f'Refusing to overwrite {entitlement_path}')
+    entitlements = load_plist(PROJECT / 'mac/App.entitlements')
+    entitlements['com.apple.security.application-groups'] = [f'{args.team_id}.{args.bundle_id}.ipc']
+    entitlements['com.apple.application-identifier'] = f'{args.team_id}.{args.bundle_id}'
+    entitlements['com.apple.developer.team-identifier'] = args.team_id
+    if profile_entitlements.get('get-task-allow'):
+        entitlements['get-task-allow'] = True
+    write_plist(entitlement_path, entitlements)
+    for library in libraries:
+        run('codesign', '--force', '--sign', args.identity, '--timestamp', library)
+    run('codesign', '--force', '--sign', args.identity, '--timestamp',
+        '--identifier', f'{args.bundle_id}.helper', '--entitlements',
+        PROJECT / 'mac/Helper.entitlements', helper)
+    run('codesign', '--force', '--sign', args.identity, '--timestamp',
+        '--entitlements', entitlement_path, output)
+    run('codesign', '--verify', '--deep', '--strict', '--verbose=2', output)
+    details = subprocess.run(['codesign', '-dv', '--verbose=4', str(output)],
+                             capture_output=True, text=True, check=True).stderr
+    if f'TeamIdentifier={args.team_id}' not in details.splitlines():
+        raise ValueError('Signing identity Team ID does not match --team-id')
+    if args.pkg:
+        run('productbuild', '--component', output, '/Applications', '--sign',
+            args.installer_identity, args.pkg)
+    print(f'Signed bundle: {output}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build-dir', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--icon', required=True, type=Path)
+    parser.add_argument('--bundle-id', default='com.libcr.crfiles')
+    parser.add_argument('--team-id', default='6JYK2B5HZ3')
+    parser.add_argument('--build-number', required=True)
+    parser.add_argument('--minimum-system-version', default='12.0')
+    parser.add_argument('--identity')
+    parser.add_argument('--profile', type=Path)
+    parser.add_argument('--installer-identity')
+    parser.add_argument('--pkg', type=Path)
+    parser.add_argument('--unsigned', action='store_true')
+    args = parser.parse_args()
+    try:
+        package(args)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        parser.exit(1, f'Packaging failed: {error}\n')
+
+
+if __name__ == '__main__':
+    main()

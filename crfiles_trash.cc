@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_trash.h"
 #include <string>
@@ -22,6 +23,9 @@ namespace {
 base::Lock& TrashLock() { static base::NoDestructor<base::Lock> lock; return *lock; }
 }
 base::FilePath TrashRoot() {
+#if BUILDFLAG(IS_MAC)
+  if (IsCrFilesSandboxed()) return MacApplicationSupportDirectory().AppendASCII("Trash");
+#endif
   base::FilePath root;
 #if BUILDFLAG(IS_WIN)
   if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &root)) return {};

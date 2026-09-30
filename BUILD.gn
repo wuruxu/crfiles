@@ -132,6 +132,8 @@ copy("file_icons") {
 }
 
 crfiles_sources = [
+    "crfiles_file_access.h",
+    "crfiles_file_access.cc",
     "crfiles_cache_state.cc",
     "crfiles_cache_state.h",
     "crfiles_history.cc",
@@ -181,6 +183,7 @@ crfiles_sources = [
     "crfiles_context_actions.cc",
     "crfiles_context_actions.h",
     "crfiles_window.h",
+    "crfiles_tray.h",
     "sharing/connect_client.cc",
     "sharing/connect_client.h",
     "sharing/connect_discovery.cc",
@@ -191,6 +194,8 @@ crfiles_sources = [
     "sharing/nearby_sharing.cc",
     "sharing/nearby_sharing.h",
     "sharing/nearby_socket.h",
+    "sharing/share_bubble_anchor.cc",
+    "sharing/share_bubble_anchor.h",
     "sharing/phone_sender.cc",
     "sharing/phone_sender.h",
   ]
@@ -222,12 +227,15 @@ executable("crFiles") {
     sources += [
       "crfiles_mac.h",
       "crfiles_mac.mm",
+      "crfiles_tray_mac.mm",
+      "crfiles_file_access_mac.mm",
     ]
     frameworks = [
       "AppKit.framework",
       "ApplicationServices.framework",
       "AVFoundation.framework",
       "CoreMedia.framework",
+      "Security.framework",
     ]
   }
   include_dirs = [ "//third_party/pdfium" ]
@@ -320,6 +328,7 @@ executable("crFiles") {
     sources += [
       "crfiles_exe.rc",
       "crfiles_windows.cc",
+      "crfiles_tray_win.cc",
       "sharing/nearby_files_win.cc",
       "crfiles_windows.h",
       "resources/win/crfiles_resource.h",

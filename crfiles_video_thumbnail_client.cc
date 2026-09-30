@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_video_thumbnail.h"
 #include <utility>
 #include "crFiles/crfiles_video_thumbnail.mojom.h"
@@ -66,7 +67,7 @@ bool VideoConnection::Connect() {
   if (service_.is_bound() && service_.is_connected()) return true;
   StopProcess();
   base::FilePath executable;
-  if (!base::PathService::Get(base::FILE_EXE, &executable)) return false;
+  if (!GetCrFilesHelperExecutable(&executable)) return false;
   base::CommandLine command(executable);
   command.AppendSwitch(kVideoThumbnailProcessSwitch);
   base::LaunchOptions options;
@@ -102,7 +103,7 @@ void VideoConnection::Decode(std::shared_ptr<VideoRequest> request) {
   }
   deadline_ = base::TimeTicks::Now() + base::Seconds(8);
   poll_.Start(FROM_HERE, base::Milliseconds(40), this, &VideoConnection::Poll);
-  service_->Decode(pending_->path, pending_->edge,
+  service_->Decode(pending_->path, pending_->edge, CreateFileAccessBookmark(pending_->path),
       base::BindOnce(&VideoConnection::Received, base::Unretained(this), pending_));
 }
 void VideoConnection::Poll() {

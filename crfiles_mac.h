@@ -22,6 +22,12 @@ namespace crfiles {
 
 // Allows the standalone executable to show and activate native windows.
 void InitializeCrFilesApplicationMac();
+void ActivateCrFilesApplicationMac();
+bool IsCrFilesApplicationHiddenMac();
+void PrepareCrFilesShareBubbleMac(views::Widget* widget, bool background);
+// Worker-only: waits for NSWorkspace's asynchronous launch result, at most 10s.
+bool OpenFileWithMac(const base::FilePath& path, const std::string& application);
+bool OpenProjectURLMac(const std::string& url);
 void InstallCrFilesApplicationMenuMac(views::Widget* window);
 void RemoveCrFilesApplicationMenuMac();
 // Observe native titlebar presses without consuming AppKit's drag/zoom events.

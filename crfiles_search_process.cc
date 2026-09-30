@@ -1,4 +1,5 @@
 // Copyright 2026 The Chromium Authors
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_search.h"
 #include "crFiles/crfiles_search_content.h"
 #include <deque>
@@ -42,6 +43,7 @@ bool Linked(const base::FilePath& path) {
 struct SearchJob {
   explicit SearchJob(mojom::SearchOptionsPtr value) : options(std::move(value)) {}
   mojom::SearchOptionsPtr options;
+  base::ScopedClosureRunner access_grant;
   SearchControl control;
   bool initialized = false, failed = false, done = false, limited = false;
   std::u16string query;
@@ -56,6 +58,7 @@ mojom::SearchBatchPtr ReadBatch(const std::shared_ptr<SearchJob>& job) {
   if (job->control.canceled.load()) { result->done = true; return result; }
   if (!job->initialized) {
     job->initialized = true;
+    job->access_grant = ResolveFileAccessBookmark(job->options->access_bookmark);
     auto root = base::FilePath::FromUTF8Unsafe(job->options->root);
     job->query = base::i18n::ToLower(base::UTF8ToUTF16(job->options->query));
     job->failed = !root.IsAbsolute() || root.ReferencesParent() || Linked(root) || !base::DirectoryExists(root) ||

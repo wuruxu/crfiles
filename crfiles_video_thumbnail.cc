@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_video_thumbnail.h"
 #include "crFiles/crfiles_video_thumbnail.mojom.h"
 #include "base/check.h"
@@ -486,7 +487,7 @@ class VideoThumbnailService : public mojom::VideoThumbnailService {
  public:
   VideoThumbnailService(mojo::PendingReceiver<mojom::VideoThumbnailService> receiver, base::OnceClosure quit);
   ~VideoThumbnailService() override;
-  void Decode(const base::FilePath& path, uint32_t edge, DecodeCallback callback) override;
+  void Decode(const base::FilePath& path, uint32_t edge, const std::vector<uint8_t>& access_bookmark, DecodeCallback callback) override;
  private:
   mojo::Receiver<mojom::VideoThumbnailService> receiver_;
 };
@@ -495,7 +496,8 @@ VideoThumbnailService::VideoThumbnailService(mojo::PendingReceiver<mojom::VideoT
   receiver_.set_disconnect_handler(std::move(quit));
 }
 VideoThumbnailService::~VideoThumbnailService() = default;
-void VideoThumbnailService::Decode(const base::FilePath& path, uint32_t edge, DecodeCallback callback) {
+void VideoThumbnailService::Decode(const base::FilePath& path, uint32_t edge, const std::vector<uint8_t>& access_bookmark, DecodeCallback callback) {
+  auto access_grant = ResolveFileAccessBookmark(access_bookmark);
   mojom::VideoThumbnailPtr result;
   if (!path.IsAbsolute() || edge == 0 || edge > kMaximumEdge) {
     std::move(callback).Run(std::move(result)); return;

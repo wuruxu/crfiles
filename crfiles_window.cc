@@ -1,7 +1,9 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_window.h"
+#include "crFiles/crfiles_tray.h"
 #include "crFiles/crfiles_dialog.h"
 #include "crFiles/crfiles_history.h"
 #include "crFiles/crfiles_search_view.h"
@@ -162,6 +164,30 @@
 namespace crfiles {
 namespace {
 
+// Paint the outline and fill together so both have square bottom corners.
+class FooterBackground : public views::Background {
+ public:
+  FooterBackground()
+      : outline_(views::CreateRoundedRectBackground(
+            ui::kColorSysOutline, gfx::RoundedCornersF(12, 12, 0, 0))),
+        fill_(views::CreateRoundedRectBackground(
+            ui::kColorSysBaseContainerElevated,
+            gfx::RoundedCornersF(11, 11, 0, 0), gfx::Insets(1))) {}
+
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
+    outline_->Paint(canvas, view);
+    fill_->Paint(canvas, view);
+  }
+
+  void OnViewThemeChanged(views::View* view) override {
+    view->SchedulePaint();
+  }
+
+ private:
+  std::unique_ptr<views::Background> outline_;
+  std::unique_ptr<views::Background> fill_;
+};
+
 constexpr int kFullscreenExitSize = 44;
 constexpr int kFullscreenExitTop = 68;
 constexpr int kFullscreenExitSlide = kFullscreenExitTop + kFullscreenExitSize + 10;
@@ -197,6 +223,9 @@ bool PrimaryModifierDown(const ui::Event& event) {
 }
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
 base::FilePath Home() {
+#if BUILDFLAG(IS_MAC)
+  if (IsCrFilesSandboxed()) return MacUserHomeDirectory();
+#endif
   base::FilePath home;
   base::PathService::Get(base::DIR_HOME, &home);
   return home;
@@ -1876,10 +1905,14 @@ class ColumnResizeGrip : public views::ResizeArea {
     SchedulePaint();
   }
   void OnPaintBackground(gfx::Canvas* canvas) override {
-    const auto color = GetColorProvider()->GetColor(
-        (hovered_ || pressed_) ? ui::kColorSysPrimary : ui::kColorSysDivider);
     // Keep an eight-DIP drag target, but match the thin sidebar divider.
-    canvas->FillRect(gfx::Rect(std::max(0, width() - 2), 0, 2, height()), color);
+    canvas->FillRect(gfx::Rect(std::max(0, width() - 2), 0, 2, height()), GripColor());
+  }
+
+ protected:
+  SkColor GripColor() const {
+    return GetColorProvider()->GetColor(
+        (hovered_ || pressed_) ? ui::kColorSysPrimary : ui::kColorSysDivider);
   }
 
  private:
@@ -2765,6 +2798,26 @@ class ViewOptions : public views::View, public views::SliderListener {
 BEGIN_METADATA(ViewOptions)
 END_METADATA
 
+class SplitResizeGrip : public ColumnResizeGrip {
+  METADATA_HEADER(SplitResizeGrip, ColumnResizeGrip)
+ public:
+  SplitResizeGrip(views::ResizeAreaDelegate* delegate, bool vertical)
+      : ColumnResizeGrip(delegate), vertical_(vertical) {
+    set_axis(vertical ? Axis::kVertical : Axis::kHorizontal);
+  }
+  void OnPaintBackground(gfx::Canvas* canvas) override {
+    const auto line = vertical_
+        ? gfx::Rect(0, (height() - 2) / 2, width(), 2)
+        : gfx::Rect((width() - 2) / 2, 0, 2, height());
+    canvas->FillRect(line, GripColor());
+  }
+ private:
+  const bool vertical_;
+};
+BEGIN_METADATA(SplitResizeGrip)
+END_METADATA
+
+constexpr int kSplitResizeWidth = 2;
 // A binary split retains its children while the divider moves.
 class PaneSplit : public views::View, public views::ResizeAreaDelegate {
   METADATA_HEADER(PaneSplit, views::View)
@@ -2772,9 +2825,7 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
   PaneSplit(bool vertical, std::unique_ptr<views::View> first, std::unique_ptr<views::View> second)
       : vertical_(vertical) {
     first_ = AddChildView(std::move(first)); second_ = AddChildView(std::move(second));
-    divider_ = AddChildView(std::make_unique<views::ResizeArea>(this));
-    divider_->set_axis(vertical ? views::ResizeArea::Axis::kVertical : views::ResizeArea::Axis::kHorizontal);
-    divider_->SetBackground(views::CreateSolidBackground(ui::kColorSysSurfaceVariant));
+    divider_ = AddChildView(std::make_unique<SplitResizeGrip>(this, vertical));
     divider_->SetAccessibleName(Text(IDS_CRFILES_RESIZE_SPLIT));
   }
   bool vertical() const { return vertical_; }
@@ -2788,7 +2839,7 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
     if (first_ == old) first_ = replacement; else second_ = replacement;
   }
   void OnResize(int amount, bool done) override {
-    const int available = std::max(1, (vertical_ ? height() : width()) - 6);
+    const int available = std::max(1, (vertical_ ? height() : width()) - kSplitResizeWidth);
     if (!drag_start_) drag_start_ = ratio_ * available;
     const int minimum = std::min(vertical_ ? 100 : 180, available / 2);
     ratio_ = static_cast<float>(std::clamp(*drag_start_ + amount, minimum, available - minimum)) / available;
@@ -2796,14 +2847,14 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
     InvalidateLayout();
   }
   void Layout(PassKey) override {
-    const int available = std::max(0, (vertical_ ? height() : width()) - 6);
+    const int available = std::max(0, (vertical_ ? height() : width()) - kSplitResizeWidth);
     const int extent = std::clamp(static_cast<int>(available * ratio_), 0, available);
     if (vertical_) {
-      first_->SetBounds(0, 0, width(), extent); divider_->SetBounds(0, extent, width(), 6);
-      second_->SetBounds(0, extent + 6, width(), available - extent);
+      first_->SetBounds(0, 0, width(), extent); divider_->SetBounds(0, extent, width(), kSplitResizeWidth);
+      second_->SetBounds(0, extent + kSplitResizeWidth, width(), available - extent);
     } else {
-      first_->SetBounds(0, 0, extent, height()); divider_->SetBounds(extent, 0, 6, height());
-      second_->SetBounds(extent + 6, 0, available - extent, height());
+      first_->SetBounds(0, 0, extent, height()); divider_->SetBounds(extent, 0, kSplitResizeWidth, height());
+      second_->SetBounds(extent + kSplitResizeWidth, 0, available - extent, height());
     }
     LayoutSuperclass<views::View>(this);
   }
@@ -3133,6 +3184,15 @@ enum ContextCommand {
 };
 class FilesView;
 FilesView* g_contents = nullptr;
+bool g_quitting = false;
+std::unique_ptr<CrFilesTray>& Tray() {
+  static base::NoDestructor<std::unique_ptr<CrFilesTray>> tray;
+  return *tray;
+}
+std::vector<base::WeakPtr<views::Widget>>& HiddenOwnedWindows() {
+  static base::NoDestructor<std::vector<base::WeakPtr<views::Widget>>> windows;
+  return *windows;
+}
 std::unique_ptr<views::Widget>& Window() {
   static base::NoDestructor<std::unique_ptr<views::Widget>> widget;
   return *widget;
@@ -3312,13 +3372,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto* resize = body->AddChildView(std::make_unique<SidebarResizeGrip>(this,
         base::BindRepeating(&FilesView::RestoreSidebar, base::Unretained(this))));
     sidebar_resize_ = resize;
-    // Two-DIP divider with one DIP of padding on either side.
-    resize->SetPreferredSize(gfx::Size(4, 0));
+    // Two-DIP divider without horizontal padding.
+    resize->SetPreferredSize(gfx::Size(2, 0));
     resize->SetAccessibleName(Text(IDS_CRFILES_SIDEBAR_WIDTH));
     split_host_ = body->AddChildView(std::make_unique<views::View>());
     split_host_->SetLayoutManager(std::make_unique<views::FillLayout>());
-    // Keep outer pane outlines inside the client's rounded bottom corners.
-    split_host_->SetBorder(views::CreateEmptyBorder(gfx::Insets(kPaneOuterInset)));
+    // Meet the sidebar divider without a gap; retain the other outer insets.
+    split_host_->SetBorder(views::CreateEmptyBorder(
+        gfx::Insets::TLBR(kPaneOuterInset, 0, kPaneOuterInset, kPaneOuterInset)));
     body_layout->SetFlexForView(split_host_, 1);
     split_host_->SetVisible(!root_);
     }
@@ -3348,8 +3409,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     footer->SetProperty(views::kViewIgnoredByLayoutKey, true);
     footer->SetPaintToLayer(); footer->layer()->SetFillsBoundsOpaquely(false);
     footer->layer()->SetOpacity(0.f); footer->SetCanProcessEventsWithinSubtree(false);
-    footer->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, 12));
-    footer->SetBorder(views::CreateRoundedRectBorder(1, 12, ui::kColorSysOutline));
+    footer->SetBackground(std::make_unique<FooterBackground>());
+    footer->SetBorder(views::CreateEmptyBorder(1));
     auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(4, 8), 4));
     // Layer scrolling sizes the plain contents view from its preferred size.
@@ -3579,7 +3640,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
   ~FilesView() override { hover_cancel_->store(true); live_cancel_->store(true); if (destination_dialog_) destination_dialog_->ListenerDestroyed(); context_runner_.reset(); read_cancel_->store(true); order_cancel_->store(true); DirectoryReads().Prune(); visual_cancel_->store(true, std::memory_order_relaxed); outside_click_handler_.reset(); CloseNewFolder(); CloseViewOptions(); if (!root_) g_contents = nullptr; }
   void AddedToWidget() override {
     views::View::AddedToWidget();
-    if (root_) return;
+    if (root_) {
+#if BUILDFLAG(IS_MAC)
+      if (IsCrFilesSandboxed() && !history_page_ && !search_page_)
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+            base::BindOnce(&FilesView::Navigate, weak_.GetWeakPtr(), Current().path, -1, true));
+#endif
+      return;
+    }
     outside_click_handler_ = std::make_unique<AddressOutsideClickHandler>(
         GetWidget()->GetRootView(), address_,
         Deferred(base::BindRepeating(&FilesView::EndAddressEditing, weak_.GetWeakPtr())),
@@ -3654,7 +3722,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (auto* layout = views::AsViewClass<FileLayout>(files_->contents()))
         layout->SetBottomPadding(footer_height + 10);
       footer_->SetBounds(area.x() + (area.width() - footer_width) / 2,
-          std::max(area.y(), area.bottom() - footer_height - 2), footer_width, footer_height);
+          std::max(area.y(), area.bottom() - footer_height -
+              (Current().path == TrashRoot() ? 2 : 0)), footer_width, footer_height);
       if (trash_footer_animation_pending_ && Current().path == TrashRoot() && area.width() >= 280) {
         trash_footer_animation_pending_ = false;
         // Replay after the capsule has its final bounds, even when the previous
@@ -3694,6 +3763,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     path_animation_timer_.Stop();
     footer_hide_timer_.Stop();
     footer_pointer_timer_.Stop();
+    if (sharing_folders_dialog_.view() && sharing_folders_dialog_.view()->GetWidget()) sharing_folders_dialog_.view()->GetWidget()->Close();
     if (trusted_dialog_.view() && trusted_dialog_.view()->GetWidget()) trusted_dialog_.view()->GetWidget()->Close();
     if (sharing_dialog_.view() && sharing_dialog_.view()->GetWidget()) sharing_dialog_.view()->GetWidget()->Close();
     context_runner_.reset();
@@ -3704,7 +3774,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     CloseNewFolder();
     CloseViewOptions();
     history_search_timer_.Stop();
-    incoming_toast_.reset();
+    session_toast_.reset();
     timer_.Stop(); weak_.InvalidateWeakPtrs();
     active_tab_ = nullptr; tabs_view_ = nullptr; if (sharing_) sharing_->Disable();
   }
@@ -3792,7 +3862,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     switch (a.key_code()) {
       case ui::VKEY_OEM_PLUS: case ui::VKEY_ADD: return AdjustIconSize(1);
       case ui::VKEY_OEM_MINUS: case ui::VKEY_SUBTRACT: return AdjustIconSize(-1);
-      case ui::VKEY_Q: GetWidget()->Close(); break;
+      case ui::VKEY_Q: QuitCrFiles(); break;
       case ui::VKEY_C: ActivePane()->CopySelection(false); break;
       case ui::VKEY_X: ActivePane()->CopySelection(true); break;
       case ui::VKEY_V: ActivePane()->PasteSelection(a.IsAltDown()); break;
@@ -3913,6 +3983,24 @@ class FilesView : public views::View, public views::TextfieldController, public 
       view->GetWidget()->Activate(); return;
     }
     trusted_dialog_.SetView(ShowTrustedDevicesDialog(GetWidget(), sharing_));
+  }
+  void ShowSharingFolders() {
+    if (auto* view = sharing_folders_dialog_.view(); view && view->GetWidget() && !view->GetWidget()->IsClosed()) {
+      view->GetWidget()->Activate(); return;
+    }
+    sharing_folders_dialog_.SetView(ShowSharingFoldersDialog(GetWidget(),
+        base::BindRepeating([](base::WeakPtr<FilesView> shell) {
+          return shell ? shell->shared_directories_ : std::vector<NearbySharing::SharedTarget>();
+        }, weak_.GetWeakPtr()),
+        base::BindRepeating([](base::WeakPtr<FilesView> shell, base::FilePath path) {
+          if (!shell) return;
+          if (auto* view = shell->sharing_folders_dialog_.view(); view && view->GetWidget())
+            view->GetWidget()->Close();
+          shell->NewTab(std::move(path));
+        }, weak_.GetWeakPtr()),
+        base::BindRepeating([](base::WeakPtr<FilesView> shell, base::FilePath path) {
+          if (shell) shell->RemoveSharedDirectory(path);
+        }, weak_.GetWeakPtr())));
   }
   void ApplyViewSettings() {
     if (!GetFileViewPreferences().hover_image_preview) CloseHoverPreview(false);
@@ -4281,6 +4369,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
   }
   void StartMenuTransfer(std::vector<base::FilePath> paths, base::FilePath destination, bool move) {
+    EnsureDirectoryAccess(GetWidget(), destination, true, base::BindOnce(
+        [](base::WeakPtr<FilesView> pane, std::vector<base::FilePath> paths,
+           base::FilePath destination, bool move, bool allowed) {
+          if (!pane) return;
+          if (allowed) pane->StartMenuTransferAuthorized(std::move(paths), std::move(destination), move);
+          else pane->status_->SetText(Text(IDS_CRFILES_READ_ERROR));
+        }, weak_.GetWeakPtr(), std::move(paths), destination, move));
+  }
+  void StartMenuTransferAuthorized(std::vector<base::FilePath> paths, base::FilePath destination, bool move) {
     if (root_->local_operation_busy_ || paths.empty() || IsDrivesLocation(destination) ||
         std::ranges::any_of(paths, IsDriveRoot)) return;
     std::set<base::FilePath> affected{destination};
@@ -4291,10 +4388,38 @@ class FilesView : public views::View, public views::TextfieldController, public 
         base::BindOnce(&FilesView::LocalTransferFinished, root_->weak_.GetWeakPtr(), std::move(affected)));
   }
   void FileSelected(const ui::SelectedFileInfo& file, int) override {
+    RememberFileAccess(file.path());
     destination_dialog_.reset();
+    if (selecting_send_) {
+      selecting_send_ = false;
+      ShowSharing({file.path()});
+      return;
+    }
     StartMenuTransfer(std::move(destination_sources_), file.path(), destination_move_);
   }
-  void FileSelectionCanceled() override { destination_dialog_.reset(); destination_sources_.clear(); }
+  void MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) override {
+    destination_dialog_.reset();
+    selecting_send_ = false;
+    std::vector<base::FilePath> paths;
+    for (const auto& file : files) {
+      RememberFileAccess(file.path());
+      paths.push_back(file.path());
+    }
+    if (!paths.empty()) ShowSharing(std::move(paths));
+  }
+  void FileSelectionCanceled() override {
+    destination_dialog_.reset(); destination_sources_.clear(); selecting_send_ = false;
+  }
+  void ChooseFilesToSend() {
+    if (destination_dialog_) return;
+    if (SharingBusy()) { ShowSharing({}); return; }
+    selecting_send_ = true;
+    destination_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+    destination_dialog_->SelectFile(ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE,
+        Text(IDS_CRFILES_TRAY_SEND), ActivePane()->Current().path, nullptr, 0, {},
+        GetWidget()->GetNativeWindow(), nullptr);
+  }
+  void ShowReceivedFiles() { Received(); }
   void ChooseDestination(bool move) {
     if (destination_dialog_) return;
     destination_sources_ = context_paths_; destination_move_ = move;
@@ -4303,6 +4428,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
         Current().path, nullptr, 0, {}, GetWidget()->GetNativeWindow(), nullptr);
   }
   void StartExtraction(base::FilePath archive, base::FilePath destination, bool same_name_folder) {
+    EnsureDirectoryAccess(GetWidget(), destination, true, base::BindOnce(
+        [](base::WeakPtr<FilesView> pane, base::FilePath archive, base::FilePath destination,
+           bool same_name_folder, bool allowed) {
+          if (!pane) return;
+          if (allowed) pane->StartExtractionAuthorized(std::move(archive), std::move(destination), same_name_folder);
+          else pane->status_->SetText(Text(IDS_CRFILES_READ_ERROR));
+        }, weak_.GetWeakPtr(), archive, destination, same_name_folder));
+  }
+  void StartExtractionAuthorized(base::FilePath archive, base::FilePath destination, bool same_name_folder) {
     if (root_->local_operation_busy_ || !IsExtractableArchive(archive) || IsDrivesLocation(destination)) return;
     root_->local_operation_busy_ = true;
     ShowArchiveDialog(this, archive, destination, same_name_folder,
@@ -4393,7 +4527,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (context_paths_.empty()) return;
     const auto path = context_paths_.front();
     if (command >= kContextApplication && static_cast<size_t>(command - kContextApplication) < context_apps_.size()) {
-      // macOS waits for /usr/bin/open to report whether the launch succeeded.
+      // macOS waits for NSWorkspace to report whether the launch succeeded.
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
           {base::MayBlock(), base::WithBaseSyncPrimitives()},
           base::BindOnce(&OpenFileWith, path, context_apps_[command - kContextApplication].id),
@@ -4411,11 +4545,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
       case kContextExtractHere: StartExtraction(path, path.DirName(), false); break;
       case kContextExtractFolder: StartExtraction(path, path.DirName(), true); break;
       case kContextExtractTo: ChooseExtractionDestination(); break;
-      case kContextShare: root_->ShowSharing(context_paths_); break;
+      case kContextShare:
+        // Finish native context-menu dispatch before opening a modal window.
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+            base::BindOnce(&FilesView::ShowSharing,
+                (root_ ? root_.get() : this)->weak_.GetWeakPtr(), context_paths_));
+        break;
       case kContextRename: case kContextCompress: ShowEntryName(command == kContextCompress); break;
       case kContextTrash: Current().selected = std::set<base::FilePath>(context_paths_.begin(), context_paths_.end()); ChangeTrash(false); break;
       case kContextTerminal:
-        base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock()},
+        base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives()},
             base::BindOnce(&OpenFolderTerminal, context_directory_ ? path : path.DirName()),
             base::BindOnce(&FilesView::ContextLaunchFinished, weak_.GetWeakPtr())); break;
       case kContextPath: {
@@ -4608,7 +4747,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
                                                         std::set<base::FilePath>* paths, FilesView* pane) {
       if (pane->history_page_ || pane->tabs_.empty()) return;
       const auto& path = pane->Current().path;
-      const bool visible = pane->IsDrawn() && !pane->GetWidget()->IsMinimized() && path.IsAbsolute() && !IsDrivesLocation(path);
+      const bool visible = pane->IsDrawn() && pane->GetWidget()->IsVisible() &&
+          !pane->GetWidget()->IsMinimized() && path.IsAbsolute() && !IsDrivesLocation(path)
+#if BUILDFLAG(IS_MAC)
+          && !IsCrFilesApplicationHiddenMac()
+#endif
+          ;
       if (visible) {
         paths->insert(path);
         if (!pane->live_visible_ || activated) pane->QueueLiveRead();
@@ -4904,7 +5048,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
       result.Set("history_page", pane->history_page_); result.Set("search_page", pane->search_page_);
       result.Set("id", pane->pane_id_); result.Set("name", pane->pane_name_);
       result.Set("path", tab.path.AsUTF8Unsafe()); result.Set("scroll", pane->restored_scroll_.value_or(tab.scroll));
-      result.Set("share", pane->pane_shared_); result.Set("receive_path", pane->shared_directory_.AsUTF8Unsafe());
       result.Set("icons", options.icons); result.Set("icon_index", options.icon_index);
       result.Set("sort", static_cast<int>(options.sort)); result.Set("hidden", options.show_hidden);
       result.Set("size_column", options.size_column); result.Set("type_column", options.type_column);
@@ -4920,10 +5063,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (root_ || restoring_workspace_ || tabs_.empty()) return;
     base::DictValue workspace; workspace.Set("version", 1); workspace.Set("active", static_cast<int>(active_));
     workspace.Set("sidebar", sidebar_visible_); workspace.Set("sidebar_width", sidebar_width_);
+    base::ListValue shares;
+    for (const auto& target : shared_directories_) {
+      base::DictValue item;
+      item.Set("id", target.id); item.Set("name", target.name);
+      item.Set("path", target.directory.AsUTF8Unsafe());
+      shares.Append(std::move(item));
+    }
+    workspace.Set("shared_directories", std::move(shares));
     base::ListValue tabs;
     for (const auto& tab : tabs_) {
       if (tab.deferred_tree) {
-        base::DictValue item; item.Set("tree", tab.deferred_tree->Clone());
+        auto tree = tab.deferred_tree->Clone();
+        ClearSavedShares(tree);
+        base::DictValue item; item.Set("tree", std::move(tree));
         item.Set("pinned", tab.pinned);
         item.Set("active_pane", tab.deferred_active); tabs.Append(std::move(item)); continue;
       }
@@ -4982,10 +5135,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (const auto* widths = data.FindList("widths"); widths)
       for (size_t i = 0; i < std::min(widths->size(), options.column_widths.size()); ++i) options.column_widths[i] = std::clamp((*widths)[i].GetIfInt().value_or(options.column_widths[i]), 60, 1000);
     pane->restored_scroll_ = std::max(0, data.FindInt("scroll").value_or(0));
-    if (const auto* receive = data.FindString("receive_path")) pane->shared_directory_ = base::FilePath::FromUTF8Unsafe(*receive);
-    pane->pane_shared_ = data.FindBool("share").value_or(false) && pane->shared_directory_.IsAbsolute() &&
-        !pane->shared_directory_.ReferencesParent() && pane->shared_directory_ != TrashRoot() &&
-        !TrashRoot().IsParent(pane->shared_directory_);
     pane->UpdateShareButton();
     return pane;
   }
@@ -5052,6 +5201,19 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (tab.deferred_title.empty()) tab.deferred_title = base::UTF16ToUTF8(EntryName(tab.path));
     }
     if (tabs_.empty()) { restoring_workspace_ = false; active_ = 0; return false; }
+    // Read the central registry before materializing any tab. An explicitly
+    // empty registry must not resurrect legacy shares in deferred tab trees.
+    shared_directories_.clear();
+    if (const auto* shares = workspace.FindList("shared_directories")) {
+      for (const auto& value : *shares) {
+        const auto* item = value.GetIfDict();
+        if (item) RestoreSharedDirectory(item->FindString("id"),
+            item->FindString("name"), item->FindString("path"));
+      }
+    } else {
+      for (const auto& tab : tabs_)
+        if (tab.deferred_tree) RestoreLegacyShares(*tab.deferred_tree);
+    }
     active_ = std::clamp(workspace.FindInt("active").value_or(0), 0, static_cast<int>(tabs_.size()) - 1);
     const int restored_active = Current().id;
     std::stable_partition(tabs_.begin(), tabs_.end(), [](const Tab& tab) { return tab.pinned; });
@@ -5069,56 +5231,96 @@ class FilesView : public views::View, public views::TextfieldController, public 
               (c >= 0x2028 && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
         });
   }
+  static base::FilePath ShareDirectoryKey(const base::FilePath& path) {
+    return path.NormalizePathSeparators().StripTrailingSeparators();
+  }
+  bool IsDirectoryShared(const base::FilePath& path) const {
+    const auto* shell = root_ ? root_.get() : this;
+    const auto directory = ShareDirectoryKey(path);
+    return std::ranges::any_of(shell->shared_directories_, [&](const auto& target) {
+      return target.directory == directory;
+    });
+  }
   void UpdateShareButton() {
-    if (!share_button_) return;
-    share_button_->SetEnabled(pane_shared_ || !IsDrivesLocation(Current().path));
+    if (!share_button_ || tabs_.empty()) return;
+    const bool shared = IsDirectoryShared(Current().path);
+    share_button_->SetEnabled(shared || !IsDrivesLocation(Current().path));
     share_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
-    share_button_->GetViewAccessibility().SetCheckedState(pane_shared_ ? ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
-    share_button_->SetBackground(pane_shared_ ? views::CreateRoundedRectBackground(ui::kColorSysPrimaryContainer, 8) : nullptr);
+    share_button_->GetViewAccessibility().SetCheckedState(shared ? ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
+    share_button_->SetBackground(shared ? views::CreateRoundedRectBackground(ui::kColorSysPrimaryContainer, 8) : nullptr);
     share_button_->SetImageModel(views::Button::STATE_NORMAL,
-        ui::ImageModel::FromVectorIcon(vector_icons::kScreenShareIcon, pane_shared_ ? ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface, 20));
-    share_button_->SetTooltipText(Text(pane_shared_ ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE) +
-        (pane_shared_ ? u"\n" + shared_directory_.AsUTF16Unsafe() : std::u16string()));
-    share_button_->SetAccessibleName(Text(pane_shared_ ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE));
+        ui::ImageModel::FromVectorIcon(vector_icons::kScreenShareIcon, shared ? ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface, 20));
+    share_button_->SetTooltipText(Text(shared ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE) +
+        (shared ? u"\n" + Current().path.AsUTF16Unsafe() : std::u16string()));
+    share_button_->SetAccessibleName(Text(shared ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE));
+  }
+  void RemoveSharedDirectory(const base::FilePath& path) {
+    const auto directory = ShareDirectoryKey(path);
+    std::erase_if(shared_directories_, [&](const auto& target) { return target.directory == directory; });
+    SyncSharedTargets(); ScheduleWorkspaceSave();
   }
   void TogglePaneShare() {
-    if (!pane_shared_ && (IsDrivesLocation(Current().path) || Current().loading || Current().error)) return;
-    if (!pane_shared_) {
-      if (Current().path == TrashRoot() || TrashRoot().IsParent(Current().path)) return;
-      if (pane_name_.empty()) pane_name_ = ValidPaneName(PaneName()) ? PaneName() : base::UTF16ToUTF8(Text(IDS_CRFILES_FOLDER));
-      shared_directory_ = Current().path;
+    const auto directory = ShareDirectoryKey(Current().path);
+    if (IsDirectoryShared(directory)) { root_->RemoveSharedDirectory(directory); return; }
+    EnsureDirectoryAccess(GetWidget(), directory, true, base::BindOnce(
+        [](base::WeakPtr<FilesView> pane, base::FilePath path, bool allowed) {
+          if (!pane || ShareDirectoryKey(pane->Current().path) != path) return;
+          if (allowed && !pane->IsDirectoryShared(path)) pane->TogglePaneShareAuthorized();
+          else if (!allowed) pane->status_->SetText(Text(IDS_CRFILES_READ_ERROR));
+        }, weak_.GetWeakPtr(), directory));
+  }
+  void TogglePaneShareAuthorized() {
+    const auto directory = ShareDirectoryKey(Current().path);
+    auto& targets = root_->shared_directories_;
+    if (IsDirectoryShared(directory)) {
+      root_->RemoveSharedDirectory(directory);
+      return;
+    } else {
+      if (IsDrivesLocation(directory) || Current().loading || Current().error ||
+          !directory.IsAbsolute() || directory.ReferencesParent() ||
+          directory == TrashRoot() || TrashRoot().IsParent(directory)) return;
+      const auto name = ValidPaneName(PaneName()) ? PaneName() : base::UTF16ToUTF8(Text(IDS_CRFILES_FOLDER));
+      targets.push_back({base::Uuid::GenerateRandomV4().AsLowercaseString(), name, directory});
     }
-    pane_shared_ = !pane_shared_; UpdateShareButton(); UpdateStatus();
     root_->SyncSharedTargets(); root_->ScheduleWorkspaceSave();
   }
   void ClearSavedShares(base::DictValue& data) {
-    data.Set("share", false);
+    data.Remove("share"); data.Remove("receive_path");
     if (auto* first = data.FindDict("first")) ClearSavedShares(*first);
     if (auto* second = data.FindDict("second")) ClearSavedShares(*second);
   }
-  void SavedSharedTargets(const base::DictValue& data, std::vector<NearbySharing::SharedTarget>& targets) {
+  void RestoreSharedDirectory(const std::string* id, const std::string* name,
+                              const std::string* path) {
+    if (!id || !path || !base::Uuid::ParseLowercase(*id).is_valid()) return;
+    const auto directory = ShareDirectoryKey(base::FilePath::FromUTF8Unsafe(*path));
+    if (!directory.IsAbsolute() || directory.ReferencesParent() ||
+        directory == TrashRoot() || TrashRoot().IsParent(directory) ||
+        IsDirectoryShared(directory)) return;
+    // Legacy entries used pane IDs; keep the first ID for each directory so
+    // restoring or materializing another tab cannot change its receive target.
+    if (std::ranges::any_of(shared_directories_, [&](const auto& target) { return target.id == *id; })) return;
+    const auto fallback = directory.BaseName().AsUTF8Unsafe();
+    shared_directories_.push_back({*id, name && ValidPaneName(*name) ? *name :
+        ValidPaneName(fallback) ? fallback : base::UTF16ToUTF8(Text(IDS_CRFILES_FOLDER)), directory});
+  }
+  void RestoreLegacyShares(const base::DictValue& data) {
     if (const auto* first = data.FindDict("first")) {
-      SavedSharedTargets(*first, targets);
-      if (const auto* second = data.FindDict("second")) SavedSharedTargets(*second, targets);
+      RestoreLegacyShares(*first);
+      if (const auto* second = data.FindDict("second")) RestoreLegacyShares(*second);
       return;
     }
-    if (!data.FindBool("share").value_or(false)) return;
-    const auto* id = data.FindString("id"); const auto* path = data.FindString("receive_path");
-    if (!id || !path || !base::Uuid::ParseLowercase(*id).is_valid()) return;
-    const auto directory = base::FilePath::FromUTF8Unsafe(*path);
-    if (!directory.IsAbsolute() || directory.ReferencesParent() || directory == TrashRoot() || TrashRoot().IsParent(directory)) return;
-    const auto* name = data.FindString("name");
-    targets.push_back({*id, name && ValidPaneName(*name) ? *name : directory.BaseName().AsUTF8Unsafe(), directory});
+    if (data.FindBool("share").value_or(false))
+      RestoreSharedDirectory(data.FindString("id"), data.FindString("name"), data.FindString("receive_path"));
   }
   void SyncSharedTargets() {
     if (root_) { root_->SyncSharedTargets(); return; }
-    std::vector<NearbySharing::SharedTarget> targets;
     for (auto& tab : tabs_) {
-      if (tab.deferred_tree) { SavedSharedTargets(*tab.deferred_tree, targets); continue; }
-      VisitPanes(tab.pane_host, base::BindRepeating([](std::vector<NearbySharing::SharedTarget>* list, FilesView* pane) {
-        if (pane->pane_shared_) list->push_back({pane->pane_id_, pane->PaneName(), pane->shared_directory_});
-      }, &targets));
+      if (tab.deferred_tree) continue;
+      VisitPanes(tab.pane_host, base::BindRepeating([](FilesView* pane) {
+        pane->UpdateShareButton();
+      }));
     }
+    auto targets = shared_directories_;
     // Withdraw only revoked/changed targets immediately. An unrelated pane
     // update must not cancel an ongoing receive to a still-valid target.
     std::erase_if(published_targets_, [&](const auto& old) {
@@ -5695,6 +5897,22 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void Navigate(base::FilePath path, int history_index = -1, bool refresh = false) {
     if (!root_) { EndAddressEditing(); if (ActivePane()->history_page_) AddPaneTab(path); else ActivePane()->Navigate(path, history_index, refresh); return; }
     if (history_page_) return;
+    if (!path.IsAbsolute() && !path.empty() && !IsDrivesLocation(path)) {
+      if (IsDrivesLocation(Current().path)) return;
+      path = (Current().path.empty() ? Home() : Current().path).Append(path);
+    }
+    const auto generation = ++access_generation_;
+    if (!GetWidget()) { NavigateAuthorized(std::move(path), history_index, refresh); return; }
+    EnsureDirectoryAccess(GetWidget(), path, false, base::BindOnce(
+        [](base::WeakPtr<FilesView> pane, uint64_t generation, base::FilePath path,
+           int history_index, bool refresh, bool allowed) {
+          if (!pane || generation != pane->access_generation_) return;
+          if (allowed) pane->NavigateAuthorized(std::move(path), history_index, refresh);
+          else pane->status_->SetText(Text(IDS_CRFILES_READ_ERROR));
+        }, weak_.GetWeakPtr(), generation, path, history_index, refresh));
+  }
+  void NavigateAuthorized(base::FilePath path, int history_index, bool refresh) {
+    if (path.empty()) return;
     ++context_generation_;
     if (context_runner_ && context_runner_->IsRunning()) context_runner_->Cancel();
     CloseNewFolder();
@@ -6837,8 +7055,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
       trash_footer_animation_pending_ = trash;
       static_cast<views::BoxLayout*>(footer_->GetLayoutManager())->set_inside_border_insets(
           trash ? gfx::Insets() : gfx::Insets::VH(4, 8));
-      footer_->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, trash ? 24 : 12));
-      footer_->SetBorder(views::CreateRoundedRectBorder(1, trash ? 24 : 12, ui::kColorSysOutline));
+      if (trash) {
+        footer_->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, 24));
+        footer_->SetBorder(views::CreateRoundedRectBorder(1, 24, ui::kColorSysOutline));
+      } else {
+        footer_->SetBackground(std::make_unique<FooterBackground>());
+        footer_->SetBorder(views::CreateEmptyBorder(1));
+      }
       InvalidateLayout();
     }
     const size_t visible_count = displayed_entries_.size();
@@ -6888,13 +7111,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
 #endif
     if (directory) { Navigate(path); return; }
-    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock()}, base::BindOnce([](base::FilePath file) {
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives()}, base::BindOnce([](base::FilePath file) {
       FileOperationLog log("open_file", "menu", file.AsUTF8Unsafe(), "");
 #if BUILDFLAG(IS_WIN)
       base::win::ScopedCOMInitializer com;
       const bool ok = com.Succeeded() && reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", file.value().c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
 #elif BUILDFLAG(IS_MAC)
-      const bool ok = base::LaunchProcess(std::vector<std::string>{"/usr/bin/open", file.value()}, base::LaunchOptions()).IsValid();
+      const bool ok = OpenFileWithMac(file, {});
 #else
       const bool ok = base::LaunchProcess(std::vector<std::string>{"xdg-open", file.value()}, base::LaunchOptions()).IsValid();
 #endif
@@ -6907,17 +7130,44 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void ShowSharing(std::vector<base::FilePath> paths) {
     if (auto* view = sharing_dialog_.view(); view && view->GetWidget() && !view->GetWidget()->IsClosed()) {
       if (!paths.empty()) SetFileShareSelection(view, std::move(paths));
+      if (view->GetWidget()->IsMinimized()) view->GetWidget()->Restore();
+      view->GetWidget()->Show();
       view->GetWidget()->Activate(); return;
     }
     sharing_dialog_.SetView(ShowFileShareDialog(GetWidget(), sharing_, std::move(paths)));
   }
   gfx::Rect IncomingToastBounds(const std::string& target) {
     gfx::Rect area = GetBoundsInScreen();
-    if (!target.empty() && !tabs_.empty()) VisitPanes(Current().pane_host,
-        base::BindRepeating([](const std::string& id, gfx::Rect* bounds, FilesView* pane) {
-          if (pane->pane_id_ == id && pane->IsDrawn()) *bounds = pane->GetBoundsInScreen();
-        }, target, &area));
+    const auto shared = std::ranges::find(shared_directories_, target, &NearbySharing::SharedTarget::id);
+    if (shared != shared_directories_.end() && !tabs_.empty()) VisitPanes(Current().pane_host,
+        base::BindRepeating([](const base::FilePath& directory, gfx::Rect* bounds, FilesView* pane) {
+          if (!pane->history_page_ && !pane->search_page_ && !pane->tabs_.empty() &&
+              ShareDirectoryKey(pane->Current().path) == directory && pane->IsDrawn())
+            *bounds = pane->GetBoundsInScreen();
+        }, shared->directory, &area));
     return area;
+  }
+  ShareBubbleAnchor SessionBubbleAnchor(const NearbySharing::Snapshot& state) {
+    auto* widget = GetWidget();
+    bool foreground = widget && widget->IsVisible() && !widget->IsMinimized();
+#if BUILDFLAG(IS_MAC)
+    foreground = foreground && !IsCrFilesApplicationHiddenMac();
+#endif
+    if (foreground) {
+      if (!state.receiving) {
+        if (auto bounds = FileShareSessionBounds(sharing_dialog_.view()))
+          return {*bounds, views::BubbleBorder::TOP_CENTER, false, true};
+      }
+      const auto area = IncomingToastBounds(state.receive_target);
+      return {gfx::Rect(std::max(area.x(), area.right() - 12),
+                       std::max(area.y(), area.bottom() - 12), 1, 1),
+              views::BubbleBorder::BOTTOM_RIGHT, false, true};
+    }
+    const auto icon = Tray() ? Tray()->GetIconBounds() : std::nullopt;
+    auto* screen = display::Screen::Get();
+    const auto monitor = icon ? screen->GetDisplayMatching(*icon) : screen->GetPrimaryDisplay();
+    return TrayShareBubbleAnchor(icon, monitor.bounds(), monitor.work_area(),
+                                BUILDFLAG(IS_MAC));
   }
   void CheckReceivedDirectory() {
     if (received_check_pending_) return;
@@ -6936,12 +7186,21 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr(), path));
   }
   void UpdateNearby() {
+    // The constructor invokes this before SetContentsView attaches the view
+    // to a Widget. Defer window-dependent work until the next timer tick.
+    auto* widget = GetWidget();
+    if (!widget || widget->IsClosed()) return;
     SyncLiveDirectories();
-    CheckReceivedDirectory();
-#if BUILDFLAG(IS_WIN)
-    UpdateWindowsDrives();
+    const bool visible = widget->IsVisible()
+#if BUILDFLAG(IS_MAC)
+        && !IsCrFilesApplicationHiddenMac()
 #endif
-    if (auto* pane = ActivePane(); pane && pane->history_page_ && pane->history_version_ != FileHistoryVersion()) pane->LoadHistory();
+        ;
+    if (visible) CheckReceivedDirectory();
+#if BUILDFLAG(IS_WIN)
+    if (visible) UpdateWindowsDrives();
+#endif
+    if (auto* pane = ActivePane(); visible && pane && pane->history_page_ && pane->history_version_ != FileHistoryVersion()) pane->LoadHistory();
     auto s = sharing_->GetSnapshot();
     if (s.stage == NearbySharing::Stage::kComplete && s.receiving && s.session != last_received_session_) {
       last_received_session_ = s.session;
@@ -6949,21 +7208,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
         if (!batch.empty() && (pane->Current().path == batch || pane->Current().path == batch.DirName())) pane->Refresh();
       }, s.batch_directory));
     }
-    using Stage = NearbySharing::Stage;
-    if (s.stage == Stage::kPairing || s.stage == Stage::kReceivingOffer) {
-      if (s.receiving) {
-        // Let an existing modal sender dialog finish closing before creating
-        // an independent prompt owned by the main window.
-        if (sharing_dialog_.view() && sharing_dialog_.view()->GetWidget()) {
-          sharing_dialog_.view()->GetWidget()->Close(); return;
-        }
-        if (!incoming_toast_ && GetWidget()) incoming_toast_ = CreateIncomingShareToast(GetWidget(), sharing_,
-            base::BindRepeating(&FilesView::IncomingToastBounds, base::Unretained(this)));
-      } else if (sharing_prompt_session_ != s.session || sharing_prompt_stage_ != s.stage) {
-        sharing_prompt_session_ = s.session; sharing_prompt_stage_ = s.stage;
-        ShowSharing({});
-      }
-    }
+    // A single controller handles both directions, even while the browser and
+    // sender dialog are hidden. Its bubble has no native parent.
+    // Its independent bubble does not require closing the device selector.
+    // `receiving` is retained with completed sessions and cannot be used to
+    // dismiss a newly opened Share to dialog.
+    if (!session_toast_) session_toast_ = CreateShareSessionToast(widget, sharing_,
+        base::BindRepeating([](base::WeakPtr<FilesView> view,
+                              const NearbySharing::Snapshot& state) {
+          return view ? view->SessionBubbleAnchor(state) : ShareBubbleAnchor{};
+        }, weak_.GetWeakPtr()));
   }
 
   gfx::Rect drop_highlight_bounds_;
@@ -6974,17 +7228,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool footer_hovered_ = false, footer_shown_ = false, drop_highlight_shown_ = false;
   bool trash_footer_animation_pending_ = false;
   std::vector<base::WeakPtr<views::View>> dragging_rows_;
-  std::unique_ptr<IncomingShareToast> incoming_toast_;
-  views::ViewTracker sharing_dialog_, trusted_dialog_;
-  uint64_t sharing_prompt_session_ = 0;
-  NearbySharing::Stage sharing_prompt_stage_ = NearbySharing::Stage::kOff;
+  std::unique_ptr<ShareSessionToast> session_toast_;
+  views::ViewTracker sharing_dialog_, trusted_dialog_, sharing_folders_dialog_;
   uint64_t last_received_session_ = 0;
   uint64_t shared_targets_generation_ = 0;
   std::vector<NearbySharing::SharedTarget> published_targets_;
   std::optional<int> restored_scroll_;
   std::string pane_id_, pane_name_;
-  bool pane_shared_ = false;
-  base::FilePath shared_directory_;
+  // Root-owned directory registry; independent of tab/pane lifetimes.
+  std::vector<NearbySharing::SharedTarget> shared_directories_;
   raw_ptr<views::LabelButton> share_button_ = nullptr;
   base::OneShotTimer workspace_timer_;
   bool restoring_workspace_ = false;
@@ -7008,6 +7260,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   uint64_t context_generation_ = 0;
   std::optional<ui::ClipboardSequenceNumberToken> clipboard_sequence_;
   scoped_refptr<ui::SelectFileDialog> destination_dialog_;
+  bool selecting_send_ = false;
   std::unique_ptr<ui::SimpleMenuModel> context_menu_, context_split_, context_open_with_, context_sort_;
   std::unique_ptr<views::MenuRunner> context_runner_;
   raw_ptr<HistoryHeader> history_header_ = nullptr;
@@ -7093,6 +7346,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::map<base::FilePath, base::WeakPtr<views::Button>> file_buttons_;
   struct PendingNavigation { base::FilePath path; int history_index; bool refresh; };
   std::optional<PendingNavigation> pending_navigation_;
+  uint64_t access_generation_ = 0;
   CancelFlag read_cancel_ = std::make_shared<std::atomic_bool>(false);
   CancelFlag order_cancel_ = std::make_shared<std::atomic_bool>(false);
   base::OneShotTimer directory_retry_;
@@ -7147,6 +7401,13 @@ class FilesDelegate : public views::WidgetDelegate {
   std::unique_ptr<views::FrameView> CreateFrameView(views::Widget* widget) override {
     return CreateFilesFrameView(widget);
   }
+  bool OnCloseRequested(views::Widget::ClosedReason reason) override {
+    if (!g_quitting && Tray() && Tray()->IsAvailable()) {
+      HideCrFilesWindow();
+      return false;
+    }
+    return true;
+  }
   void WindowClosing() override { if (quit_) std::move(quit_).Run(); }
  private:
   base::OnceClosure quit_;
@@ -7154,11 +7415,44 @@ class FilesDelegate : public views::WidgetDelegate {
 }
 std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget*) { return g_contents->CreateTabs(); }
 void ShowCrFilesTrustedDevices() { if (g_contents) g_contents->ShowTrustedDevices(); }
+void ShowCrFilesSharingFolders() { if (g_contents) g_contents->ShowSharingFolders(); }
 void ShowCrFilesHistory() { if (g_contents) g_contents->ShowHistoryTab(); }
 bool IsCrFilesSharingBusy() { return g_contents && g_contents->SharingBusy(); }
 void ApplyCrFilesViewSettings() { if (g_contents) g_contents->ApplyViewSettings(); }
 void ApplyCrFilesSharingSettings() { if (g_contents) g_contents->ApplySharing(); }
+void HideCrFilesWindow() {
+  if (g_quitting || !Window() || Window()->IsClosed() || !Window()->IsVisible()) return;
+  HiddenOwnedWindows().clear();
+  for (const auto& owned : views::Widget::GetAllOwnedWidgets(Window()->GetNativeView())) {
+    if (owned->IsVisible()) HiddenOwnedWindows().push_back(owned->GetWeakPtr());
+  }
+  // Snapshot weak references before Hide dispatches activation callbacks.
+  for (const auto& owned : HiddenOwnedWindows()) {
+    if (owned && !owned->IsClosed()) owned->Hide();
+  }
+  Window()->Hide();
+}
+void RestoreCrFilesWindow() {
+  if (g_quitting || !Window() || Window()->IsClosed()) return;
+#if BUILDFLAG(IS_MAC)
+  ActivateCrFilesApplicationMac();
+#endif
+  if (Window()->IsMinimized()) Window()->Restore();
+  Window()->Show();
+  Window()->Activate();
+  auto hidden = std::move(HiddenOwnedWindows());
+  HiddenOwnedWindows().clear();
+  for (const auto& owned : hidden) {
+    if (owned && !owned->IsClosed()) owned->Show();
+  }
+}
+void QuitCrFiles() {
+  if (g_quitting || !Window() || Window()->IsClosed()) return;
+  g_quitting = true;
+  Window()->Close();
+}
 void ShowCrFilesWindow(base::OnceClosure quit) {
+  g_quitting = false;
   InitializeCrFilesTheme();
   Delegate() = std::make_unique<FilesDelegate>(std::move(quit));
   Window() = std::make_unique<views::Widget>();
@@ -7184,8 +7478,32 @@ void ShowCrFilesWindow(base::OnceClosure quit) {
 #if BUILDFLAG(IS_MAC)
   InstallCrFilesApplicationMenuMac(Window().get());
 #endif
+  ApplyCrFilesTraySettings();
+}
+void ApplyCrFilesTraySettings() {
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  if (g_quitting || !Window() || Window()->IsClosed()) return;
+  if (!GetSystemTrayEnabled()) {
+    if (Tray()) RestoreCrFilesWindow();
+    Tray().reset();
+    return;
+  }
+  if (Tray()) return;
+  Tray() = CreateCrFilesTray(base::BindRepeating([](TrayCommand) {
+    if (g_quitting || !g_contents || !Tray()) return;
+    bool visible = Window() && Window()->IsVisible() && !Window()->IsMinimized();
+#if BUILDFLAG(IS_MAC)
+    visible = visible && !IsCrFilesApplicationHiddenMac();
+#endif
+    if (visible) HideCrFilesWindow();
+    else RestoreCrFilesWindow();
+  }));
+#endif
 }
 void DestroyCrFilesWindow() {
+  g_quitting = true;
+  Tray().reset();
+  HiddenOwnedWindows().clear();
 #if BUILDFLAG(IS_MAC)
   RemoveCrFilesApplicationMenuMac();
 #endif
