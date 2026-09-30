@@ -7,6 +7,7 @@
 #include <memory>
 namespace views { class Widget; class FrameView; }
 namespace crfiles {
+inline constexpr int kCrFilesTitlebarHeight = 36;
 std::unique_ptr<views::FrameView> CreateFilesFrameView(views::Widget* widget);
 }
 #endif

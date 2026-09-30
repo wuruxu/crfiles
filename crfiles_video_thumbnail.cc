@@ -27,6 +27,7 @@
 #include "base/containers/span_reader.h"
 #include "base/scoped_native_library.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "cc/paint/tone_map_util.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
@@ -36,6 +37,9 @@
 #include "base/time/time.h"
 #include "media/media_buildflags.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_MAC)
+#include "crFiles/crfiles_mac.h"
+#endif
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
@@ -192,7 +196,7 @@ SkBitmap FrameThumbnail(const AVFrame& frame, const media::VideoDecoderConfig& c
   if (!image) return {};
   SkPaint paint;
   paint.setBlendMode(SkBlendMode::kSrc);
-  if (cc::ToneMapUtil::UseGlobalToneMapFilter(image.get()))
+  if (cc::ToneMapUtil::UseGlobalToneMapFilter(image.get(), config.hdr_metadata()))
     cc::ToneMapUtil::AddGlobalToneMapFilterToPaint(paint, image.get(), config.hdr_metadata(), 0.f);
   canvas.drawImageRect(image, SkRect::MakeXYWH(-draw_width / 2, -draw_height / 2, draw_width, draw_height),
       SkSamplingOptions(SkFilterMode::kLinear), &paint);
@@ -245,8 +249,8 @@ class HevcDecoder {
 #define DECLARE_DE265(name) decltype(&::name) name##_ = nullptr;
   CRFILES_DE265_FUNCTIONS(DECLARE_DE265)
 #undef DECLARE_DE265
-  de265_decoder_context* context_ = nullptr;
-  const de265_image_allocation* default_allocation_ = nullptr;
+  raw_ptr<de265_decoder_context> context_ = nullptr;
+  raw_ptr<const de265_image_allocation> default_allocation_ = nullptr;
   de265_image_allocation allocation_ = {&Allocate, &Release};
   std::map<de265_image*, size_t> allocations_;
   size_t bytes_ = 0;
@@ -281,7 +285,7 @@ DISABLE_CFI_DLSYM HevcDecoder::HevcDecoder() {
   if (context_) de265_set_image_allocation_functions_(context_, &allocation_, this);
 }
 DISABLE_CFI_DLSYM HevcDecoder::~HevcDecoder() {
-  if (context_) de265_free_decoder_(context_);
+  if (context_) de265_free_decoder_(context_.ExtractAsDangling());
 }
 DISABLE_CFI_DLSYM int HevcDecoder::Allocate(de265_decoder_context* decoder_context, de265_image_spec* spec,
     de265_image* image, void* user) {
@@ -496,9 +500,15 @@ void VideoThumbnailService::Decode(const base::FilePath& path, uint32_t edge, De
   if (!path.IsAbsolute() || edge == 0 || edge > kMaximumEdge) {
     std::move(callback).Run(std::move(result)); return;
   }
-#if BUILDFLAG(ENABLE_FFMPEG)
+#if BUILDFLAG(ENABLE_FFMPEG) || BUILDFLAG(IS_MAC)
   {
-    const auto bitmap = DecodeVideo(path, static_cast<int>(edge));
+    SkBitmap bitmap;
+#if BUILDFLAG(IS_MAC)
+    bitmap = DecodeVideoThumbnailMac(path, static_cast<int>(edge));
+#endif
+#if BUILDFLAG(ENABLE_FFMPEG)
+    if (bitmap.isNull()) bitmap = DecodeVideo(path, static_cast<int>(edge));
+#endif
     if (!bitmap.isNull() && bitmap.width() <= static_cast<int>(edge) && bitmap.height() <= static_cast<int>(edge)) {
       result = mojom::VideoThumbnail::New();
       result->width = bitmap.width(); result->height = bitmap.height();

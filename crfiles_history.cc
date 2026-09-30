@@ -100,16 +100,26 @@ void PruneFileHistory() {
   Database db; db.Prune();
 }
 uint64_t FileHistoryVersion() { return history_version.load(); }
-FileHistoryPage ReadFileHistory(int limit, std::string path_query, std::string action) {
+FileHistoryPage ReadFileHistory(int limit, std::string path_query,
+                               std::string action, FileHistoryCursor before) {
   base::AutoLock lock(HistoryLock());
   Database db;
   db.Prune();
-  Statement query(db.get(), "SELECT id,time,action,trigger,source,destination,result FROM operations WHERE (? = '' OR instr(source, ?) > 0 OR instr(destination, ?) > 0) AND (? = '' OR action = ?) ORDER BY time DESC,id DESC LIMIT ?");
+  const char* sql = before.id
+      ? "SELECT id,time,action,trigger,source,destination,result FROM operations WHERE (? = '' OR instr(source, ?) > 0 OR instr(destination, ?) > 0) AND (? = '' OR action = ?) AND (time,id) < (?,?) ORDER BY time DESC,id DESC LIMIT ?"
+      : "SELECT id,time,action,trigger,source,destination,result FROM operations WHERE (? = '' OR instr(source, ?) > 0 OR instr(destination, ?) > 0) AND (? = '' OR action = ?) ORDER BY time DESC,id DESC LIMIT ?";
+  Statement query(db.get(), sql);
   FileHistoryPage page;
+  page.version = history_version.load();
   if (!query.get()) return page;
   query.Text(1, path_query); query.Text(2, path_query); query.Text(3, path_query);
   query.Text(4, action); query.Text(5, action);
-  sqlite3_bind_int(query.get(), 6, limit);
+  int parameter = 6;
+  if (before.id) {
+    sqlite3_bind_int64(query.get(), parameter++, before.time.ToDeltaSinceWindowsEpoch().InMicroseconds());
+    sqlite3_bind_int64(query.get(), parameter++, before.id);
+  }
+  sqlite3_bind_int(query.get(), parameter, limit);
   int step;
   while ((step = sqlite3_step(query.get())) == SQLITE_ROW) {
     page.entries.push_back({sqlite3_column_int64(query.get(), 0),

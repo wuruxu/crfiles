@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_settings_dialog.h"
+#include "crFiles/crfiles_dialog.h"
 #include <array>
 #include <algorithm>
 #include <atomic>
@@ -31,6 +32,7 @@
 #include "base/process/launch.h"
 #include "base/command_line.h"
 #include "base/timer/timer.h"
+#include "base/version_info/version_info.h"
 #include "build/build_config.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -157,17 +159,22 @@ void OpenProject() {
       ->PostTask(FROM_HERE,
                  base::BindOnce(&OpenCrFilesProjectPageViaExplorer));
 #elif BUILDFLAG(IS_MAC)
-  base::CommandLine command_line(base::FilePath(FILE_PATH_LITERAL("open")));
-  command_line.AppendArg(kProjectUrl);
-  base::Process process =
-      base::LaunchProcess(command_line, base::LaunchOptions());
-  if (!process.IsValid()) {
-    LOG(ERROR) << "crFiles failed to open project URL";
-    return;
-  }
-#if BUILDFLAG(IS_POSIX)
-  base::EnsureProcessGetsReaped(std::move(process));
-#endif
+  base::ThreadPool::PostTask(
+      FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives(),
+                  base::TaskPriority::USER_VISIBLE,
+                  base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+      base::BindOnce([] {
+        base::CommandLine command_line(base::FilePath(FILE_PATH_LITERAL("/usr/bin/open")));
+        command_line.AppendArg(kProjectUrl);
+        base::Process process =
+            base::LaunchProcess(command_line, base::LaunchOptions());
+        if (!process.IsValid()) {
+          LOG(ERROR) << "crFiles failed to open project URL";
+          return;
+        }
+        // Reap the launcher without blocking the UI or terminating it.
+        process.WaitForExit(nullptr);
+      }));
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   base::nix::CreateLaunchOptionsWithXdgActivation(
       base::BindOnce(&LaunchCrFilesProjectPageWithActivation));
@@ -227,7 +234,8 @@ std::unique_ptr<views::View> AboutBody(bool large) {
   column->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 12));
   layout->SetFlexForView(column, 1);
   auto* description = Label(column, Text(IDS_CRFILES_DESCRIPTION));
-  auto* version = Label(column, u"crFiles " CRFILES_VERSION_STRING u" · Chromium 150");
+  auto* version = Label(column, u"crFiles " CRFILES_VERSION_STRING u" · Chromium " +
+      base::ASCIIToUTF16(version_info::GetMajorVersionNumber()));
   auto* build = Label(column, Text(IDS_CRFILES_BUILD_TIME) + u": " + base::UTF8ToUTF16(std::string_view(CRFILES_BUILD_TIME)));
   version->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
   build->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
@@ -282,7 +290,15 @@ END_METADATA
 class Settings : public views::DialogDelegate, public ui::SelectFileDialog::Listener, public views::ViewObserver, public ui::EventObserver {
  public:
   Settings() {
-    SetTitle(Text(IDS_CRFILES_SETTINGS)); SetModalType(ui::mojom::ModalType::kWindow);
+    SetTitle(Text(IDS_CRFILES_SETTINGS));
+#if BUILDFLAG(IS_MAC)
+    // A window-modal dialog becomes a titlebar-less AppKit sheet. Settings
+    // uses a regular native window so its close button is always available.
+    SetModalType(ui::mojom::ModalType::kNone);
+#else
+    SetModalType(ui::mojom::ModalType::kWindow);
+#endif
+    SetShowCloseButton(true);
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone)); set_use_custom_frame(false);
     SetAppIcon(CreateCrFilesAppIconModel()); SetShowIcon(false);
     auto contents = std::make_unique<views::View>();
@@ -332,6 +348,27 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   void WindowClosing() override {
     StopSharingUpdates();
     CloseAvatars();
+    // The delegate outlives the widget's content tree. Drop every reference
+    // before the controls are destroyed, including references in containers.
+    pages_.fill(nullptr);
+    navigation_.fill(nullptr);
+    navigation_styles_.fill(nullptr);
+    checks_.fill(nullptr);
+    themes_.clear();
+    language_ = nullptr;
+    retention_ = nullptr;
+    name_ = nullptr;
+    directory_ = nullptr;
+    error_ = nullptr;
+    auto_hide_toolbar_ = nullptr;
+    windows_titlebar_style_ = nullptr;
+    animate_folders_ = nullptr;
+    hover_image_preview_ = nullptr;
+    discovery_ = nullptr;
+    auto_accept_ = nullptr;
+    apply_ = nullptr;
+    avatar_button_ = nullptr;
+    folder_ = nullptr;
     views::DialogDelegate::WindowClosing();
   }
   void OnViewIsDeleting(views::View*) override {
@@ -413,6 +450,14 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   }
   std::unique_ptr<views::View> InterfacePage() {
     auto page = Page(IDS_CRFILES_INTERFACE);
+#if BUILDFLAG(IS_MAC)
+    windows_titlebar_style_ = page->AddChildView(std::make_unique<views::Checkbox>(
+        Text(IDS_CRFILES_WINDOWS_TITLEBAR_STYLE)));
+    windows_titlebar_style_->SetChecked(GetWindowsTitlebarStyleEnabled());
+    windows_titlebar_style_->SetCallback(base::BindRepeating(
+        &Settings::WindowsTitlebarStyleChanged, weak_.GetWeakPtr()));
+    Label(page.get(), Text(IDS_CRFILES_TITLEBAR_RESTART));
+#endif
     Label(page.get(), Text(IDS_CRFILES_NAVIGATION_STYLE));
     constexpr std::array labels = {IDS_CRFILES_NAVIGATION_MINIMAL, IDS_CRFILES_NAVIGATION_UNDERLINE, IDS_CRFILES_NAVIGATION_RAISED};
     const auto selected = GetNavigationStyle();
@@ -433,6 +478,13 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     for (size_t i = 0; i < navigation_styles_.size(); ++i)
       navigation_styles_[i]->SetChecked(static_cast<NavigationStyle>(i) == selected);
     if (saved) ApplyCrFilesViewSettings();
+  }
+  void WindowsTitlebarStyleChanged() {
+    const bool saved = SetWindowsTitlebarStyleEnabled(
+        windows_titlebar_style_->GetChecked());
+    error_->SetVisible(!saved);
+    if (!saved)
+      windows_titlebar_style_->SetChecked(GetWindowsTitlebarStyleEnabled());
   }
   void FileViewChanged() {
     const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked(), hover_image_preview_->GetChecked()});
@@ -559,7 +611,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
       button->SetTooltipText(Text(IDS_CRFILES_AVATAR));
     }
     avatar_dialog_->SetContentsView(std::move(choices));
-    avatar_widget_ = views::BubbleDialogDelegate::CreateBubble(avatar_dialog_.get(),
+    avatar_widget_ = CreateCrFilesBubble(avatar_dialog_.get(),
         base::BindOnce(&Settings::AvatarPickerClosed, weak_.GetWeakPtr()));
     avatar_dialog_->GetBubbleFrameView()->SetDisplayVisibleArrow(true);
     auto* border = avatar_dialog_->GetBubbleFrameView()->bubble_border();
@@ -568,14 +620,13 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     avatar_monitor_ = views::EventMonitor::CreateApplicationMonitor(this, GetWidget()->GetNativeWindow(), {ui::EventType::kMousePressed});
   }
   void AvatarPickerClosed(views::Widget::ClosedReason) {
-    avatar_monitor_.reset();
-    if (avatar_dialog_) avatar_dialog_->SetAnchorView(nullptr);
+    CloseAvatars();
   }
   void OnEvent(const ui::Event& event) override {
     if (event.type() != ui::EventType::kMousePressed || !avatar_monitor_ || !avatar_widget_ ||
         avatar_widget_->IsClosed() || !avatar_widget_->IsVisible()) return;
     const auto point = avatar_monitor_->GetLastMouseLocation();
-    if (!avatar_widget_->GetWindowBoundsInScreen().Contains(point) && !avatar_button_->GetBoundsInScreen().Contains(point))
+    if (!IsInsideCrFilesBubble(point) && !avatar_button_->GetBoundsInScreen().Contains(point))
       avatar_widget_->Close();
   }
   void CancelAvatarDecode() {
@@ -711,6 +762,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   raw_ptr<views::Textfield> name_ = nullptr, directory_ = nullptr;
   raw_ptr<views::Label> error_ = nullptr;
   raw_ptr<views::Checkbox> auto_hide_toolbar_ = nullptr, animate_folders_ = nullptr, hover_image_preview_ = nullptr;
+  raw_ptr<views::Checkbox> windows_titlebar_style_ = nullptr;
   raw_ptr<views::Checkbox> discovery_ = nullptr, auto_accept_ = nullptr;
   raw_ptr<views::MdTextButton> apply_ = nullptr;
   raw_ptr<views::ImageButton> avatar_button_ = nullptr, folder_ = nullptr;
@@ -756,9 +808,9 @@ class About : public views::DialogDelegate {
 };
 }
 void ShowCrFilesSettingsDialog(views::Widget* parent) {
-  views::DialogDelegate::CreateDialogWidget(std::make_unique<Settings>(), parent->GetNativeWindow(), parent->GetNativeView())->Show();
+  ShowCrFilesDialog(std::make_unique<Settings>(), parent);
 }
 void ShowCrFilesAboutDialog(views::Widget* parent) {
-  views::DialogDelegate::CreateDialogWidget(std::make_unique<About>(), parent->GetNativeWindow(), parent->GetNativeView())->Show();
+  ShowCrFilesDialog(std::make_unique<About>(), parent);
 }
 }

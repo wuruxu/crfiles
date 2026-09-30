@@ -18,6 +18,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "crFiles/grit/crfiles_strings.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -188,6 +189,10 @@ class SearchPage : public views::View, public views::TextfieldController, public
   SearchPage(base::FilePath root, base::RepeatingCallback<void(base::FilePath, bool)> open,
              base::RepeatingCallback<void(base::FilePath)> reveal, base::RepeatingClosure state_changed)
       : root_(std::move(root)), open_(std::move(open)), reveal_(std::move(reveal)), state_changed_(std::move(state_changed)) {
+    // The pane receives focus before OnFocus forwards it to the search field.
+    // It must expose valid accessibility semantics even during that transition.
+    GetViewAccessibility().SetRole(ax::mojom::Role::kPane);
+    SetAccessibleName(Text(IDS_CRFILES_SEARCH));
     SetFocusBehavior(FocusBehavior::ALWAYS);
     SetBackground(views::CreateSolidBackground(ui::kColorSysBase));
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 10));
@@ -546,7 +551,11 @@ class SearchPage : public views::View, public views::TextfieldController, public
       const auto& hit = hits_[visible_hits_[i]];
       const auto path = base::FilePath::FromUTF8Unsafe(hit->path);
       auto* row = results_->AddChildView(std::make_unique<views::View>());
-      auto* layout = row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+      // Overlay scrollbars paint above the viewport without reducing its width.
+      // Keep the reveal button clear even while the macOS thumb is expanded.
+      auto* layout = row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::TLBR(0, 0, 0, 24), 4));
       layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
       auto* result = row->AddChildView(std::make_unique<SearchResultButton>(base::BindRepeating(open_, path, hit->directory),
           display_content_ ? path.BaseName().AsUTF16Unsafe() : path.AsUTF16Unsafe(), base::UTF8ToUTF16(hit->detail), query, display_content_, hit->directory));

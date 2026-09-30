@@ -184,6 +184,17 @@ FileViewPreferences GetFileViewPreferences() {
           Settings().FindBool("animate_folders").value_or(true),
           Settings().FindBool("hover_image_preview").value_or(false)};
 }
+bool GetWindowsTitlebarStyleEnabled() {
+  base::AutoLock lock(SettingsLock());
+  return Settings().FindBool("windows_titlebar_style").value_or(false);
+}
+bool SetWindowsTitlebarStyleEnabled(bool enabled) {
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().Clone();
+  Settings().Set("windows_titlebar_style", enabled);
+  if (Save()) return true;
+  Settings() = std::move(previous); return false;
+}
 bool SetFileViewPreferences(const FileViewPreferences& preferences) {
   base::AutoLock lock(SettingsLock());
   auto previous = Settings().Clone();

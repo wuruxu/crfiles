@@ -43,6 +43,10 @@
     </includes>
     <messages first_id="31000">
       <message name="IDS_CRFILES_ABOUT" desc="crFiles file manager interface.">About</message>
+      <message name="IDS_CRFILES_MAC_ABOUT" desc="macOS application menu item.">About crFiles</message>
+      <message name="IDS_CRFILES_MAC_SETTINGS" desc="macOS application menu item.">Settings…</message>
+      <message name="IDS_CRFILES_MAC_HIDE" desc="macOS application menu item.">Hide crFiles</message>
+      <message name="IDS_CRFILES_MAC_QUIT" desc="macOS application menu item.">Quit crFiles</message>
       <message name="IDS_CRFILES_ACCEPT" desc="crFiles file manager interface.">Accept</message>
       <message name="IDS_CRFILES_BACK" desc="crFiles file manager interface.">Back</message>
       <message name="IDS_CRFILES_CANCEL" desc="crFiles file manager interface.">Cancel</message>
@@ -57,6 +61,10 @@
       <message name="IDS_CRFILES_DEVICE_NAME" desc="crFiles file manager interface.">Device name</message>
       <message name="IDS_CRFILES_DISABLE" desc="crFiles file manager interface.">Disable nearby sharing</message>
       <message name="IDS_CRFILES_DOWNLOADS" desc="crFiles file manager interface.">Downloads</message>
+      <message name="IDS_CRFILES_APPLICATIONS" desc="macOS Applications folder in the sidebar.">Applications</message>
+      <message name="IDS_CRFILES_PIN" desc="Pin a tab to the leading group.">Pin</message>
+      <message name="IDS_CRFILES_UNPIN" desc="Unpin a tab.">Unpin</message>
+      <message name="IDS_CRFILES_CLOSE_OTHER_TABS" desc="Close other unpinned tabs.">Close other tabs</message>
       <message name="IDS_CRFILES_EMPTY" desc="crFiles file manager interface.">This folder is empty.</message>
       <message name="IDS_CRFILES_ENABLE" desc="crFiles file manager interface.">Enable nearby sharing</message>
       <message name="IDS_CRFILES_EXIT_FULLSCREEN" desc="crFiles file manager interface.">Exit fullscreen</message>
@@ -80,6 +88,7 @@
       <message name="IDS_CRFILES_MORE" desc="crFiles file manager interface.">Show more</message>
       <message name="IDS_CRFILES_NEARBY" desc="crFiles file manager interface.">Nearby devices</message>
       <message name="IDS_CRFILES_NEARBY_OFF" desc="crFiles file manager interface.">Sharing is off.</message>
+      <message name="IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE" desc="Local device discovery is unavailable and will retry">Device discovery is unavailable. Check your network and local-network permissions. Retrying automatically; you can still use a device address.</message>
       <message name="IDS_CRFILES_NEARBY_READY" desc="crFiles file manager interface.">Devices on your local network appear here.</message>
       <message name="IDS_CRFILES_NEW_TAB" desc="crFiles file manager interface.">New tab</message>
       <message name="IDS_CRFILES_OPEN" desc="crFiles file manager interface.">Open</message>
@@ -108,9 +117,19 @@
       <message name="IDS_CRFILES_UP" desc="crFiles file manager interface.">Up</message>
       <message name="IDS_CRFILES_VIEW_OPTIONS" desc="File view options and column labels.">View Options</message>
       <message name="IDS_CRFILES_ICON_SIZE" desc="File view options and column labels.">Icon Size</message>
+      <message name="IDS_CRFILES_SORT_BY" desc="Folder background context menu submenu.">Sort by</message>
+      <message name="IDS_CRFILES_SELECT_ALL" desc="Select all visible folder entries.">Select All</message>
       <message name="IDS_CRFILES_SORT_A_Z" desc="File view options and column labels.">A-Z</message>
       <message name="IDS_CRFILES_SORT_Z_A" desc="File view options and column labels.">Z-A</message>
       <message name="IDS_CRFILES_LAST_MODIFIED" desc="File view options and column labels.">Last Modified</message>
+      <message name="IDS_CRFILES_SORT_SIZE_ASCENDING" desc="Sort files by increasing size.">Size (smallest first)</message>
+      <message name="IDS_CRFILES_SORT_TYPE_DESCENDING" desc="Sort files by decreasing MIME type.">Type (Z-A)</message>
+      <message name="IDS_CRFILES_CREATED" desc="File creation time column and property.">Created</message>
+      <message name="IDS_CRFILES_PERMISSIONS" desc="File permissions column and property.">Permissions</message>
+      <message name="IDS_CRFILES_SORT_CREATED_ASCENDING" desc="Sort by creation time.">Created (oldest first)</message>
+      <message name="IDS_CRFILES_SORT_CREATED_DESCENDING" desc="Sort by creation time.">Created (newest first)</message>
+      <message name="IDS_CRFILES_SORT_PERMISSIONS_ASCENDING" desc="Sort by permission bits.">Permissions (ascending)</message>
+      <message name="IDS_CRFILES_SORT_PERMISSIONS_DESCENDING" desc="Sort by permission bits.">Permissions (descending)</message>
       <message name="IDS_CRFILES_FIRST_MODIFIED" desc="File view options and column labels.">First Modified</message>
       <message name="IDS_CRFILES_SIZE" desc="File view options and column labels.">Size</message>
       <message name="IDS_CRFILES_TYPE" desc="File view options and column labels.">Type</message>
@@ -146,6 +165,7 @@
       <message name="IDS_CRFILES_HISTORY_REMOTE" desc="File operation history.">Remote client</message>
       <message name="IDS_CRFILES_HISTORY_SUCCESS" desc="File operation history.">Succeeded</message>
       <message name="IDS_CRFILES_HISTORY_FAILED" desc="File operation history.">Failed</message>
+      <message name="IDS_CRFILES_MOVE_SOURCE_RETAINED" desc="Non-atomic move retained original files to avoid losing concurrent changes">Copy completed; the move is incomplete. Originals were kept to protect changes made during copying.</message>
       <message name="IDS_CRFILES_HISTORY_RETAINED" desc="File operation history.">Copied; source could not be removed</message>
       <message name="IDS_CRFILES_HISTORY_PENDING" desc="File operation history.">In progress or interrupted</message>
       <message name="IDS_CRFILES_HISTORY_SOURCE" desc="File operation history.">Source</message>
@@ -183,6 +203,7 @@
       <message name="IDS_CRFILES_COPY_PATH" desc="File and folder context menu.">Copy File Path</message>
       <message name="IDS_CRFILES_PROPERTIES" desc="File and folder context menu.">Properties</message>
       <message name="IDS_CRFILES_OPEN_NEW_TAB" desc="File and folder context menu.">Open in New Tab</message>
+      <message name="IDS_CRFILES_SHOW_PACKAGE_CONTENTS" desc="macOS context menu action to browse a package as a directory.">Show Package Contents</message>
       <message name="IDS_CRFILES_OPEN_SPLIT" desc="File and folder context menu.">Open in Split</message>
       <message name="IDS_CRFILES_OPEN_WITH" desc="File and folder context menu.">Open With</message>
       <message name="IDS_CRFILES_AUTO_HIDE_TOOLBAR" desc="Toolbar preferences and file sharing dialog.">Automatically hide toolbar</message>
@@ -231,6 +252,8 @@
       <message name="IDS_CRFILES_SEARCH_HIDDEN" desc="Checkbox in the search filter menu to include hidden files and folders.">Hidden File</message>
       <message name="IDS_CRFILES_HOVER_IMAGE_PREVIEW" desc="General settings checkbox to enlarge an image while hovering over its file entry.">Preview images on hover</message>
       <message name="IDS_CRFILES_INTERFACE" desc="Interface settings for breadcrumb navigation appearance.">Interface</message>
+      <message name="IDS_CRFILES_WINDOWS_TITLEBAR_STYLE" desc="macOS setting to use the custom Windows-style titlebar instead of the native titlebar.">Enable windows titlebar style</message>
+      <message name="IDS_CRFILES_TITLEBAR_RESTART" desc="Explanation of when the titlebar preference takes effect.">Restart crFiles to apply titlebar changes.</message>
       <message name="IDS_CRFILES_NAVIGATION_STYLE" desc="Interface settings for breadcrumb navigation appearance.">Navigation bar style</message>
       <message name="IDS_CRFILES_NAVIGATION_MINIMAL" desc="Interface settings for breadcrumb navigation appearance.">Minimal path</message>
       <message name="IDS_CRFILES_NAVIGATION_UNDERLINE" desc="Interface settings for breadcrumb navigation appearance.">Underlined path</message>

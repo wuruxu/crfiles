@@ -29,6 +29,20 @@ interoperability run has been performed for the extended crFiles implementation.
 
 ## Manual verification after an authorized build
 
+The desktop transport is enabled on Linux, Windows, and macOS. macOS uses the
+POSIX file receiver (directory-relative operations with no symlink following),
+Darwin nonblocking sockets with `SO_NOSIGPIPE`, and `SO_REUSEPORT` to share the
+mDNS port with Bonjour. Interface types come from Chromium's Darwin network
+interface enumeration. Identity and trust files retain the existing private
+`~/.config/crFiles/nearby` location; the wire protocol is unchanged.
+
+The macOS port has not yet been compiled or tested between devices. When testing
+macOS, leave Bonjour running, verify discovery with Wi-Fi and Ethernet, and
+disconnect a peer during a transfer to check that the app stays running. Also
+close and reopen the app with discovery enabled to verify automatic startup and
+identity persistence. If macOS requests local-network access, allow it for the
+test application.
+
 1. Run crFiles and crPhotos on two devices on the same private IPv4 network. Enable
    nearby sharing on each and verify the configured names appear in both lists.
 2. Send a selected regular file in each direction. Compare the full pairing code
@@ -66,7 +80,7 @@ entries end in `/` with size `0`; they exchange the SHA-256 of empty input and a
 normal `stored` acknowledgement. Explicit entries preserve empty directories.
 Every component is validated, duplicate paths are rejected case-insensitively,
 and traversal, absolute paths, device names, links and special files are rejected.
-Linux walks destination parents with no-follow directory descriptors; Windows
+Linux and macOS walk destination parents with no-follow directory descriptors; Windows
 pins each ancestor against substitution. Size/hash/cancellation checks are the
 same as the legacy stream. A failed transfer may leave its isolated partial batch.
 

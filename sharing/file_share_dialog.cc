@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/sharing/file_share_dialog.h"
+#include "crFiles/crfiles_dialog.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -153,7 +154,7 @@ class IncomingShareToastImpl : public IncomingShareToast {
     delegate_->SetCancelCallbackWithClose(base::BindRepeating([] { return false; }));
     delegate_->set_margins(gfx::Insets(12)); delegate_->set_shadow(views::BubbleBorder::STANDARD_SHADOW);
     delegate_->SetContentsView(std::move(contents));
-    widget_ = views::BubbleDialogDelegate::CreateBubble(delegate_.get(), base::BindOnce(
+    widget_ = CreateCrFilesBubble(delegate_.get(), base::BindOnce(
         [](base::WeakPtr<IncomingShareToastImpl> owner, views::Widget::ClosedReason) {
           if (!owner) return;
           owner->accept_ = nullptr; owner->reject_ = nullptr; owner->trust_ = nullptr;
@@ -447,6 +448,8 @@ class FileShareView : public views::View {
     address_ = nullptr; targets_ = nullptr; toast_status_ = nullptr; toast_count_ = nullptr; toast_size_ = nullptr;
     accept_ = nullptr; reject_ = nullptr; trust_device_ = nullptr;
     if (toast_delegate_) toast_delegate_->SetAnchorView(nullptr);
+    // Explicit teardown must not schedule another close from native callbacks.
+    if (toast_widget_) toast_widget_->MakeCloseSynchronous({});
     toast_widget_.reset(); toast_delegate_.reset();
     toast_prompt_ = false; composing_ = false;
   }
@@ -459,14 +462,10 @@ class FileShareView : public views::View {
     toast_delegate_->set_margins(gfx::Insets(12));
     toast_delegate_->set_shadow(views::BubbleBorder::STANDARD_SHADOW);
     toast_delegate_->SetContentsView(std::move(contents));
-    toast_widget_ = views::BubbleDialogDelegate::CreateBubble(toast_delegate_.get(),
+    toast_widget_ = CreateCrFilesBubble(toast_delegate_.get(),
         base::BindOnce([](base::WeakPtr<FileShareView> owner, views::Widget::ClosedReason) {
-          if (!owner) return;
-          owner->toast_delegate_->SetAnchorView(nullptr);
-          owner->address_ = nullptr; owner->targets_ = nullptr;
-          owner->toast_status_ = nullptr; owner->toast_count_ = nullptr; owner->toast_size_ = nullptr; owner->accept_ = nullptr; owner->reject_ = nullptr; owner->trust_device_ = nullptr;
-          owner->composing_ = false; owner->toast_prompt_ = false;
-          owner->toast_widget_.reset();
+          if (!owner || !owner->toast_widget_) return;
+          owner->CloseToast();
         }, weak_.GetWeakPtr()));
     auto* frame = toast_delegate_->GetBubbleFrameView();
     frame->SetDisplayVisibleArrow(true); frame->bubble_border()->set_draw_border_stroke(true);
@@ -557,10 +556,11 @@ class FileShareView : public views::View {
       layout->set_minimum_cross_axis_size(336);
       auto result_label = [&](std::u16string text) {
         auto* label = Label(contents.get(), std::move(text));
+        // Label() defaults to ELIDE_MIDDLE, which is invalid for multiline text.
+        label->SetElideBehavior(gfx::NO_ELIDE);
         label->SetMultiLine(true);
         label->SetAllowCharacterBreak(true);
         label->SetMaximumWidth(336);
-        label->SetElideBehavior(gfx::NO_ELIDE);
         return label;
       };
       toast_status_ = result_label(Text(message));
@@ -576,8 +576,8 @@ class FileShareView : public views::View {
     }
     if (state.busy) {
       toast_status_ = Label(contents.get(), Text(message));
-      toast_status_->SetMultiLine(true); toast_status_->SetMaximumWidth(336);
       toast_status_->SetElideBehavior(gfx::NO_ELIDE);
+      toast_status_->SetMultiLine(true); toast_status_->SetMaximumWidth(336);
     }
     if (toast_prompt_) {
       toast_status_->SetText(Text(state.stage == NearbySharing::Stage::kPairing ? IDS_CRFILES_COMPARE_CODE : IDS_CRFILES_RECEIVE_PROMPT) +
@@ -606,7 +606,10 @@ class FileShareView : public views::View {
       count_->SetText(Text(IDS_CRFILES_FILES) + u": " + (state.files.empty() ? std::u16string(u"—") : base::NumberToString16(state.files.size())));
       size_->SetText(Text(IDS_CRFILES_TOTAL_SIZE) + u": " + (state.files.empty() ? std::u16string(u"—") : ui::FormatBytes(base::ByteSize(state.total))));
     }
-    int message = state.enabled ? IDS_CRFILES_NEARBY_READY : IDS_CRFILES_NEARBY_OFF;
+    int message = !state.enabled ? IDS_CRFILES_NEARBY_OFF :
+        !state.port ? IDS_CRFILES_LOADING :
+        !state.discovery_ready ? IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE :
+        IDS_CRFILES_NEARBY_READY;
     if (state.status_message_id) message = state.status_message_id;
     else if (state.stage == Stage::kComplete) message = IDS_CRFILES_COMPLETE;
     else if (state.stage == Stage::kError) message = IDS_CRFILES_TRANSFER_ERROR;
@@ -737,9 +740,7 @@ views::View* ShowTrustedDevicesDialog(views::Widget* parent,
   dialog->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   dialog->SetShowCloseButton(true);
   dialog->SetContentsView(std::move(scroll));
-  auto* widget = views::DialogDelegate::CreateDialogWidget(
-      dialog.release(), parent->GetNativeWindow(), parent->GetNativeView());
-  widget->Show();
+  ShowCrFilesDialog(std::move(dialog), parent);
   return result;
 }
 
@@ -757,7 +758,7 @@ views::View* ShowFileShareDialog(views::Widget* parent, std::shared_ptr<NearbySh
   dialog->SetModalType(ui::mojom::ModalType::kWindow);
   dialog->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone)); dialog->SetShowCloseButton(true);
   dialog->SetContentsView(std::move(scroll));
-  views::DialogDelegate::CreateDialogWidget(std::move(dialog), parent->GetNativeWindow(), parent->GetNativeView())->Show();
+  ShowCrFilesDialog(std::move(dialog), parent);
   return contents;
 }
 }

@@ -29,6 +29,9 @@
 #include "base/files/file_util.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#if BUILDFLAG(IS_MAC)
+#include "net/base/network_interfaces.h"
+#endif
 
 namespace crfiles::nearby {
 #if BUILDFLAG(IS_WIN)
@@ -60,13 +63,26 @@ using Socket = int;
 using SocketLength = socklen_t;
 using PollFd = pollfd;
 inline constexpr Socket kInvalidSocket = -1;
+#if BUILDFLAG(IS_APPLE)
+// Darwin suppresses SIGPIPE on the socket, including accepted connections.
+inline constexpr int kSendFlags = 0;
+#else
 inline constexpr int kSendFlags = MSG_NOSIGNAL;
+#endif
 inline int SocketError() { return errno; }
 inline bool RetrySocket() {
   return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS || errno == EINTR;
 }
 inline bool InitializeSockets() { return true; }
 inline void CloseSocket(Socket socket) { close(socket); }
+#endif
+
+#if BUILDFLAG(IS_APPLE)
+inline bool ConfigureAppleSocket(Socket socket) {
+  const int one = 1;
+  return base::SetNonBlocking(socket) && base::SetCloseOnExec(socket) &&
+      setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) == 0;
+}
 #endif
 
 class ScopedSocket {
@@ -101,6 +117,9 @@ inline ScopedSocket CreateSocket(int type) {
     if (setsockopt(result.get(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
         reinterpret_cast<const char*>(&one), sizeof(one)) != 0) result.reset();
   }
+#elif BUILDFLAG(IS_APPLE)
+  ScopedSocket result(socket(AF_INET, type, 0));
+  if (result.is_valid() && !ConfigureAppleSocket(result.get())) result.reset();
 #else
   ScopedSocket result(socket(AF_INET, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0));
 #endif
@@ -112,6 +131,9 @@ inline ScopedSocket Accept(Socket listener, sockaddr* address, SocketLength* len
   if (result.is_valid() && (!NonBlocking(result.get()) ||
       !SetHandleInformation(reinterpret_cast<HANDLE>(result.get()), HANDLE_FLAG_INHERIT, 0)))
     result.reset();
+#elif BUILDFLAG(IS_APPLE)
+  ScopedSocket result(accept(listener, address, length));
+  if (result.is_valid() && !ConfigureAppleSocket(result.get())) result.reset();
 #else
   ScopedSocket result(accept4(listener, address, length, SOCK_NONBLOCK | SOCK_CLOEXEC));
 #endif
@@ -185,6 +207,14 @@ inline std::vector<LocalInterface> LocalInterfaces(bool require_multicast) {
     }
   }
 #else
+#if BUILDFLAG(IS_MAC)
+  // Chromium queries Darwin's interface media types. /sys/class/net is Linux
+  // specific; interface names such as en0 do not identify Wi-Fi vs Ethernet.
+  net::NetworkInterfaceList networks;
+  if (!require_multicast) {
+    net::GetNetworkList(&networks, net::INCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES);
+  }
+#endif
   ifaddrs* addresses = nullptr;
   if (getifaddrs(&addresses) != 0) return result;
   for (auto* item = addresses; item; item = item->ifa_next) {
@@ -194,6 +224,16 @@ inline std::vector<LocalInterface> LocalInterfaces(bool require_multicast) {
         (item->ifa_flags & IFF_LOOPBACK)) continue;
     InterfaceType type = InterfaceType::kOther;
     if (!require_multicast && item->ifa_name) {
+#if BUILDFLAG(IS_MAC)
+      for (const auto& network : networks) {
+        if (network.name != item->ifa_name) continue;
+        if (network.type == net::NetworkChangeNotifier::CONNECTION_WIFI)
+          type = InterfaceType::kWifi;
+        else if (network.type == net::NetworkChangeNotifier::CONNECTION_ETHERNET)
+          type = InterfaceType::kEthernet;
+        break;
+      }
+#else
       const auto interface_path = base::FilePath("/sys/class/net").Append(item->ifa_name);
       if (base::DirectoryExists(interface_path.Append("wireless")) ||
           base::PathExists(interface_path.Append("phy80211"))) {
@@ -204,6 +244,7 @@ inline std::vector<LocalInterface> LocalInterfaces(bool require_multicast) {
             (hardware_type == "1\n" || hardware_type == "1"))
           type = InterfaceType::kEthernet;
       }
+#endif
     }
     result.push_back({reinterpret_cast<sockaddr_in*>(item->ifa_addr)->sin_addr, type});
   }

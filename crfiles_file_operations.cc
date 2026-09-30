@@ -10,6 +10,9 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_MAC)
+#include <copyfile.h>
+#endif
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include "base/win/scoped_handle.h"
@@ -125,6 +128,27 @@ bool Publish(const base::FilePath& from, const base::FilePath& to) {
   return false;
 #endif
 }
+// Ordinary transfers preserve links. Archive validation deliberately retains
+// its own policy, including rejecting link inputs for compression.
+bool TransferTreeIsSafe(const base::FilePath& path) {
+#if BUILDFLAG(IS_MAC)
+  return base::IsLink(path) || SafeTree(path, nullptr, nullptr, true);
+#else
+  return SafeTree(path);
+#endif
+}
+bool CopyTransferTree(const base::FilePath& source, const base::FilePath& target) {
+#if BUILDFLAG(IS_MAC)
+  // Preserve package permissions and metadata as well as link text. Never
+  // dereference links, including dangling or absolute links, during copying.
+  return copyfile(source.value().c_str(), target.value().c_str(), nullptr,
+                  COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW |
+                      COPYFILE_EXCL) == 0;
+#else
+  return base::DirectoryExists(source) ? base::CopyDirectory(source, target, true)
+                                       : base::CopyFile(source, target);
+#endif
+}
 }
 FileOperationResult TransferLocalFiles(std::vector<base::FilePath> sources,
                                       base::FilePath destination, bool move, std::string trigger) {
@@ -141,7 +165,15 @@ FileOperationResult TransferLocalFiles(std::vector<base::FilePath> sources,
   for (const auto& source : sources) {
     FileOperationLog log(move ? "move" : "copy", trigger, source.AsUTF8Unsafe(), destination.Append(source.BaseName()).AsUTF8Unsafe());
     if (!log.valid() || !IsValidEntryName(source.BaseName().AsUTF16Unsafe()) || canonical_destination.empty() || !base::DirectoryExists(canonical_destination)) { ++result.failed; continue; }
-    const auto canonical = base::MakeAbsoluteFilePath(source);
+    auto canonical = base::MakeAbsoluteFilePath(source);
+#if BUILDFLAG(IS_MAC)
+    // Resolve the parent, not the link target: a dangling link is still a valid
+    // source and links to the same target are distinct directory entries.
+    if (base::IsLink(source)) {
+      const auto parent = base::MakeAbsoluteFilePath(source.DirName());
+      canonical = parent.empty() ? base::FilePath() : parent.Append(source.BaseName());
+    }
+#endif
     if (canonical.empty() || !seen.insert(canonical).second) { ++result.failed; continue; }
 #if BUILDFLAG(IS_WIN)
     const auto resolved_source = ResolvedWindowsPath(source);
@@ -151,20 +183,25 @@ FileOperationResult TransferLocalFiles(std::vector<base::FilePath> sources,
 #endif
     const auto target = canonical_destination.Append(source.BaseName());
     if (canonical == target || canonical == canonical_destination || canonical.IsParent(canonical_destination) ||
-        source.BaseName().empty() || base::PathExists(target) || base::IsLink(target) || !SafeTree(source)) {
+        source.BaseName().empty() || base::PathExists(target) || base::IsLink(target) || !TransferTreeIsSafe(source)) {
       ++result.failed; continue;
     }
-    // A same-filesystem move is an atomic, no-replace rename. Cross-device
-    // moves fall back to publishing a complete copy before removing the input.
+    // A same-filesystem move is an atomic, no-replace rename. If that fails,
+    // copying cannot establish exclusive ownership of the source: another
+    // process can still modify files or add children while we copy it.
     if (move && Publish(source, target)) { result.changed.push_back(target); result.removed.push_back(source); log.Succeed(); continue; }
     base::ScopedTempDir staging;
     if (!staging.CreateUniqueTempDirUnderPath(canonical_destination)) { ++result.failed; continue; }
     const auto staged = staging.GetPath().Append(source.BaseName());
-    const bool copied = base::DirectoryExists(source) ? base::CopyDirectory(source, staged, true) : base::CopyFile(source, staged);
-    if (!copied || !SafeTree(staged) || !Publish(staged, target)) { ++result.failed; continue; }
+    const bool copied = CopyTransferTree(source, staged);
+    if (!copied || !TransferTreeIsSafe(staged) || !Publish(staged, target)) { ++result.failed; continue; }
     result.changed.push_back(target);
-    if (move && !base::DeletePathRecursively(source)) { ++result.failed; log.SourceRetained(); }
-    else { if (move) result.removed.push_back(source); log.Succeed(); }
+    // Never recursively delete a live source tree after a non-atomic copy.
+    // Report partial completion so the UI keeps the source selection and the
+    // history records that the source was retained. This also protects files
+    // held open for writing by another application.
+    if (move) { ++result.failed; ++result.sources_retained; log.SourceRetained(); }
+    else { log.Succeed(); }
   }
   return result;
 }
@@ -209,6 +246,8 @@ FileOperationResult ExtractLocalArchive(base::FilePath archive, base::FilePath d
   FileOperationResult result;
   FileOperationLog log("extract", "menu", archive.AsUTF8Unsafe(),
       (same_name_folder ? destination.Append(ArchiveFolderName(archive)) : destination).AsUTF8Unsafe());
+  // Extract to accepts a new directory, including missing parent directories.
+  // Create it on this worker before resolving its absolute filesystem path.
   if (!log.valid() || !destination.IsAbsolute() || !base::CreateDirectory(destination)) { result.failed = 1; return result; }
   const auto parent = base::MakeAbsoluteFilePath(destination);
   const auto name = ArchiveFolderName(archive);

@@ -51,6 +51,8 @@ struct ConnectResult {
 
 // All network and credential IO runs on a dedicated thread. Callback runs there;
 // callers should BindPostTaskToCurrentDefault with a WeakPtr to their view.
+// Destruction joins that thread. ThreadPool owners must declare
+// WithBaseSyncPrimitives in addition to MayBlock.
 class ConnectClient {
  public:
   using Callback = base::RepeatingCallback<void(ConnectResult)>;

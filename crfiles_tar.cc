@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 #include "base/containers/span.h"
+#include "base/memory/raw_span.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "third_party/lzma_sdk/src/C/7zCrc.h"
@@ -63,7 +64,7 @@ class TarInput {
   bool eof_ = false, ended_ = false, gzip_member_done_ = false;
   uint64_t decoded_ = 0;
   std::array<uint8_t, 65536> input_, buffer_;
-  base::span<uint8_t> encoded_, available_;
+  base::raw_span<uint8_t> encoded_, available_;
   z_stream gzip_state_{};
   CXzUnpacker xz_state_{};
   ISzAlloc allocator_{};

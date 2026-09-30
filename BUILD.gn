@@ -5,6 +5,7 @@ import("//build/config/ui.gni")
 import("//build/util/process_version.gni")
 import("//libcr/locales.gni")
 import("//media/media_options.gni")
+import("//testing/test.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//tools/grit/grit_rule.gni")
 import("//tools/grit/repack.gni")
@@ -15,6 +16,24 @@ if (is_linux) {
   }
 }
 crfiles_locales = libcr_supported_locales
+
+test("crfiles_dialog_unittests") {
+  sources = [
+    "crfiles_dialog.cc",
+    "crfiles_dialog.h",
+    "crfiles_dialog_unittest.cc",
+    "crfiles_unittest_main.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/resources:ui_test_pak",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
 
 process_version("crfiles_version") {
   process_only = true
@@ -152,6 +171,8 @@ crfiles_sources = [
     "crfiles_main.cc",
     "crfiles_settings_dialog.cc",
     "crfiles_settings_dialog.h",
+    "crfiles_dialog.cc",
+    "crfiles_dialog.h",
     "crfiles_trash.cc",
     "crfiles_trash.h",
     "crfiles_theme.cc",
@@ -197,6 +218,18 @@ action("crfiles_buildtime") {
 
 executable("crFiles") {
   sources = crfiles_sources
+  if (is_mac) {
+    sources += [
+      "crfiles_mac.h",
+      "crfiles_mac.mm",
+    ]
+    frameworks = [
+      "AppKit.framework",
+      "ApplicationServices.framework",
+      "AVFoundation.framework",
+      "CoreMedia.framework",
+    ]
+  }
   include_dirs = [ "//third_party/pdfium" ]
   deps = [
     ":crfiles_buildtime",
@@ -210,6 +243,7 @@ executable("crFiles") {
     ":crfiles_strings",
     ":crfiles_version",
     "//base",
+    "//base/version_info",
     "//base:i18n",
     "//cc/paint",
     "//chrome/app/vector_icons",
@@ -250,6 +284,9 @@ executable("crFiles") {
   ]
   if (media_use_ffmpeg) {
     deps += [ "//third_party/ffmpeg", "//third_party/ffmpeg:ffmpeg_features" ]
+  }
+  if (is_mac) {
+    deps += [ "//components/remote_cocoa/common:mojo" ]
   }
   if (is_linux) {
     configs += [ ":context_gio" ]

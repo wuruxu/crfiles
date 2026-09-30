@@ -15,6 +15,7 @@ enum class ArchiveConflictChoice { kWaiting, kReplaceAll, kReplace, kSkip, kCanc
 struct ArchiveProgress {
   ArchiveProgress();
   ~ArchiveProgress();
+  // Worker-only; requires base synchronization waits to be allowed.
   ArchiveConflictChoice WaitForConflict(const base::FilePath& path);
   base::FilePath PendingConflict();
   void ResolveConflict(const base::FilePath& path, ArchiveConflictChoice choice);
@@ -39,10 +40,13 @@ bool IsExtractableArchive(const base::FilePath& path);
 std::string ArchiveFormat(const base::FilePath& path);
 base::FilePath ArchiveFolderName(const base::FilePath& path);
 int RunArchiveProcess();
-// Worker-only. Decoder runs in a disposable child, writing only into staging.
+// Worker-only, with base synchronization waits allowed (ThreadPool callers
+// must specify MayBlock and WithBaseSyncPrimitives). Decoder runs in a
+// disposable child, writing only into staging.
 bool DecodeArchive(const base::FilePath& archive, const base::FilePath& staging,
                    const std::string& password, std::shared_ptr<ArchiveProgress> progress);
-// Worker-only. ZIP creation shares the disposable archive helper process.
+// Same worker requirements as DecodeArchive. ZIP creation shares the
+// disposable archive helper process.
 bool EncodeArchive(const base::FilePath& source_directory,
     std::vector<base::FilePath> relative_sources, const base::FilePath& output,
     std::shared_ptr<ArchiveProgress> progress);

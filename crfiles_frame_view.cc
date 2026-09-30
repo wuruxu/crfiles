@@ -45,11 +45,14 @@
 #include "ui/views/window/client_view.h"
 #include "ui/views/window/frame_view.h"
 #include "ui/views/window/hit_test_utils.h"
+#if BUILDFLAG(IS_MAC)
+#include "crFiles/crfiles_mac.h"
+#endif
 
 namespace crfiles {
 namespace {
 // Match crPhotos' custom frame dimensions and shared caption controls.
-constexpr int kTitlebarHeight = 36;
+constexpr int kTitlebarHeight = kCrFilesTitlebarHeight;
 constexpr int kFrameBorder = 1;
 constexpr int kResizeBorder = 6;
 
@@ -166,6 +169,8 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     separator_->SetColorId(ui::kColorSysOnHeaderDivider);
     tabs_ = AddChildView(CreateCrFilesTabStrip(widget_));
     title_ = AddChildView(std::make_unique<views::Label>());
+    // The frame paints rounded corners and shadows onto a translucent layer.
+    title_->SetSubpixelRenderingEnabled(false);
     title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     title_->SetElideBehavior(gfx::ELIDE_MIDDLE);
     title_->SetCanProcessEventsWithinSubtree(false);
@@ -182,7 +187,16 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     UpdateWindowTitle();
     UpdateColors();
   }
-  int ShadowMargin() const { return widget_->IsMaximized() || widget_->IsFullscreen() ? 0 : 12; }
+  int ShadowMargin() const {
+#if BUILDFLAG(IS_MAC)
+    // AppKit constrains the outer window frame to the screen's usable top.
+    // Draw the shadow outside that frame so the visible titlebar can reach it.
+    return 0;
+#else
+    return widget_->IsMaximized() || widget_->IsFullscreen() ? 0 : 12;
+#endif
+  }
+  int CornerRadius() const { return !windows_titlebar_style_ || widget_->IsMaximized() || widget_->IsFullscreen() ? 0 : 12; }
   gfx::Rect GetBoundsForClientView() const override {
     if (widget_->IsFullscreen()) return GetLocalBounds();
     const int border = widget_->IsMaximized() ? 0 : kFrameBorder;
@@ -194,9 +208,14 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     if (widget_->IsFullscreen()) return bounds;
     const int border = widget_->IsMaximized() ? 0 : kFrameBorder;
     const int margin = ShadowMargin();
-    return gfx::Rect(bounds.x() - border - margin, bounds.y() - kTitlebarHeight - margin,
+    gfx::Rect window_bounds(bounds.x() - border - margin, bounds.y() - kTitlebarHeight - margin,
                      bounds.width() + (border + margin) * 2,
                      bounds.height() + kTitlebarHeight + border + margin * 2);
+#if BUILDFLAG(IS_MAC)
+    if (!windows_titlebar_style_)
+      return WindowBoundsForContentMac(widget_, window_bounds);
+#endif
+    return window_bounds;
   }
   gfx::Size GetMinimumSize() const override {
     if (widget_->IsFullscreen()) return gfx::Size(900, 500);
@@ -213,7 +232,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     if (options_menu_overlay_ || options_button_->bounds().Contains(point)) return HTCLIENT;
     for (auto* button : {minimize_.get(), maximize_.get(), restore_.get(), close_.get()})
       if (button->GetVisible() && button->bounds().Contains(point)) return HTCLIENT;
-    if (!widget_->IsMaximized()) {
+    if (windows_titlebar_style_ && !widget_->IsMaximized()) {
       const int hit = GetHTComponentForFrame(point, gfx::Insets(ShadowMargin() + kResizeBorder),
           ShadowMargin() + kResizeBorder, ShadowMargin() + kResizeBorder, widget_->widget_delegate()->CanResize());
       if (hit != HTNOWHERE) return hit;
@@ -255,21 +274,28 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     const bool show = !widget_->IsFullscreen();
     if (!show) HideOptionsMenu();
     options_button_->SetVisible(show);
-    icon_->SetVisible(show);
-    separator_->SetVisible(show);
+    icon_->SetVisible(show && windows_titlebar_style_);
+    const bool show_caption = show && windows_titlebar_style_;
+    separator_->SetVisible(show_caption);
     icon_->SetBounds(14, 8, 20, 20);
-    options_button_->SetBounds(frame_width - 161, 0, 36, kTitlebarHeight);
+    options_button_->SetBounds(frame_width - (windows_titlebar_style_ ? 161 : 44), 0, 36, kTitlebarHeight);
     separator_->SetBounds(frame_width - 117, 8, 1, 20);
     title_->SetVisible(false);
     tabs_->SetVisible(show);
-    tabs_->SetBounds(42, 0, std::max(0, frame_width - 211), kTitlebarHeight);
-    minimize_->SetVisible(show);
-    close_->SetVisible(show);
+    int tabs_left = 42;
+#if BUILDFLAG(IS_MAC)
+    if (!windows_titlebar_style_ && show)
+      tabs_left = WindowControlsRightEdgeMac(widget_);
+#endif
+    const int tabs_right = options_button_->x() - 8;
+    tabs_->SetBounds(tabs_left, 0, std::max(0, tabs_right - tabs_left), kTitlebarHeight);
+    minimize_->SetVisible(show_caption);
+    close_->SetVisible(show_caption);
     close_->SetBounds(frame_width - 36, 0, 36, kTitlebarHeight);
     maximize_->SetBounds(frame_width - 72, 0, 36, kTitlebarHeight);
     restore_->SetBoundsRect(maximize_->bounds());
-    maximize_->SetVisible(show && !widget_->IsMaximized());
-    restore_->SetVisible(show && widget_->IsMaximized());
+    maximize_->SetVisible(show_caption && !widget_->IsMaximized());
+    restore_->SetVisible(show_caption && widget_->IsMaximized());
     minimize_->SetBounds(frame_width - 108, 0, 36, kTitlebarHeight);
     title_->SetBounds(42, 0, std::max(0, frame_width - 211), kTitlebarHeight);
     for (views::View* child : std::vector<views::View*>{static_cast<views::View*>(icon_.get()), options_button_.get(),
@@ -277,7 +303,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
       auto bounds = child->bounds(); bounds.Offset(margin, margin); child->SetBoundsRect(bounds);
     }
     close_->SetPaintToLayer(); close_->layer()->SetFillsBoundsOpaquely(false);
-    close_->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(0, margin ? 12 : 0, 0, 0));
+    close_->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(0, CornerRadius(), 0, 0));
     LayoutOptionsMenu();
   }
   void OnPaint(gfx::Canvas* canvas) override {
@@ -290,7 +316,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     flags.setColor(GetColorProvider()->GetColor(active ? ui::kColorSysHeader : ui::kColorSysHeaderInactive));
     if (margin) flags.setLooper(gfx::CreateShadowDrawLooper({gfx::ShadowValue(gfx::Vector2d(0, 3), 16,
         SkColorSetA(SK_ColorBLACK, active ? 72 : 40))}));
-    canvas->DrawRoundRect(surface, margin ? 12 : 0, flags);
+    canvas->DrawRoundRect(surface, CornerRadius(), flags);
   }
   void OnThemeChanged() override { views::FrameView::OnThemeChanged(); UpdateColors(); }
   void OnWidgetActivationChanged(views::Widget*, bool) override { UpdateColors(); }
@@ -407,6 +433,13 @@ void ShowInstallResult(bool success) {
   libcr::InstallResultBubbleController install_result_bubble_;
 #endif
   raw_ptr<views::Widget> widget_;
+  // Snapshot the preference: changing settings must not partially restyle an
+  // existing native window. AppKit frame changes take effect on next launch.
+#if BUILDFLAG(IS_MAC)
+  const bool windows_titlebar_style_ = GetWindowsTitlebarStyleEnabled();
+#else
+  const bool windows_titlebar_style_ = true;
+#endif
   raw_ptr<views::View> tabs_ = nullptr;
   raw_ptr<views::Label> title_ = nullptr;
   raw_ptr<views::Button> minimize_ = nullptr, maximize_ = nullptr;

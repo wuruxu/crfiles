@@ -33,9 +33,16 @@ struct FileHistoryEntry {
 };
 struct FileHistoryPage {
   bool ok = false;
+  uint64_t version = 0;
   std::vector<FileHistoryEntry> entries;
 };
-FileHistoryPage ReadFileHistory(int limit, std::string path_query, std::string action);
+// Exclusive cursor in the same (time DESC, id DESC) order as the time index.
+struct FileHistoryCursor {
+  base::Time time;
+  int64_t id = 0;
+};
+FileHistoryPage ReadFileHistory(int limit, std::string path_query,
+                               std::string action, FileHistoryCursor before);
 uint64_t FileHistoryVersion();
 void PruneFileHistory();
 }

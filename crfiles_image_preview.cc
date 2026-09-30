@@ -18,6 +18,7 @@
 #include <utility>
 #include "base/files/file_util.h"
 #include "base/no_destructor.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "third_party/pdfium/public/cpp/fpdf_scopers.h"
 #include "third_party/pdfium/public/fpdf_progressive.h"
@@ -92,7 +93,7 @@ struct PdfPreviewRuntime {
 };
 struct PdfPreviewPause {
   IFSDK_PAUSE pause_api = {};
-  const std::atomic_bool* canceled = nullptr;
+  raw_ptr<const std::atomic_bool> canceled = nullptr;
   base::TimeTicks deadline;
   bool Stopped() const {
     return (canceled && canceled->load(std::memory_order_relaxed)) || base::TimeTicks::Now() >= deadline;

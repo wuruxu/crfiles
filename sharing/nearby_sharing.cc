@@ -54,7 +54,7 @@
 #include "crFiles/sharing/nearby_files_win.h"
 #endif
 
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -70,7 +70,7 @@
 
 #include "base/files/scoped_file.h"
 #endif
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include "crypto/hash.h"
 #include "crypto/keypair.h"
 #include "net/cert/x509_util.h"
@@ -156,9 +156,9 @@ using nearby::PinnedDirectory;
 using nearby::ProtectPrivateDirectory;
 #endif
 constexpr size_t kMaximumFiles = 128;
-constexpr size_t kMaximumTreeEntries = 4096;
 std::atomic<uint64_t> g_session{0};
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+constexpr size_t kMaximumTreeEntries = 4096;
 constexpr uint64_t kMaximumFileSize = 16ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaximumBatchSize = 64ULL * 1024 * 1024 * 1024;
 constexpr size_t kChunkSize = 256 * 1024;
@@ -217,8 +217,8 @@ class Channel {
           std::shared_ptr<State> state, uint64_t generation, bool identity = false)
       : fd_(std::move(fd)), ssl_(SSL_new(context)), state_(std::move(state)),
         generation_(generation), identity_(identity) {
-    // A socket BIO using MSG_NOSIGNAL on Linux avoids terminating the application
-    // when a peer disconnects. Do not change process-wide signal handlers.
+    // The socket layer suppresses SIGPIPE with MSG_NOSIGNAL on Linux and
+    // SO_NOSIGPIPE on macOS, without changing process-wide signal handlers.
     method_.reset(BIO_meth_new(0, "crPhotos socket"));
     if (!method_ || !ssl_) return;
     BIO_meth_set_write(method_.get(), [](BIO* bio, const char* data, int size) {
@@ -1367,18 +1367,35 @@ std::string Advertisement(const State& state, uint16_t port,
   return out;
 }
 
-void Discovery(std::shared_ptr<State> state, uint16_t port) {
+void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::WILL_BLOCK);
   auto socket_fd = CreateSocket(SOCK_DGRAM);
   if (!socket_fd.is_valid()) return;
-  const int one = 1, ttl = 255;
-  SetOption(socket_fd.get(), SOL_SOCKET, SO_REUSEADDR, one);
-  SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_TTL, ttl);
+  const int one = 1;
+#if BUILDFLAG(IS_MAC)
+  const unsigned char ttl = 255;
+  // Bonjour's mDNSResponder already owns UDP 5353 on macOS. SO_REUSEPORT
+  // allows each multicast listener to receive its own copy of the packets.
+  if (SetOption(socket_fd.get(), SOL_SOCKET, SO_REUSEPORT, one) != 0) {
+    PLOG(ERROR) << "Could not share the nearby discovery port";
+    return;
+  }
+#else
+  const int ttl = 255;
+#endif
+  if (SetOption(socket_fd.get(), SOL_SOCKET, SO_REUSEADDR, one) != 0 ||
+      SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_TTL, ttl) != 0) {
+    LOG(ERROR) << "Could not configure nearby discovery: " << SocketError();
+    return;
+  }
   sockaddr_in bind_address{};
   bind_address.sin_family = AF_INET;
   bind_address.sin_port = htons(5353);
   if (bind(socket_fd.get(), reinterpret_cast<sockaddr*>(&bind_address),
-           sizeof(bind_address)) != 0) return;
+           sizeof(bind_address)) != 0) {
+    LOG(ERROR) << "Could not bind nearby discovery port: " << SocketError();
+    return;
+  }
   sockaddr_in multicast{};
   multicast.sin_family = AF_INET;
   multicast.sin_port = htons(5353);
@@ -1389,13 +1406,29 @@ void Discovery(std::shared_ptr<State> state, uint16_t port) {
     if (SetOption(socket_fd.get(), IPPROTO_IP, IP_ADD_MEMBERSHIP, membership) == 0)
       interfaces.push_back(local);
   }
+  if (interfaces.empty()) return;
+  {
+    base::AutoLock lock(state->lock);
+    if (state->stop) return;
+    state->snapshot.discovery_ready = true;
+  }
+  auto interface_addresses = [](const std::vector<in_addr>& addresses) {
+    std::set<uint32_t> result;
+    for (const auto& address : addresses) result.insert(address.s_addr);
+    return result;
+  };
+  const auto joined_addresses = interface_addresses(interfaces);
   auto publish = [&](uint32_t lifetime) {
+    bool sent = false;
     for (in_addr local : interfaces) {
-      SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_IF, local);
+      if (SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_IF, local) != 0)
+        continue;
       const std::string bytes = Advertisement(*state, port, local, lifetime);
-      sendto(socket_fd.get(), bytes.data(), static_cast<int>(bytes.size()), kSendFlags,
-             reinterpret_cast<sockaddr*>(&multicast), sizeof(multicast));
+      if (sendto(socket_fd.get(), bytes.data(), static_cast<int>(bytes.size()), kSendFlags,
+                 reinterpret_cast<sockaddr*>(&multicast), sizeof(multicast)) ==
+          static_cast<int>(bytes.size())) sent = true;
     }
+    return sent;
   };
   struct Seen { NearbySharing::Peer peer; base::TimeTicks expires; };
   std::map<std::string, Seen> seen;
@@ -1405,7 +1438,10 @@ void Discovery(std::shared_ptr<State> state, uint16_t port) {
   while (!state->stop) {
     const auto now = base::TimeTicks::Now();
     if (now - last_sent >= base::Seconds(5)) {
-      publish(15);
+      // Recreate the socket and memberships after link/address changes. This
+      // also retries interfaces whose initial multicast join failed.
+      if (interface_addresses(LocalAddresses()) != joined_addresses) break;
+      if (!publish(15)) break;
       last_sent = now;
     }
     PollFd pfd{socket_fd.get(), POLLIN, 0};
@@ -1524,6 +1560,26 @@ void Discovery(std::shared_ptr<State> state, uint16_t port) {
     }
   }
   publish(0);
+}
+
+void Discovery(std::shared_ptr<State> state, uint16_t port) {
+  while (!state->stop) {
+    {
+      base::AutoLock lock(state->lock);
+      state->snapshot.discovery_ready = false;
+      state->snapshot.peers.clear();
+      state->identities.clear();
+    }
+    DiscoveryAttempt(state, port);
+    {
+      base::AutoLock lock(state->lock);
+      state->snapshot.discovery_ready = false;
+      state->snapshot.peers.clear();
+    }
+    // Retry bind/join failures and offline startup without spinning, while
+    // allowing Disable() to cancel the retry promptly.
+    for (int i = 0; i < 25 && !state->stop; ++i) Poll(nullptr, 0, 200);
+  }
 }
 
 bool IsPrivateAddress(in_addr address) {
@@ -1970,13 +2026,13 @@ void Run(std::shared_ptr<State> state) {
     }
   }
 }
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 }  // namespace
 
 NearbySharing::NearbySharing()
     : state_(std::make_shared<State>()), trust_(std::make_shared<TrustStore>()) {
   state_->trust = trust_;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock()},
                             base::BindOnce(&LoadTrust, trust_));
   const auto preferences = GetNearbySharingPreferences();
@@ -1990,7 +2046,7 @@ NearbySharing::NearbySharing()
 NearbySharing::~NearbySharing() { Disable(); }
 std::vector<NearbySharing::LocalAddress> NearbySharing::GetLocalIPv4Addresses() {
   std::vector<LocalAddress> result;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   if (!nearby::InitializeSockets()) return result;
   for (const auto& entry : nearby::LocalInterfaces(false)) {
     const auto address = entry.address;
@@ -2032,7 +2088,7 @@ bool NearbySharing::IsValidConfiguration(std::string_view name,
   if (parts.size() < 2 || parts.front().size() != 2 ||
       parts.front().back() != L':' || directory.ReferencesParent()) return false;
 #endif
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   return SafeDeviceName(name) && directory.IsAbsolute();
 #else
   return false;
@@ -2044,7 +2100,7 @@ void NearbySharing::Enable(std::string name, base::FilePath directory, int avata
   Disable();
   state_ = std::make_shared<State>();
   state_->trust = trust_;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   state_->name = std::move(name);
   state_->avatar = avatar >= 0 && avatar < kAvatarCount ? avatar : 0;
   const auto custom_avatar = GetNearbySharingPreferences().custom_avatar;
@@ -2062,10 +2118,14 @@ void NearbySharing::Enable(std::string name, base::FilePath directory, int avata
         base::AutoLock lock(state->lock);
         if (!state->stop) state->snapshot.connect_peers = std::move(peers);
       }, state_));
-  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-                           base::BindOnce(&Run, state_));
-  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-                           base::BindOnce(&ProbePhones, state_));
+  // Phone sends and discovery verification both destroy a ConnectClient,
+  // joining its IO thread. MayBlock permits IO but does not permit that join.
+  base::ThreadPool::PostTask(FROM_HERE,
+      {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&Run, state_));
+  base::ThreadPool::PostTask(FROM_HERE,
+      {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(&ProbePhones, state_));
 #else
   state_->snapshot.stage = Stage::kError;
 #endif
@@ -2091,6 +2151,7 @@ void NearbySharing::Disable() {
   connect_discovery_.reset();
   base::AutoLock lock(state_->lock);
   state_->snapshot.enabled = false;
+  state_->snapshot.discovery_ready = false;
   state_->snapshot.busy = false;
   state_->snapshot.port = 0;
   state_->snapshot.stage = Stage::kOff;
@@ -2103,7 +2164,7 @@ NearbySharing::Snapshot NearbySharing::GetSnapshot() const {
   {
     base::AutoLock lock(state_->lock);
     snapshot = state_->snapshot;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     // Read current identity proofs instead of waiting for the next mDNS tick.
     const auto now = base::TimeTicks::Now();
     for (auto& peer : snapshot.peers) {
@@ -2235,7 +2296,7 @@ std::vector<NearbySharing::TrustedDevice> NearbySharing::GetTrustedDevices() con
   return devices;
 }
 void NearbySharing::ForgetTrustedDevice(std::string fingerprint) {
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   {
     base::AutoLock lock(trust_->lock);
     trust_->revoked.insert(fingerprint);

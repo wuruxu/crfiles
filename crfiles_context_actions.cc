@@ -15,7 +15,11 @@
 #include "ui/gfx/geometry/size.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_MAC)
+#include "crFiles/crfiles_mac.h"
+#endif
 #if BUILDFLAG(IS_LINUX)
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
@@ -36,12 +40,14 @@
 #endif
 namespace crfiles {
 namespace {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 gfx::ImageSkia MenuIcon(gfx::ImageSkia image) {
   if (image.isNull()) return {};
   auto resized = gfx::ImageSkiaOperations::CreateResizedImage(image, skia::ImageOperations::RESIZE_BEST, gfx::Size(18, 18));
   resized.MakeThreadSafe();
   return resized;
 }
+#endif
 #if BUILDFLAG(IS_LINUX)
 std::string KeyString(GKeyFile* file, const char* section, const char* key) {
   gchar* value = g_key_file_get_string(file, section, key, nullptr);
@@ -153,7 +159,9 @@ gfx::ImageSkia ApplicationIcon(IAssocHandler* handler) {
 }
 std::vector<FileApplication> FileApplications(const base::FilePath& path) {
   std::vector<FileApplication> apps;
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_MAC)
+  apps = FileApplicationsMac(path);
+#elif BUILDFLAG(IS_LINUX)
   const auto icon_directories = ApplicationIconDirectories();
   GFile* file = g_file_new_for_path(path.value().c_str());
   GFileInfo* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
@@ -256,7 +264,15 @@ bool OpenFileWith(const base::FilePath& path, const std::string& application) {
     }
   }
 #elif BUILDFLAG(IS_MAC)
-  ok = base::LaunchProcess(std::vector<std::string>{"/usr/bin/open", path.value()}, base::LaunchOptions()).IsValid();
+  std::vector<std::string> command{"/usr/bin/open"};
+  if (!application.empty()) {
+    if (!base::FilePath(application).IsAbsolute()) return false;
+    command.insert(command.end(), {"-a", application});
+  }
+  command.push_back(path.value());
+  auto process = base::LaunchProcess(command, base::LaunchOptions());
+  int exit_code = -1;
+  ok = process.IsValid() && process.WaitForExitWithTimeout(base::Seconds(10), &exit_code) && exit_code == 0;
 #endif
   if (ok) log.Succeed();
   return ok;

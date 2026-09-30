@@ -12,6 +12,8 @@
 #include "base/files/file_util.h"
 #include "base/i18n/case_conversion.h"
 #include "base/no_destructor.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/string_util.h"
@@ -221,12 +223,12 @@ class VideoMetadataSearch {
   bool ReadBox(uint64_t offset, uint64_t end, Box* box) {
     if (end - offset < 8) return false;
     std::string header;
-    if (!ReadAt(file_, offset, 8, &header)) return false;
+    if (!ReadAt(*file_, offset, 8, &header)) return false;
     box->type = header.substr(4, 4);
     uint64_t size = Big32(header);
     uint64_t header_size = 8;
     if (size == 1) {
-      if (end - offset < 16 || !ReadAt(file_, offset + 8, 8, &header)) return false;
+      if (end - offset < 16 || !ReadAt(*file_, offset + 8, 8, &header)) return false;
       size = Big64(header); header_size = 16;
     } else if (size == 0) {
       size = end - offset;
@@ -239,7 +241,7 @@ class VideoMetadataSearch {
   bool ReadPayload(uint64_t start, uint64_t end, size_t limit, std::string* data) {
     const uint64_t size = end - start;
     if (size > limit || size > kMetadataLimit - metadata_bytes_) { *skipped_ = true; return false; }
-    if (!ReadAt(file_, start, static_cast<size_t>(size), data)) { *skipped_ = true; return false; }
+    if (!ReadAt(*file_, start, static_cast<size_t>(size), data)) { *skipped_ = true; return false; }
     metadata_bytes_ += static_cast<size_t>(size);
     return true;
   }
@@ -277,7 +279,7 @@ class VideoMetadataSearch {
       if (type == 0 && (payload.starts_with(std::string_view("Exif\0\0", 6)) ||
                         payload.starts_with("II") || payload.starts_with("MM"))) {
         if (payload.starts_with(std::string_view("Exif\0\0", 6))) payload.remove_prefix(6);
-        return MatchExif(payload, query_);
+        return MatchExif(payload, *query_);
       }
       value = VideoText(payload, type);
     } else {
@@ -288,7 +290,7 @@ class VideoMetadataSearch {
         text.remove_prefix(4);
       value = VideoText(text, 0);
     }
-    return value.empty() ? std::string() : SearchFragment(name + ": " + value, query_);
+    return value.empty() ? std::string() : SearchFragment(name + ": " + value, *query_);
   }
   std::string MatchDates(const Box& box) {
     std::string header;
@@ -313,14 +315,14 @@ class VideoMetadataSearch {
       time.UTCExplode(&exploded);
       const auto value = base::StringPrintf("%04d-%02d-%02d %02d:%02d:%02d UTC",
           exploded.year, exploded.month, exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
-      auto match = SearchFragment("Video." + box.type + (index == 0 ? ".CreateDate: " : ".ModifyDate: ") + value, query_);
+      auto match = SearchFragment("Video." + box.type + (index == 0 ? ".CreateDate: " : ".ModifyDate: ") + value, *query_);
       if (!match.empty()) return match;
     }
     return {};
   }
   std::string Scan(uint64_t start, uint64_t end, int depth, bool in_ilst,
                    const std::string& item_name) {
-    for (uint64_t offset = start; offset < end && !control_.Interrupted(); ) {
+    for (uint64_t offset = start; offset < end && !control_->Interrupted(); ) {
       if (base::TimeTicks::Now() >= deadline_ || ++boxes_ > 4096) { *skipped_ = true; break; }
       Box box;
       if (!ReadBox(offset, end, &box)) { *skipped_ = true; break; }
@@ -336,7 +338,7 @@ class VideoMetadataSearch {
         if (ReadPayload(box.payload, box.end, 64 * 1024, &data)) {
           std::string_view exif(data);
           if (exif.starts_with(std::string_view("Exif\0\0", 6))) exif.remove_prefix(6);
-          auto match = MatchExif(exif, query_);
+          auto match = MatchExif(exif, *query_);
           if (!match.empty()) return match;
         }
         continue;
@@ -360,7 +362,7 @@ class VideoMetadataSearch {
           // ISO FullBox metadata has version/flags; Android/QuickTime files
           // also use an unversioned container starting directly with hdlr.
           std::string prefix;
-          if (box.end - child_start < 4 || !ReadAt(file_, child_start, 4, &prefix)) {
+          if (box.end - child_start < 4 || !ReadAt(*file_, child_start, 4, &prefix)) {
             *skipped_ = true; continue;
           }
           if (Big32(prefix) == 0) {
@@ -388,10 +390,10 @@ class VideoMetadataSearch {
     }
     return {};
   }
-  base::File& file_;
-  const std::u16string& query_;
-  const SearchControl& control_;
-  bool* skipped_;
+  raw_ref<base::File> file_;
+  raw_ref<const std::u16string> query_;
+  raw_ref<const SearchControl> control_;
+  raw_ptr<bool> skipped_;
   base::TimeTicks deadline_;
   size_t boxes_ = 0, metadata_bytes_ = 0;
   std::vector<std::string> keys_;

@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/allocator/partition_alloc_support.h"
 #include "base/at_exit.h"
 #include "base/base_paths.h"
 #include "base/base_switches.h"
@@ -25,6 +26,8 @@
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/memory/discardable_memory_allocator.h"
+#include "base/memory_coordinator/dummy_memory_consumer_registry.h"
+#include "base/memory_coordinator/memory_consumer_registry.h"
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_monitor_device_source.h"
@@ -62,6 +65,10 @@
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(IS_MAC)
+#include "crFiles/crfiles_mac.h"
+#endif
 
 #if BUILDFLAG(ENABLE_DESKTOP_AURA)
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
@@ -112,7 +119,7 @@ std::string ResolveLocale(std::string_view locale) {
   if (IsSupportedLocale(canonical)) {
     return canonical;
   }
-  const std::string_view language = l10n_util::GetLanguage(canonical);
+  const std::string_view language = std::string_view(canonical).substr(0, canonical.find('-'));
   if (language == "zh") {
     if (canonical.find("HK") != std::string::npos) {
       return "zh-HK";
@@ -164,7 +171,11 @@ class CrFilesViewsDelegate : public views::ViewsDelegate {
   void OnBeforeWidgetInit(
       views::Widget::InitParams* params,
       views::internal::NativeWidgetDelegate* delegate) override {
-#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+#if BUILDFLAG(IS_MAC)
+    if (!params->native_widget && params->name == "crfiles_window") {
+      params->native_widget = crfiles::CreateCrFilesNativeWidgetMac(delegate);
+    }
+#elif BUILDFLAG(ENABLE_DESKTOP_AURA)
     if (params->native_widget) {
       return;
     }
@@ -177,6 +188,11 @@ class CrFilesViewsDelegate : public views::ViewsDelegate {
     }
 #endif
   }
+#if BUILDFLAG(IS_MAC)
+  ui::ContextFactory* GetContextFactory() override {
+    return libcr::VizContextFactory::Get();
+  }
+#endif
   std::string GetApplicationName() override { return "crFiles"; }
 };
 
@@ -217,19 +233,29 @@ class CrFilesOzoneGpuConnection {
 #endif
 
 int RunApplication() {
+#if BUILDFLAG(IS_MAC)
+  crfiles::InitializeCrFilesApplicationMac();
+#endif
 #if BUILDFLAG(IS_WIN)
   ui::ScopedOleInitializer ole_initializer;
 #endif
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   base::debug::EnableInProcessStackDumping();
   command_line->AppendSwitch("single-process");
+  // This standalone UI process does not run ContentMain's allocator setup.
+  auto* partition_alloc = base::allocator::PartitionAllocSupport::Get();
+  const std::string process_type = command_line->GetSwitchValueASCII("type");
+  partition_alloc->ReconfigureEarlyish(process_type);
   std::string enabled_features =
       command_line->GetSwitchValueASCII(switches::kEnableFeatures);
   base::FeatureList::InitInstance(
       enabled_features,
       command_line->GetSwitchValueASCII(switches::kDisableFeatures));
+  // Enable partition thread caches before starting the Viz compositor thread.
+  partition_alloc->ReconfigureAfterFeatureListInit(process_type);
   base::SingleThreadTaskExecutor executor(base::MessagePumpType::UI);
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("crFiles");
+  partition_alloc->ReconfigureAfterTaskRunnerInit(process_type);
   base::ScopedClosureRunner thread_pool_shutdown(base::BindOnce([] {
     base::ThreadPoolInstance::Get()->Shutdown();
   }));
@@ -262,7 +288,7 @@ int RunApplication() {
   CrFilesOzoneGpuConnection ozone_gpu_connection;
   ozone_gpu_connection.Initialize();
 #endif
-#if !BUILDFLAG(IS_WIN)
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_MAC)
   gl::init::InitializeGLOneOff(gl::GpuPreference::kDefault);
 #endif
 #if BUILDFLAG(IS_LINUX)
@@ -279,11 +305,17 @@ int RunApplication() {
       std::make_unique<base::PowerMonitorDeviceSource>());
 #if defined(USE_AURA)
   std::unique_ptr<aura::Env> env = aura::Env::CreateInstance();
+#endif
+  // Both Aura and Cocoa windows need a compositor context factory.
   libcr::VizContextFactory context_factory;
+#if defined(USE_AURA)
   env->set_context_factory(&context_factory);
   wm::WMState wm_state;
 #endif
-#if BUILDFLAG(ENABLE_DESKTOP_AURA)
+#if BUILDFLAG(IS_MAC)
+  // Cocoa window bridges require a registered Screen when adding observers.
+  display::ScopedNativeScreen screen;
+#elif BUILDFLAG(ENABLE_DESKTOP_AURA)
   std::unique_ptr<display::Screen> screen = views::CreateDesktopScreen();
 #endif
   views::LayoutProvider layout_provider;
@@ -311,6 +343,9 @@ int CrFilesEntry(int argc, char** argv) {
   std::setlocale(LC_NUMERIC, "C");
 #endif
   base::AtExitManager at_exit;
+  // Standalone processes must register memory consumers before creating them.
+  base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
+      memory_consumer_registry;
   mojo::core::Configuration mojo_configuration;
   mojo_configuration.is_broker_process = true;
   mojo::core::Init(mojo_configuration);

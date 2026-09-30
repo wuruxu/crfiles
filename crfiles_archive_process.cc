@@ -15,6 +15,7 @@
 #include <unistd.h>
 #endif
 #include "base/check.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
@@ -161,12 +162,12 @@ class ZipWriter : public zip::WriterDelegate {
   ~ZipWriter() override;
   bool PrepareOutput() override { return file_.IsValid(); }
   bool WriteBytes(base::span<const uint8_t> data) override {
-    return output_.AddBytes(data.size()) && file_.WriteAtCurrentPosAndCheck(data);
+    return output_->AddBytes(data.size()) && file_.WriteAtCurrentPosAndCheck(data);
   }
   void SetTimeModified(const base::Time& time) override { file_.SetTimes(time, time); }
  private:
   base::File file_;
-  Output& output_;
+  raw_ref<Output> output_;
 };
 ZipWriter::ZipWriter(base::File file, Output& output) : file_(std::move(file)), output_(output) {}
 ZipWriter::~ZipWriter() = default;
@@ -192,13 +193,13 @@ class SevenZipOutput : public seven_zip::Delegate {
   ~SevenZipOutput() override;
   void OnOpenError(seven_zip::Result) override { ok = false; }
   base::File OnTempFileRequest() override {
-    if (!scratch_.CreateUniqueTempDirUnderPath(output_.ScratchRoot())) { ok = false; return {}; }
+    if (!scratch_.CreateUniqueTempDirUnderPath(output_->ScratchRoot())) { ok = false; return {}; }
     return base::File(scratch_.GetPath().AppendASCII("solid"),
         base::File::FLAG_CREATE | base::File::FLAG_READ | base::File::FLAG_WRITE);
   }
   bool OnEntry(const seven_zip::EntryInfo& entry, base::span<uint8_t>& bytes) override {
-    if (entry.is_encrypted || !output_.AddBytes(entry.file_size)) return ok = false;
-    const auto target = output_.Entry(entry.file_path, false);
+    if (entry.is_encrypted || !output_->AddBytes(entry.file_size)) return ok = false;
+    const auto target = output_->Entry(entry.file_path, false);
     if (target.empty()) return ok = false;
     base::File file(target, base::File::FLAG_CREATE | base::File::FLAG_READ | base::File::FLAG_WRITE);
     if (!file.IsValid()) return ok = false;
@@ -211,7 +212,7 @@ class SevenZipOutput : public seven_zip::Delegate {
     return true;
   }
   bool OnDirectory(const seven_zip::EntryInfo& entry) override {
-    return ok = !output_.Entry(entry.file_path, true).empty();
+    return ok = !output_->Entry(entry.file_path, true).empty();
   }
   bool EntryDone(seven_zip::Result result, const seven_zip::EntryInfo&) override {
     mapping_.reset();
@@ -219,7 +220,7 @@ class SevenZipOutput : public seven_zip::Delegate {
   }
   bool ok = true;
  private:
-  Output& output_;
+  raw_ref<Output> output_;
   base::ScopedTempDir scratch_;
   std::optional<base::MemoryMappedFile> mapping_;
 };
@@ -232,18 +233,18 @@ class RarWriter : public third_party_unrar::RarWriterDelegate {
   RarWriter(base::File file, Output& output, bool& ok);
   ~RarWriter() override;
   bool Write(base::span<const uint8_t> data) override {
-    if (!ok_) return false;
+    if (!*ok_) return false;
     if (fresh_) {
-      if (file_.Seek(base::File::FROM_BEGIN, 0) != 0 || !file_.SetLength(0)) return ok_ = false;
+      if (file_.Seek(base::File::FROM_BEGIN, 0) != 0 || !file_.SetLength(0)) return *ok_ = false;
       fresh_ = false;
     }
-    return ok_ = output_.AddBytes(data.size()) && file_.WriteAtCurrentPosAndCheck(data);
+    return *ok_ = output_->AddBytes(data.size()) && file_.WriteAtCurrentPosAndCheck(data);
   }
   void Close() override { fresh_ = true; }
  private:
   base::File file_;
-  Output& output_;
-  bool& ok_;
+  raw_ref<Output> output_;
+  raw_ref<bool> ok_;
   bool fresh_ = true;
 };
 RarWriter::RarWriter(base::File file, Output& output, bool& ok) : file_(std::move(file)), output_(output), ok_(ok) {}

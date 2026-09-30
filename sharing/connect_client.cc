@@ -42,6 +42,7 @@
 #include "net/base/isolation_info.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/upload_bytes_element_reader.h"
 #include "net/base/upload_file_element_reader.h"
 #include "net/base/upload_progress.h"
@@ -219,7 +220,8 @@ class HttpRequest : public net::URLRequest::Delegate {
     builder.SetCertVerifier(std::make_unique<PinVerifier>(peer.address, pin));
     context_ = builder.Build();
     request_ = context_->CreateRequest(GURL("https://" + peer.address + ":" +
-        base::NumberToString(peer.port) + path), net::DEFAULT_PRIORITY, this, Annotation());
+        base::NumberToString(peer.port) + path), net::DEFAULT_PRIORITY, this, Annotation(),
+        net::handles::kInvalidNetworkHandle);
     request_->SetLoadFlags(net::LOAD_DISABLE_CACHE);
     // This adds LOAD_DO_NOT_SAVE_COOKIES, which must not be cleared by a
     // subsequent SetLoadFlags() call (URLRequest enforces this with CHECK).

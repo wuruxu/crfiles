@@ -6,17 +6,57 @@ controls, menu, SVG renderer, themes and Viz compositor.
 
 ## Interface
 
+- History creates rows only for the visible region and nearby overscan, with
+  lazily measured heights for wrapped paths and search highlights. Unchanged
+  History tabs reuse their loaded data and scroll position. More appends 200
+  records using a `(time, id)` cursor; a changed journal invalidates pagination
+  and reloads the first page instead of mixing database versions.
+- The macOS application menu includes About crFiles, Settings (`⌘,`), Hide
+  crFiles (`⌘H`), and Quit crFiles (`⌘Q`). Quit follows the normal window
+  shutdown path so background services and application state are cleaned up.
+- On macOS, opening a system-recognized package (including `.app` bundles)
+  launches its default application. Use **Show Package Contents** in its context
+  menu to browse it as a directory. Search results follow the same opening rule.
+- The macOS sidebar includes Applications, opening `/Applications`. Application
+  bundles in directory views and applications in Open With menus use native
+  application icons, loaded on background workers with generic-icon fallback.
+- macOS ordinary copy/move operations preserve symbolic links, including dangling
+  links, without copying their targets. Copies use `copyfile` to preserve package
+  metadata and permissions. Same-volume moves use an atomic rename; cross-volume
+  moves retain the source and report partial completion as before. Archive input
+  and extraction checks retain their separate link policy.
+- macOS defaults to native traffic lights, tabs, and the options menu in a
+  single titlebar row. Tabs reserve space for the system controls, without
+  custom caption buttons or their separator. Settings → Interface → “Enable windows titlebar style” opts
+  into the custom titlebar (off by default; restart crFiles to apply).
 - `crFiles.svg` is the window, launcher and Windows executable icon. Regenerate
   the committed Windows ICO with `python3 crFiles/tools/generate_windows_icon.py`
   from the Chromium root (Inkscape and Pillow required).
 - The 36-pixel custom frame follows crPlayer, including system/light/dark theme,
   fullscreen, Settings, About and Linux Install on device menu entries.
-- The restored window has 12-pixel rounded corners and a client-drawn shadow;
-  maximizing or entering fullscreen removes the shadow margins and corner rounding.
-- The restored window has 12-pixel rounded corners and a client-drawn shadow;
-  maximizing or entering fullscreen removes the shadow margins and corner rounding.
+- macOS uses the system window shadow. Other platforms draw the restored
+  window's shadow and 12-pixel rounded corners; maximizing or entering fullscreen
+  removes the shadow margins and corner rounding.
 - Chrome-style tabs occupy the titlebar and meet the navigation surface.
-  New Tab uses only the add icon, with no button background. In fullscreen, moving to the top edge reveals a circular
+  Drag tabs horizontally to reorder them without changing the selected page;
+  neighboring tabs slide aside and the dragged tab animates into its final slot.
+  Tab widths adapt from 184 down to 80 DIPs as space shrinks, with horizontal
+  scrolling retained when the minimum widths no longer fit. Order is saved in
+  the workspace.
+  Unpinned inactive tabs show their close button only while hovered; the active
+  unpinned tab keeps it visible. Pinned tabs have no close button. The New Tab
+  button follows the last tab when space permits and stays at the right edge
+  when tabs overflow, with 2 DIP horizontal margins and a centered 14 DIP icon
+  inside a compact 25 DIP button.
+  Its background highlights only on hover or press.
+  Selecting or adding a tab, and resizing the strip, reveals the active tab
+  after layout. Tab scrolling stays synchronized with layout so newly added tabs
+  are revealed using the updated content width, without waiting for a compositor
+  commit. Tab context
+  menus offer New Tab, Pin/Unpin, Close, and Close other tabs. Pinned tabs stay
+  ahead of ordinary tabs, can be reordered within their group, and survive Close
+  other tabs; their pinned state is saved with the workspace.
+  New Tab uses the add icon. In fullscreen, moving to the top edge reveals a circular
   exit-fullscreen button with a slide and fade animation. Each
   tab keeps its directory, navigation history, selected files, view mode and
   scroll position. Tabs overflow horizontally. View options are independent per tab.
@@ -34,6 +74,12 @@ controls, menu, SVG renderer, themes and Viz compositor.
   Ctrl+L toggles the sidebar and divider together without losing their width.
   Its selected location retains a borderless half-capsule highlight independently
   of keyboard focus, and selection follows each tab's current directory.
+  Selected locations and bookmarks use the same secondary-container background
+  and text colors as Settings navigation.
+  Built-in sidebar locations offer Open in New Tab and Properties in their
+  context menus. Sidebar and bookmark Properties reuse the file view's layout,
+  including the path, type, modification time, and asynchronously calculated
+  directory size.
   Desktop uses the system desktop directory, including redirected locations.
   Trash is managed inside crFiles, with Move to Trash and Restore actions.
   Items retain their original paths in per-item metadata. Restore refuses an
@@ -56,16 +102,37 @@ controls, menu, SVG renderer, themes and Viz compositor.
   hover/focus highlights and click ripples.
 - The combined view control toggles list/icon mode on the left and opens its
   options menu on the right. Neither button takes focus. The first menu section
-  has a discrete 22 / 32 / 48 / 64 / 96 / 128-pixel icon-size slider, followed by sort radio buttons (A-Z, Z-A, newest
-  modification, oldest modification, largest size, MIME type), a hidden-files
-  checkbox and an expandable Visible Columns section. Folders stay before files;
-  equal sort keys are resolved by name. Name remains visible; Size, Type and Last
-  Modified columns can be toggled. Drag a header divider to resize its column;
-  widths are retained per tab and drag updates are coalesced to 16 ms. The header
-  stays 36 pixels tall while the size slider updates icons and row heights in
+  has a discrete 22 / 32 / 48 / 64 / 96 / 128-pixel icon-size slider, a hidden-files
+  checkbox and an expandable Visible Columns section. Sorting is controlled by
+  the list headers or the folder background context menu's Sort by submenu. Folders stay before files;
+  equal sort keys are resolved by name (reversed for descending Type sorting). Name remains visible; Size, Type and Last
+  Modified columns can be toggled. Created and Permissions are also available
+  in Visible Columns, both disabled by default; their visibility and widths are
+  saved per tab. Single-item Properties shows both fields too. macOS uses birth
+  time and POSIX mode bits (including setuid/setgid/sticky flags); Linux uses
+  statx birth time where supported. Windows supplies creation time; POSIX
+  permissions are unavailable there. Unavailable metadata is shown as a dash. Drag a header divider to resize its column;
+  widths are retained per tab and drag updates are coalesced to 16 ms. Dividers
+  use a 2 DIP line with the sidebar divider colors and an 8 DIP drag target.
+  The Back, Forward, Up and Refresh buttons use circular feedback, centered
+  20 DIP icons and 4 DIP padding in 28 DIP buttons.
+  Every header toggles ascending/descending sorting and shows an up/down arrow
+  on the right of the active sort column. Header text has 6 DIP horizontal padding; vertical padding and inter-column gaps
+  are zero; hover/press highlights are rectangular and dividers span the full
+  header height. Their drag targets overlap the buttons
+  so highlights touch the separator without a gap. List sizes use localized B, KB, MB, GB and larger units.
+  The header
+  stays 28 pixels tall while the size slider updates icons and row heights in
   both list and icon modes.
+  List rows retain their selection background with an animated primary-color
+  hover tint and stronger press feedback.
   All columns share row selection, click feedback and double-click opening. Narrow list views
   scroll horizontally.
+- The folder background context menu contains New Folder, Sort by, Paste,
+  Select All, Open in Terminal and Properties, with separators between groups.
+  Sort by exposes every saved sort mode and marks the current choice; it works
+  in both list and icon views. Select All selects all displayed entries, including
+  offscreen rows. Terminal and Properties target the current directory.
 - File and folder icons use the bundled, unmodified Adwaita SVG assets selected
   by MIME type. No system icon directory is scanned at runtime. Workers rasterize
   only the requested size, with a shared memory cache and no SVG IO under the
@@ -758,3 +825,66 @@ Apply it from the Chromium source root with
 `git apply crFiles/patches/unrar-extraction.patch` (the current workspace already
 contains these changes). Both Linux and Windows packages include the UnRAR and
 LZMA SDK license texts.
+
+## macOS integration and data handling
+
+- Open With lists the applications registered with macOS and launches the chosen
+  application. Video thumbnails first use AVFoundation (including system HEVC
+  support) inside the existing disposable helper process, with FFmpeg fallback
+  for formats the native decoder cannot read. The parent still enforces its
+  decode timeout and cancellation policy.
+- crFiles Trash is private to crFiles. It is **not Finder's Trash**. Restore and
+  Empty Trash affect only crFiles' trash entries; Finder cannot restore them.
+- Finder file URLs can be pasted into crFiles. Command+C/V copies and pastes;
+  Command+Option+V requests a move (subject to the cross-volume limitation below).
+  Command+X/V remains available for internal cut/paste. Command+A selects files,
+  Command+click adds to selection, and Command+Delete sends selection to Trash.
+  Application shortcuts use Command, while tab cycling remains Control+Tab.
+- Built-in Pictures and Videos bookmarks resolve through macOS user-directory
+  APIs, including previously saved built-in bookmarks; custom bookmarks remain
+  unchanged. Videos normally resolves to ~/Movies.
+- Same-filesystem moves use an atomic no-overwrite rename. If atomic movement
+  fails, crFiles can publish a copy, but keeps the originals and reports the
+  move as incomplete. It does not recursively delete a live directory after
+  copying, because other applications may have written new data during the copy.
+  Verify the destination before deciding what to do with the retained originals.
+
+## Regression verification (build/run only when authorized)
+
+`crfiles_dialog_unittests` covers deferred bubble destruction and discarding a
+queued close after the original bubble has been replaced. These tests need an
+explicit build and execution; adding the target does not establish a passing run.
+
+Manual integration checks:
+
+1. Open view options, new-folder, settings avatar, archive, and sharing bubbles.
+   Click outside, switch applications, replace a bubble, then close the parent.
+   Check for crashes and dangling-pointer errors at exit.
+2. Move within a filesystem and verify the original disappears. Move across
+   filesystems while another process changes the source or adds a child. Verify
+   originals remain, the move is reported incomplete, and existing destination
+   files are never overwritten.
+3. Start offline, reconnect, switch Wi-Fi, and attach/detach Ethernet. Nearby
+   discovery should retry automatically and discard stale peers. Deny network
+   access and check the unavailable message; allow it again and verify recovery.
+4. Use Open With to select a non-default application. Test a missing application
+   and an unreadable file; a failed launch must not be logged as successful.
+5. Preview HEVC MP4/MOV, a rotated video, a short video, an unsupported container,
+   and corrupt input. Check thumbnail size/orientation and helper timeout behavior.
+6. Transfer files in both directions; reject pairing, cancel transfer, disconnect
+   a peer, and close/reopen the dialog. Verify received file hashes and that an
+   old prompt cannot act on a new session.
+
+### macOS integration regression checks
+
+- Copy files with spaces and non-ASCII names in Finder, then paste into crFiles;
+  verify contents, collision handling and that copying leaves the originals.
+- Use Command+Option+V on a same-volume disposable file, then test cross-volume
+  movement: the latter must retain the source and report partial completion.
+- Check Command shortcuts in file views and in an editing text field; text
+  editing must not trigger file operations. Control+Tab must still change tabs.
+- Reload a profile whose built-in Videos bookmark stored ~/Videos; verify it
+  opens the system Movies directory, while custom bookmarks are unchanged.
+- Move disposable files to crFiles Trash, restore them, and verify their contents.
+  Check restore collisions do not overwrite existing files. Empty crFiles Trash
+  and verify that Finder's system Trash remains unchanged.

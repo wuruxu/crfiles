@@ -16,6 +16,8 @@ struct PhoneSendProgress {
 };
 // Blocking transport adapter for the Nearby worker. Never calls Views. The
 // cancellation callback also covers shutdown and obsolete session generations.
+// Both functions require MayBlock and WithBaseSyncPrimitives task traits:
+// ConnectClient destruction joins its dedicated IO thread.
 // Read-only verification on a worker; unpaired devices cause no HTTPS request.
 void VerifyDiscoveredPhone(const ConnectPeer& peer, base::RepeatingCallback<bool()> canceled);
 void SendFilesToPhone(const ConnectPeer& peer, const std::vector<base::FilePath>& paths,

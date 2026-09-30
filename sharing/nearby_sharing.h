@@ -70,6 +70,7 @@ class NearbySharing {
   };
   struct Snapshot {
     bool enabled = false;
+    bool discovery_ready = false;
     bool busy = false;
     bool receiving = false;
     bool trust_error = false;

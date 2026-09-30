@@ -8,6 +8,7 @@
 #include "base/files/file.h"
 #include "base/functional/bind.h"
 #include "base/path_service.h"
+#include "base/memory/raw_ref.h"
 #include "base/process/kill.h"
 #include "base/process/launch.h"
 #include "base/run_loop.h"
@@ -59,12 +60,12 @@ namespace {
 class ProgressListener : public mojom::ArchiveProgressListener {
  public:
   explicit ProgressListener(ArchiveProgress& progress) : progress_(progress) {}
-  void OnProgress(uint64_t bytes) override { progress_.bytes = bytes; }
+  void OnProgress(uint64_t bytes) override { progress_->bytes = bytes; }
   void OnCompressionProgress(uint64_t bytes, uint64_t entries, const base::FilePath& path) override {
-    progress_.bytes = bytes; progress_.entries_done = entries; progress_.SetCurrentPath(path);
+    progress_->bytes = bytes; progress_->entries_done = entries; progress_->SetCurrentPath(path);
   }
  private:
-  ArchiveProgress& progress_;
+  raw_ref<ArchiveProgress> progress_;
 };
 using ArchiveRequest = base::OnceCallback<void(mojom::ArchiveDecoder*,
     mojo::PendingRemote<mojom::ArchiveProgressListener>, base::OnceCallback<void(bool, bool)>)>;

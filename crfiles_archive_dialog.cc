@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_archive_dialog.h"
+#include "crFiles/crfiles_dialog.h"
 #include "crFiles/crfiles_archive.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include <algorithm>
@@ -33,6 +34,11 @@
 #include "ui/views/bubble/bubble_frame_view.h"
 namespace crfiles {
 gfx::Rect GetArchiveBubbleBounds(views::BubbleDialogDelegate& bubble) {
+  auto* frame = bubble.GetBubbleFrameView();
+  const bool old_visible_arrow = frame->GetDisplayVisibleArrow();
+  // Creation and anchor updates can leave the border with Arrow::NONE. Only
+  // enable the visible arrow after selecting a concrete placement direction.
+  frame->SetDisplayVisibleArrow(false);
   auto* anchor_view = bubble.GetAnchorView();
   if (!anchor_view || !anchor_view->GetWidget()) return bubble.views::BubbleDialogDelegate::GetBubbleBounds();
   auto window = anchor_view->GetWidget()->GetClientAreaBoundsInScreen();
@@ -41,8 +47,6 @@ gfx::Rect GetArchiveBubbleBounds(views::BubbleDialogDelegate& bubble) {
   views::View::ConvertRectToScreen(anchor_view, &pane);
   pane.Inset(8);
   pane.Intersect(window);
-  auto* frame = bubble.GetBubbleFrameView();
-  frame->SetDisplayVisibleArrow(true);
   auto* border = frame->bubble_border();
   border->set_md_shadow_elevation(12);
   const auto old_arrow = border->arrow();
@@ -50,7 +54,8 @@ gfx::Rect GetArchiveBubbleBounds(views::BubbleDialogDelegate& bubble) {
   const auto anchor = bubble.GetAnchorRect();
   const auto client_size = bubble.GetWidget()->client_view()->GetPreferredSize({});
   auto finish = [&](gfx::Rect bounds) {
-    if (old_arrow != border->arrow() || old_offset != border->arrow_offset()) {
+    if (old_arrow != border->arrow() || old_offset != border->arrow_offset() ||
+        old_visible_arrow != frame->GetDisplayVisibleArrow()) {
       frame->InvalidateLayout(); frame->SchedulePaint();
     }
     return bounds;
@@ -63,6 +68,7 @@ gfx::Rect GetArchiveBubbleBounds(views::BubbleDialogDelegate& bubble) {
       for (const auto arrow : {views::BubbleBorder::TOP_CENTER, views::BubbleBorder::BOTTOM_CENTER,
                               views::BubbleBorder::LEFT_CENTER, views::BubbleBorder::RIGHT_CENTER}) {
         border->set_arrow(arrow); border->set_arrow_offset(0);
+        frame->SetDisplayVisibleArrow(true);
         auto bounds = frame->GetUpdatedWindowBounds(anchor, arrow, client_size, false);
         if (bounds.width() > area.width() || bounds.height() > area.height()) continue;
         const bool horizontal = views::BubbleBorder::is_arrow_on_horizontal(arrow);
@@ -76,6 +82,7 @@ gfx::Rect GetArchiveBubbleBounds(views::BubbleDialogDelegate& bubble) {
   }
   // If no side can accommodate the bubble, prioritize its contents over an
   // arrow pointing through the bubble. Do not shrink and clip its controls.
+  frame->SetDisplayVisibleArrow(false);
   border->set_arrow(views::BubbleBorder::NONE); border->set_arrow_offset(0);
   auto bounds = frame->GetUpdatedWindowBounds(anchor, views::BubbleBorder::NONE, client_size, false);
   bounds.set_x(std::clamp(bounds.x(), window.x(), std::max(window.x(), window.right() - bounds.width())));
@@ -93,7 +100,7 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
   void Show(std::unique_ptr<ArchiveDialog> self) {
     // Keep the delegate owned until the widget is destroyed. Native widget
     // ownership alone does not transfer ownership of a BubbleDialogDelegate.
-    widget_ = views::BubbleDialogDelegate::CreateBubble(this, base::BindOnce(
+    widget_ = CreateCrFilesBubble(this, base::BindOnce(
         [](std::unique_ptr<ArchiveDialog> dialog, views::Widget::ClosedReason) {
           dialog->StopUpdates();
           dialog->SetAnchorView(nullptr);
@@ -114,7 +121,14 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
     return icon_rect_.IsEmpty() ? views::BubbleDialogDelegate::GetAnchorRect() : icon_rect_;
   }
   gfx::Rect GetBubbleBounds() override { return GetArchiveBubbleBounds(*this); }
-  void OnViewIsDeleting(views::View*) override {
+  void OnViewHierarchyWillBeDeleted(views::View*) override {
+    // OnViewIsDeleting runs after children have already been freed. Release
+    // references while the observed contents still owns all of its controls.
+    ReleaseContents();
+  }
+
+ private:
+  void ReleaseContents() {
     StopUpdates();
     contents_observation_.Reset();
     password_ = nullptr;
@@ -124,7 +138,6 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
     conflict_controls_ = nullptr;
   }
 
- private:
   void UpdateAnchor() {
     const auto bounds = icon_bounds_.Run();
     const bool visible = !bounds.IsEmpty();
@@ -133,6 +146,8 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
     if (visible) icon_rect_ = bounds;
     // Virtual rows can be destroyed and recreated during scrolling or refresh.
     // Keep the task alive, but never point an arrow at a different file.
+    if (!visible && GetBubbleFrameView())
+      GetBubbleFrameView()->SetDisplayVisibleArrow(false);
     SetArrowWithoutResizing(visible ? views::BubbleBorder::TOP_CENTER : views::BubbleBorder::NONE);
     OnAnchorBoundsChanged();
   }
@@ -160,8 +175,12 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
     auto task = sources_.empty() ?
         base::BindOnce(&ExtractLocalArchive, archive_, destination_, same_name_folder_, std::move(password), progress_) :
         base::BindOnce(&CompressLocalFiles, sources_, archive_, progress_);
+    // Both archive operations wait for their IPC worker and join it before
+    // cleaning staging files. Extraction also waits for conflict decisions.
+    // MayBlock alone permits file I/O, not these base synchronization waits.
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
-        {base::MayBlock(), base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+        {base::MayBlock(), base::WithBaseSyncPrimitives(),
+         base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
         std::move(task),
         base::BindOnce([](base::WeakPtr<ArchiveDialog> dialog,
             base::OnceCallback<void(FileOperationResult)> completion, FileOperationResult result) {
@@ -358,8 +377,8 @@ ArchiveDialog::ArchiveDialog(views::View* anchor, base::FilePath archive, base::
     }, weak_.GetWeakPtr()));
   }
 ArchiveDialog::~ArchiveDialog() {
-    StopUpdates();
-    contents_observation_.Reset();
+    // Also cover destruction of the delegate before its widget/contents.
+    ReleaseContents();
     if (completion_) std::move(completion_).Run({});
   }
 }

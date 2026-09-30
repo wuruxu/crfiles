@@ -4,6 +4,7 @@
 #define CRFILES_TRASH_H_
 #include "base/files/file_path.h"
 namespace crfiles {
+// Private crFiles trash storage on all platforms.
 base::FilePath TrashRoot();
 // Blocking operations; callers must run on a file worker.
 bool MoveToTrash(const base::FilePath& path);

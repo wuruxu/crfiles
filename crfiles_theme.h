@@ -23,6 +23,9 @@ inline constexpr std::array<int, 4> kHistoryRetentionDays = {7, 30, 90, 365};
 enum class NavigationStyle { kMinimal = 0, kUnderline = 1, kRaised = 2 };
 NavigationStyle GetNavigationStyle();
 bool SetNavigationStyle(NavigationStyle style);
+// macOS titlebar preference, applied when the main window is created.
+bool GetWindowsTitlebarStyleEnabled();
+bool SetWindowsTitlebarStyleEnabled(bool enabled);
 struct FileViewPreferences {
   bool auto_hide_toolbar = true;
   bool animate_folders = true;
