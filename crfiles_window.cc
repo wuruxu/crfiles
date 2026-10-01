@@ -28,6 +28,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <utility>
 #include <map>
 #include <set>
 #include <vector>
@@ -875,6 +876,19 @@ class SidebarButton : public views::LabelButton {
     SchedulePaint();
   }
   void SetFeedback(float value) { feedback_ = value; SchedulePaint(); }
+  void SetBreathing(bool enabled) {
+    if (enabled == breathing_timer_.IsRunning()) return;
+    if (enabled) {
+      breathing_start_ = base::TimeTicks::Now();
+      breathing_alpha_ = 0.35f;
+      breathing_timer_.Start(FROM_HERE, base::Milliseconds(33), this,
+                            &SidebarButton::AnimateBreathing);
+    } else {
+      breathing_timer_.Stop();
+      breathing_alpha_ = 0.f;
+    }
+    SchedulePaint();
+  }
   void OnPaintBackground(gfx::Canvas* canvas) override {
     if (!selected_ && feedback_ <= 0.f) return;
     cc::PaintFlags flags;
@@ -883,16 +897,42 @@ class SidebarButton : public views::LabelButton {
         selected_ ? ui::kColorSysSecondaryContainer : ui::kColorSysPrimaryContainer));
     SidebarHighlightPath path;
     if (!selected_) flags.setAlphaf(feedback_);
-    canvas->DrawPath(path.GetHighlightPath(this), flags);
+    if (selected_ || feedback_ > 0.f)
+      canvas->DrawPath(path.GetHighlightPath(this), flags);
     if (selected_ && feedback_ > 0.f) {
       flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
       flags.setAlphaf(feedback_ * 0.14f);
       canvas->DrawPath(path.GetHighlightPath(this), flags);
     }
   }
+  void OnPaintBorder(gfx::Canvas* canvas) override {
+    views::LabelButton::OnPaintBorder(canvas);
+    if (breathing_alpha_ <= 0.f || width() <= 2 || height() <= 2) return;
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kStroke_Style);
+    flags.setStrokeWidth(2.f);
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
+    flags.setAlphaf(breathing_alpha_);
+    // Keep the entire stroke inside the view so its edges are not clipped.
+    gfx::RectF bounds(GetLocalBounds());
+    bounds.Inset(1.f);
+    SidebarHighlightPath path;
+    const auto outline = path.GetRoundRect(bounds);
+    canvas->DrawPath(SkPath::RRect(SkRRect{*outline}), flags);
+  }
  private:
+  void AnimateBreathing() {
+    const double phase = (base::TimeTicks::Now() - breathing_start_).InSecondsF() / 2.0;
+    breathing_alpha_ = 0.35f + 0.60f * static_cast<float>(
+        (1.0 - std::cos(phase * 6.283185307179586)) / 2.0);
+    if (IsDrawn()) SchedulePaint();
+  }
   bool selected_ = false;
   float feedback_ = 0.f;
+  float breathing_alpha_ = 0.f;
+  base::TimeTicks breathing_start_;
+  base::RepeatingTimer breathing_timer_;
 };
 BEGIN_METADATA(SidebarButton)
 END_METADATA
@@ -3580,6 +3620,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
         pane->Current().path == TrashRoot()) return;
     (root_ ? root_.get() : this)->AddPaneTab(pane->Current().path, false, true);
   }
+  void RefreshReceivedSidebar() {
+    if (root_ || !GetWidget() || GetWidget()->IsClosed()) return;
+    RevealReceivedTarget(sharing_->GetSnapshot());
+    CheckReceivedDirectory(true);
+  }
   void ShowHistoryTab() {
     if (root_) { root_->ShowHistoryTab(); return; }
     for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->history_page_ && !tab.active_pane->search_page_) { SelectPaneTab(tab.id); return; }
@@ -3746,6 +3791,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   views::View* DefaultFocusView() { return root_ ? (search_view_ ? search_view_.get() : files_.get()) : ActivePane()->DefaultFocusView(); }
   gfx::Size GetMinimumSize() const override { return root_ ? gfx::Size(300, 140) : gfx::Size(900, 500); }
   void PrepareToClose() {
+    if (!root_) sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetBreathing(false);
 #if BUILDFLAG(IS_MAC)
     titlebar_click_monitor_.RunAndReset();
 #endif
@@ -3755,7 +3801,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (search_view_) StopSearchPage(search_view_);
     sidebar_animation_timer_.Stop();
     CancelDirectoryWork();
-    CancelFileVisuals(); visual_pump_timer_.Stop();
+    CancelFileVisuals();
     if (!root_) { workspace_timer_.Stop(); SaveWorkspace(); }
     if (!root_ && !tabs_.empty()) for (auto& tab : tabs_)
       VisitPanes(tab.pane_host, base::BindRepeating([](FilesView* pane) { pane->PrepareToClose(); }));
@@ -3823,6 +3869,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
             base::FilePath::FromUTF8Unsafe(prefs.directory), prefs.avatar);
     SyncSharedTargets();
     UpdateNearby();
+    RefreshReceivedSidebar();
   }
   void ContentsChanged(views::Textfield* sender, const std::u16string& contents) override {
     if (sender == address_) { address_completion_->Changed(); return; }
@@ -3867,7 +3914,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       case ui::VKEY_X: ActivePane()->CopySelection(true); break;
       case ui::VKEY_V: ActivePane()->PasteSelection(a.IsAltDown()); break;
       case ui::VKEY_T: NewTab(ActivePane()->Current().path); break;
-      case ui::VKEY_W: CloseTab(Current().id); break;
+      case ui::VKEY_W:
+        Deferred(base::BindRepeating(&FilesView::CloseActivePaneOrTab,
+                                     weak_.GetWeakPtr())).Run();
+        break;
       case ui::VKEY_L: ToggleSidebar(); break;
       case ui::VKEY_TAB: SelectTab(tabs_[(active_ + tabs_.size() + (a.IsShiftDown() ? -1 : 1)) % tabs_.size()].id); break;
       case ui::VKEY_LEFT: History(-1); break;
@@ -4031,7 +4081,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         views::MenuAnchorPosition::kBubbleBottomRight, ui::mojom::MenuSourceType::kMouse);
   }
   int GetDragOperationsForView(views::View*, const gfx::Point&) override {
-    return root_ && !history_page_ && !IsDrivesLocation(Current().path) && !Current().loading ? (ui::DragDropTypes::DRAG_MOVE | ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK) : ui::DragDropTypes::DRAG_NONE;
+    return root_ && !history_page_ && !IsDrivesLocation(Current().path) && !Current().loading ? (ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK) : ui::DragDropTypes::DRAG_NONE;
   }
   bool CanStartDragForView(views::View*, const gfx::Point& start, const gfx::Point& point) override {
     return views::View::ExceededDragThreshold(point - start);
@@ -4093,7 +4143,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
     const auto destination = DropDirectoryAt(event);
     if (!ValidDropDestination(event.data(), destination)) { OnDragExited(); return ui::DragDropTypes::DRAG_NONE; }
-    const int operation = ui::DragDropTypes::DRAG_MOVE;
+    const int operation = ui::DragDropTypes::DRAG_COPY;
     if (!(event.source_operations() & operation)) { OnDragExited(); return ui::DragDropTypes::DRAG_NONE; }
     gfx::Rect highlight = GetLocalBounds();
     if (destination != Current().path) {
@@ -4121,17 +4171,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
       auto entry = std::ranges::find(Current().entries, destination, &Entry::path);
       if (entry == Current().entries.end() || Current().removed.contains(entry->path) || !entry->directory) return;
     }
-    const bool move = true;
-    if (!(event.source_operations() & (move ? ui::DragDropTypes::DRAG_MOVE : ui::DragDropTypes::DRAG_COPY))) return;
+    if (!(event.source_operations() & ui::DragDropTypes::DRAG_COPY)) return;
     auto files = event.data().GetFilenames(); if (!files) return;
     std::vector<base::FilePath> paths; std::set<base::FilePath> affected{destination, Current().path};
     for (const auto& file : *files) { paths.push_back(file.path); affected.insert(file.path.DirName()); }
     root_->local_operation_busy_ = true;
     status_->SetText(Text(IDS_CRFILES_TRANSFERRING));
-    operation = move ? ui::mojom::DragOperation::kMove : ui::mojom::DragOperation::kCopy;
+    operation = ui::mojom::DragOperation::kCopy;
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
         {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(&TransferLocalFiles, std::move(paths), destination, move, std::string("drag")),
+        base::BindOnce(&TransferLocalFiles, std::move(paths), destination, false, std::string("drag")),
         base::BindOnce(&FilesView::LocalTransferFinished, root_->weak_.GetWeakPtr(), std::move(affected)));
   }
   void LocalTransferFinished(std::set<base::FilePath> affected, FileOperationResult result) {
@@ -4861,7 +4910,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::vector<base::FilePath> remove;
     for (const auto& [path, row] : row_views_) if (!unchanged.contains(path)) remove.push_back(path);
     for (const auto& path : remove) {
-      if (path == focus_path) files_->RequestFocus();
+      if (path == focus_path && GetWidget() && GetWidget()->IsActive()) files_->RequestFocus();
       RemoveFileRow(path);
     }
     // Retained row callbacks use paths, but visual work keeps Entry pointers.
@@ -4881,7 +4930,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     layout->OrderItems();
     pending_scroll_ = tab.scroll; files_->InvalidateLayout(); files_->DeprecatedLayoutImmediately();
     UpdateVirtualRows();
-    if (!focus_path.empty()) {
+    if (!focus_path.empty() && GetWidget() && GetWidget()->IsActive()) {
       if (auto row = row_views_.find(focus_path); row != row_views_.end()) row->second->RequestFocus();
     }
     UpdateStatus(); root_->ScheduleWorkspaceSave();
@@ -5516,6 +5565,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
     ScheduleWorkspaceSave();
   }
   void RequestClosePane() { if (root_) root_->ClosePane(this); }
+  void CloseActivePaneOrTab() {
+    auto* shell = root_ ? root_.get() : this;
+    auto* pane = shell->ActivePane();
+    if (!pane) return;
+    if (views::AsViewClass<PaneSplit>(pane->parent())) {
+      shell->ClosePane(pane);
+    } else {
+      shell->CloseTab(shell->Current().id);
+    }
+  }
   void ClosePane(FilesView* target) {
     if (!Current().pane_host->Contains(target)) return;
     auto* split = views::AsViewClass<PaneSplit>(target->parent());
@@ -5921,7 +5980,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
     EndAddressEditing();
     ResetDirectoryAnimation();
     if (path.empty()) return;
-    if (GetWidget() && root_->ActivePane() == this && IsDrawn()) files_->RequestFocus();
+    // Refreshes after file operations must not take focus from their bubbles.
+    if (!refresh && GetWidget() && GetWidget()->IsActive() &&
+        root_->ActivePane() == this && IsDrawn()) files_->RequestFocus();
     if (!path.IsAbsolute() && !IsDrivesLocation(path)) {
       // Relative names at the drive list have no filesystem parent.
       if (IsDrivesLocation(Current().path)) return;
@@ -6813,6 +6874,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   FileRow* CreateFileRow(size_t position, FileLayout* layout) {
     auto& entry = Current().entries[displayed_entries_[position]];
+    const auto size_text = entry.directory || entry.size < 0 ? std::u16string(u"—") :
+        ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(entry.size)));
+    const auto tooltip = Text(IDS_CRFILES_NAME) + u": " + EntryName(entry.path) +
+        u"\n" + Text(IDS_CRFILES_SIZE) + u": " + size_text +
+        u"\n" + Text(IDS_CRFILES_PERMISSIONS) + u": " + PermissionsText(entry.permissions);
     const auto& tab = Current();
     const auto& options = tab.options;
     const int icon_size = kFileIconSizes[options.icon_index];
@@ -6835,6 +6901,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       tile->SetCallback(base::BindRepeating(&FilesView::SelectFile, weak_.GetWeakPtr(),
           entry.path, entry.directory, base::Unretained(tile)));
       tile->SetAccessibleName(EntryName(entry.path));
+      tile->SetTooltipText(tooltip);
       auto* tile_layout = tile->SetLayoutManager(std::make_unique<views::BoxLayout>(
           options.icons ? views::BoxLayout::Orientation::kVertical : views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets(options.icons ? 2 : 0), options.icons ? 4 : 0));
@@ -6867,7 +6934,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       open->SetImageModel(views::Button::STATE_NORMAL, FileImage(entry));
       file_buttons_.emplace(entry.path, open->GetWeakPtr());
       visible_buttons_.emplace_back(&entry, open->GetWeakPtr());
-      open->SetTooltipText(entry.path.AsUTF16Unsafe());
+      open->SetTooltipText(tooltip);
     materialized_positions_[entry.path] = position;
     tile->SetVirtualPosition(position, displayed_entries_.size());
     return tile;
@@ -6883,8 +6950,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void RequestFileVisuals() {
     auto* shell = root_ ? root_.get() : this;
-    if (!shell->visual_pump_timer_.IsRunning())
-      shell->visual_pump_timer_.Start(FROM_HERE, base::TimeDelta(), shell, &FilesView::PumpFileVisuals);
+    if (shell->visual_stopped_ || shell->visual_pump_pending_) return;
+    shell->visual_pump_pending_ = true;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce([](base::WeakPtr<FilesView> shell) {
+          if (!shell) return;
+          shell->visual_pump_pending_ = false;
+          shell->PumpFileVisuals();
+        }, shell->weak_.GetWeakPtr()));
   }
   ui::ImageModel FileImage(const Entry& entry) {
     const auto& options = Current().options;
@@ -7136,11 +7209,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     sharing_dialog_.SetView(ShowFileShareDialog(GetWidget(), sharing_, std::move(paths)));
   }
-  gfx::Rect IncomingToastBounds(const std::string& target) {
-    gfx::Rect area = GetBoundsInScreen();
+  std::optional<gfx::Rect> IncomingToastBounds(const std::string& target) {
+    std::optional<gfx::Rect> area;
     const auto shared = std::ranges::find(shared_directories_, target, &NearbySharing::SharedTarget::id);
     if (shared != shared_directories_.end() && !tabs_.empty()) VisitPanes(Current().pane_host,
-        base::BindRepeating([](const base::FilePath& directory, gfx::Rect* bounds, FilesView* pane) {
+        base::BindRepeating([](const base::FilePath& directory, std::optional<gfx::Rect>* bounds, FilesView* pane) {
           if (!pane->history_page_ && !pane->search_page_ && !pane->tabs_.empty() &&
               ShareDirectoryKey(pane->Current().path) == directory && pane->IsDrawn())
             *bounds = pane->GetBoundsInScreen();
@@ -7148,6 +7221,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     return area;
   }
   ShareBubbleAnchor SessionBubbleAnchor(const NearbySharing::Snapshot& state) {
+    RevealReceivedTarget(state);
     auto* widget = GetWidget();
     bool foreground = widget && widget->IsVisible() && !widget->IsMinimized();
 #if BUILDFLAG(IS_MAC)
@@ -7157,37 +7231,81 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (!state.receiving) {
         if (auto bounds = FileShareSessionBounds(sharing_dialog_.view()))
           return {*bounds, views::BubbleBorder::TOP_CENTER, false, true};
+      } else if (state.receive_target.empty()) {
+        auto* received = sidebar_buttons_.at(IDS_CRFILES_RECEIVED).get();
+        if (received->IsDrawn()) {
+          const auto bounds = received->GetVisibleBounds();
+          if (!bounds.IsEmpty()) {
+            auto point = bounds.CenterPoint();
+            point.set_y(bounds.bottom());
+            views::View::ConvertPointToScreen(received, &point);
+            return {gfx::Rect(point, gfx::Size(1, 1)),
+                    views::BubbleBorder::TOP_CENTER, false, true};
+          }
+        }
+      } else if (const auto area = IncomingToastBounds(state.receive_target)) {
+        return {gfx::Rect(std::max(area->x(), area->right() - 12),
+                         std::max(area->y(), area->bottom() - 12), 1, 1),
+                views::BubbleBorder::BOTTOM_RIGHT, false, true};
       }
-      const auto area = IncomingToastBounds(state.receive_target);
-      return {gfx::Rect(std::max(area.x(), area.right() - 12),
-                       std::max(area.y(), area.bottom() - 12), 1, 1),
-              views::BubbleBorder::BOTTOM_RIGHT, false, true};
     }
     const auto icon = Tray() ? Tray()->GetIconBounds() : std::nullopt;
     auto* screen = display::Screen::Get();
     const auto monitor = icon ? screen->GetDisplayMatching(*icon) : screen->GetPrimaryDisplay();
-    return TrayShareBubbleAnchor(icon, monitor.bounds(), monitor.work_area(),
-                                BUILDFLAG(IS_MAC));
+    auto anchor = TrayShareBubbleAnchor(icon, monitor.bounds(), monitor.work_area(),
+                                       BUILDFLAG(IS_MAC));
+    if (foreground) {
+      anchor.background = false;
+      if (!anchor.show_arrow) {
+        const auto area = GetBoundsInScreen();
+        return {gfx::Rect(std::max(area.x(), area.right() - 12),
+                         std::max(area.y(), area.bottom() - 12), 1, 1),
+                views::BubbleBorder::BOTTOM_RIGHT, false, false};
+      }
+    }
+    return anchor;
   }
-  void CheckReceivedDirectory() {
-    if (received_check_pending_) return;
-    received_check_pending_ = true;
+  void RevealReceivedTarget(const NearbySharing::Snapshot& state) {
+    if (!state.receiving || !state.session || !state.receive_target.empty()) return;
+    auto* received = sidebar_buttons_.at(IDS_CRFILES_RECEIVED).get();
+    if (received->GetVisible()) return;
+    received->SetVisible(true);
+    // The session bubble requests this anchor every 250 ms. Make the sidebar
+    // geometry available immediately instead of waiting for directory I/O.
+    if (auto* widget = GetWidget(); widget && !widget->IsClosed())
+      widget->GetRootView()->DeprecatedLayoutImmediately();
+  }
+  void CheckReceivedDirectory(bool force = false) {
     const auto prefs = GetNearbySharingPreferences();
     const auto path = prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory() : base::FilePath::FromUTF8Unsafe(prefs.directory);
-    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+    if (received_check_pending_) {
+      if (force || path != received_checked_path_) received_recheck_ = true;
+      return;
+    }
+    const auto now = base::TimeTicks::Now();
+    if (!force && path == received_checked_path_ &&
+        !received_check_time_.is_null() && now - received_check_time_ < base::Seconds(30)) return;
+    received_check_pending_ = true;
+    received_checked_path_ = path;
+    received_check_time_ = now;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce([](base::FilePath folder) { return base::DirectoryExists(folder); }, path),
         base::BindOnce([](base::WeakPtr<FilesView> view, base::FilePath checked, bool exists) {
           if (!view) return;
           view->received_check_pending_ = false;
+          const bool recheck = std::exchange(view->received_recheck_, false);
           const auto latest = GetNearbySharingPreferences();
           const auto current = latest.directory.empty() ? NearbySharing::DefaultReceiveDirectory() : base::FilePath::FromUTF8Unsafe(latest.directory);
-          if (current != checked) return;
-          view->sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetVisible(exists);
+          if (current != checked) { view->CheckReceivedDirectory(true); return; }
+          const auto state = view->sharing_->GetSnapshot();
+          view->sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetVisible(
+              exists || (state.receiving && state.session && state.receive_target.empty()));
+          if (recheck) view->CheckReceivedDirectory(true);
         }, weak_.GetWeakPtr(), path));
   }
   void UpdateNearby() {
     // The constructor invokes this before SetContentsView attaches the view
-    // to a Widget. Defer window-dependent work until the next timer tick.
+    // to a Widget. Initial directory checks run once the main window is shown.
     auto* widget = GetWidget();
     if (!widget || widget->IsClosed()) return;
     SyncLiveDirectories();
@@ -7202,6 +7320,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
     if (auto* pane = ActivePane(); visible && pane && pane->history_page_ && pane->history_version_ != FileHistoryVersion()) pane->LoadHistory();
     auto s = sharing_->GetSnapshot();
+    RevealReceivedTarget(s);
+    sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetBreathing(
+        visible && !widget->IsMinimized() && s.busy && s.receiving &&
+        s.receive_target.empty());
     if (s.stage == NearbySharing::Stage::kComplete && s.receiving && s.session != last_received_session_) {
       last_received_session_ = s.session;
       for (auto& tab : tabs_) VisitPanes(tab.pane_host, base::BindRepeating([](const base::FilePath& batch, FilesView* pane) {
@@ -7316,6 +7438,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
   raw_ptr<views::LabelButton> restore_action_ = nullptr, empty_trash_action_ = nullptr;
   raw_ptr<views::View> normal_footer_actions_ = nullptr, trash_footer_actions_ = nullptr;
   bool received_check_pending_ = false;
+  bool received_recheck_ = false;
+  base::FilePath received_checked_path_;
+  base::TimeTicks received_check_time_;
   raw_ptr<views::View> toolbar_ = nullptr;
   raw_ptr<views::View> file_surface_ = nullptr;
   bool address_editing_ = false;
@@ -7369,7 +7494,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::shared_ptr<std::atomic_bool> visual_cancel_ = std::make_shared<std::atomic_bool>(false);
   std::set<base::FilePath> visual_pending_;
   base::CallbackListSubscription file_scroll_subscription_;
-  base::OneShotTimer visual_pump_timer_;
+  bool visual_pump_pending_ = false;
   std::array<int, 4> visual_jobs_running_ = {};
   bool large_visual_running_ = false, visual_stopped_ = false;
   std::set<base::FilePath> visual_cache_checked_;
@@ -7440,6 +7565,7 @@ void RestoreCrFilesWindow() {
   if (Window()->IsMinimized()) Window()->Restore();
   Window()->Show();
   Window()->Activate();
+  if (g_contents) g_contents->RefreshReceivedSidebar();
   auto hidden = std::move(HiddenOwnedWindows());
   HiddenOwnedWindows().clear();
   for (const auto& owned : hidden) {
@@ -7475,6 +7601,7 @@ void ShowCrFilesWindow(base::OnceClosure quit) {
   params.wayland_app_id = "libcr.crfiles";
 #endif
   Window()->Init(std::move(params)); Window()->CenterWindow(gfx::Size(1180, 760)); Window()->Show();
+  g_contents->RefreshReceivedSidebar();
 #if BUILDFLAG(IS_MAC)
   InstallCrFilesApplicationMenuMac(Window().get());
 #endif
@@ -7508,6 +7635,7 @@ void DestroyCrFilesWindow() {
   RemoveCrFilesApplicationMenuMac();
 #endif
   if (g_contents) g_contents->PrepareToClose();
+  CloseCrFilesDialogs();
   Window().reset(); Delegate().reset();
 }
 }

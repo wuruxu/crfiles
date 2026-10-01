@@ -190,7 +190,7 @@ FileViewPreferences GetFileViewPreferences() {
 }
 bool GetWindowsTitlebarStyleEnabled() {
   base::AutoLock lock(SettingsLock());
-  return Settings().FindBool("windows_titlebar_style").value_or(false);
+  return Settings().FindBool("windows_titlebar_style").value_or(true);
 }
 bool GetSystemTrayEnabled() {
   base::AutoLock lock(SettingsLock());

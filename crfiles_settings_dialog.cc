@@ -92,8 +92,8 @@
 #include "crFiles/crfiles_buildtime.h"
 namespace crfiles {
 namespace {
-constexpr std::array<const char*, 13> kLanguages = {
-    "", "en-US", "zh-CN", "zh-HK", "zh-TW", "ar", "fr", "fr-CA", "ru", "es", "es-419", "pt-BR", "pt-PT"};
+constexpr std::array<const char*, 15> kLanguages = {
+    "", "en-US", "ja", "ko", "zh-CN", "zh-HK", "zh-TW", "ar", "fr", "fr-CA", "ru", "es", "es-419", "pt-BR", "pt-PT"};
 constexpr std::array kHistoryLabels = {IDS_CRFILES_HISTORY_MOVE, IDS_CRFILES_MOVE_TRASH,
     IDS_CRFILES_HISTORY_ACCESS, IDS_CRFILES_HISTORY_OPEN_FILE, IDS_CRFILES_HISTORY_SEND, IDS_CRFILES_HISTORY_RECEIVE};
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
@@ -389,8 +389,8 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     language_layout->SetFlexForView(Label(language_row, Text(IDS_CRFILES_LANGUAGE)), 1);
     std::vector<ui::SimpleComboboxModel::Item> languages;
     languages.emplace_back(Text(IDS_CRFILES_SYSTEM_LANGUAGE));
-    constexpr std::array<std::u16string_view, 12> language_names = {
-        u"English (United States)", u"简体中文", u"繁體中文（香港）", u"繁體中文（台灣）",
+    constexpr std::array<std::u16string_view, 14> language_names = {
+        u"English (United States)", u"日本語", u"한국어", u"简体中文", u"繁體中文（香港）", u"繁體中文（台灣）",
         u"العربية", u"Français", u"Français (Canada)", u"Русский", u"Español",
         u"Español (Latinoamérica)", u"Português (Brasil)", u"Português (Portugal)"};
     for (const auto name : language_names) languages.emplace_back(std::u16string(name));

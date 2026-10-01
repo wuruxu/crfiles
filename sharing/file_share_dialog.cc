@@ -27,6 +27,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
@@ -64,7 +65,12 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/view_tracker.h"
+#include "ui/views/event_monitor.h"
+#include "ui/events/event.h"
+#include "ui/events/event_observer.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
 namespace crfiles {
 namespace {
@@ -95,20 +101,39 @@ ui::ImageModel PeerAvatar(const NearbySharing::Snapshot& state) {
   }
   return Avatar(state.peer_avatar);
 }
-class ShareSessionToastImpl : public ShareSessionToast {
+class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObserver {
  public:
   ShareSessionToastImpl(views::Widget* owner, std::shared_ptr<NearbySharing> service,
                         base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor)
       : owner_(owner->GetWeakPtr()), service_(std::move(service)), anchor_(std::move(anchor)) {
+    owner_observation_.Observe(owner);
     Refresh(); timer_.Start(FROM_HERE, base::Milliseconds(250), this, &ShareSessionToastImpl::Refresh);
   }
-  ~ShareSessionToastImpl() override { timer_.Stop(); Close(); }
+  ~ShareSessionToastImpl() override { owner_observation_.Reset(); timer_.Stop(); Close(); }
  private:
+  void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    if (!active) return;
+    stacking_dirty_ = true;
+    // Let native activation finish before ordering the independent bubble.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ShareSessionToastImpl::Refresh, weak_.GetWeakPtr()));
+  }
+  void OnWidgetVisibilityChanged(views::Widget*, bool) override {
+    stacking_dirty_ = true;
+  }
+  void OnWidgetDestroying(views::Widget*) override {
+    owner_observation_.Reset();
+    owner_.reset();
+    timer_.Stop();
+    Close();
+  }
   void Close() {
     accept_ = nullptr; reject_ = nullptr; trust_ = nullptr;
     filename_ = nullptr; progress_status_ = nullptr; progress_ = nullptr; cancel_ = nullptr;
     if (widget_) widget_->MakeCloseSynchronous({});
     widget_.reset(); delegate_.reset();
+    background_mode_.reset();
+    stacking_dirty_ = true;
   }
   views::Label* Label(views::View* parent, std::u16string text) {
     auto* label = parent->AddChildView(std::make_unique<views::Label>(text));
@@ -242,20 +267,34 @@ class ShareSessionToastImpl : public ShareSessionToast {
     delegate_->SizeToContents();
     if (transfer) widget_->ShowInactive();
     else widget_->Show();
+    Position(anchor);
   }
   void Position(const ShareBubbleAnchor& anchor) {
     if (!widget_ || !delegate_) return;
-    const bool mode_changed = background_mode_ && *background_mode_ != anchor.background;
+    const bool mode_changed = !background_mode_ || *background_mode_ != anchor.background;
+    const bool anchor_changed = delegate_->arrow() != anchor.arrow ||
+        delegate_->GetAnchorRect() != anchor.bounds;
     background_mode_ = anchor.background;
     delegate_->GetBubbleFrameView()->SetDisplayVisibleArrow(anchor.show_arrow);
     if (delegate_->arrow() != anchor.arrow) delegate_->SetArrow(anchor.arrow);
     if (delegate_->GetAnchorRect() != anchor.bounds) delegate_->SetAnchorRect(anchor.bounds);
     const auto order = anchor.background ? ui::ZOrderLevel::kFloatingWindow : ui::ZOrderLevel::kNormal;
     if (widget_->GetZOrderLevel() != order) widget_->SetZOrderLevel(order);
-    if (mode_changed && widget_->IsVisible()) widget_->StackAtTop();
 #if BUILDFLAG(IS_MAC)
-    PrepareCrFilesShareBubbleMac(widget_.get(), anchor.background);
+    if (mode_changed || (anchor.background && IsCrFilesApplicationHiddenMac()))
+      PrepareCrFilesShareBubbleMac(widget_.get(), anchor.background);
 #endif
+    if (widget_->IsVisible() && (stacking_dirty_ || mode_changed || anchor_changed)) {
+      if (!anchor.background && owner_ && owner_->IsVisible() &&
+          !owner_->IsMinimized()) {
+        // A parentless bubble does not follow its owner's native stacking.
+        // Reapply after activation or anchor changes, rather than every tick.
+        widget_->StackAboveWidget(owner_.get());
+      } else if (anchor.background) {
+        widget_->StackAtTop();
+      }
+      stacking_dirty_ = false;
+    }
   }
   void Refresh() {
     if (!owner_ || owner_->IsClosed()) { timer_.Stop(); Close(); return; }
@@ -292,6 +331,7 @@ class ShareSessionToastImpl : public ShareSessionToast {
     }
   }
   base::WeakPtr<views::Widget> owner_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> owner_observation_{this};
   std::shared_ptr<NearbySharing> service_;
   base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor_;
   std::unique_ptr<views::BubbleDialogDelegate> delegate_;
@@ -307,6 +347,7 @@ class ShareSessionToastImpl : public ShareSessionToast {
   bool decided_ = false;
   bool transfer_view_ = false, dismiss_ = false;
   std::optional<bool> background_mode_;
+  bool stacking_dirty_ = true;
   base::TimeTicks ready_;
   base::RepeatingTimer timer_;
   base::WeakPtrFactory<ShareSessionToastImpl> weak_{this};
@@ -577,9 +618,10 @@ Summary Summarize(const std::vector<base::FilePath>& paths) {
   }
   result.bytes = FileSelectionSize(paths); return result;
 }
-class FileShareView : public views::View {
+class FileShareView : public views::View, public ui::EventObserver {
   METADATA_HEADER(FileShareView, views::View)
  public:
+  using views::View::OnEvent;
   FileShareView(std::shared_ptr<NearbySharing> service, std::vector<base::FilePath> paths)
       : service_(std::move(service)), paths_(std::move(paths)) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
@@ -646,6 +688,7 @@ class FileShareView : public views::View {
     else { status_->SetText(Text(IDS_CRFILES_CONFIG_ERROR)); status_->SetVisible(true); }
   }
   void CloseToast() {
+    compose_monitor_.reset();
     address_ = nullptr; targets_ = nullptr;
     if (toast_delegate_) toast_delegate_->SetAnchorView(nullptr);
     // Explicit teardown must not schedule another close from native callbacks.
@@ -657,7 +700,9 @@ class FileShareView : public views::View {
     toast_delegate_ = std::make_unique<views::BubbleDialogDelegate>(anchor, views::BubbleBorder::TOP_CENTER);
     toast_delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
     toast_delegate_->SetShowCloseButton(false);
-    toast_delegate_->set_close_on_deactivate(!prompt);
+    // Native activation and combobox menus can deactivate a composing bubble
+    // without an outside click. Dismiss it using pointer events instead.
+    toast_delegate_->set_close_on_deactivate(false);
     if (prompt) toast_delegate_->SetCancelCallbackWithClose(base::BindRepeating([] { return false; }));
     toast_delegate_->set_margins(gfx::Insets(12));
     toast_delegate_->set_shadow(views::BubbleBorder::STANDARD_SHADOW);
@@ -671,6 +716,20 @@ class FileShareView : public views::View {
     frame->SetDisplayVisibleArrow(true); frame->bubble_border()->set_draw_border_stroke(true);
     frame->bubble_border()->set_md_shadow_elevation(6);
     toast_delegate_->SizeToContents(); toast_widget_->Show();
+    if (!prompt) {
+      compose_monitor_ = views::EventMonitor::CreateApplicationMonitor(
+          this, GetWidget()->GetNativeWindow(), {ui::EventType::kMousePressed});
+    }
+  }
+  void OnEvent(const ui::Event& event) override {
+    if (event.type() != ui::EventType::kMousePressed || !compose_monitor_ ||
+        !toast_widget_ || toast_widget_->IsClosed() ||
+        !toast_widget_->IsVisible() || (targets_ && targets_->IsMenuRunning())) return;
+    const auto point = compose_monitor_->GetLastMouseLocation();
+    if (IsInsideCrFilesBubble(point) ||
+        (active_device_ && active_device_->GetBoundsInScreen().Contains(point))) return;
+    // Native close callbacks defer client destruction until this event unwinds.
+    toast_widget_->Close();
   }
   void Manual() {
     const auto state = service_->GetSnapshot(); if (state.busy || !state.enabled || paths_.empty()) return;
@@ -685,6 +744,20 @@ class FileShareView : public views::View {
     selected_ = *latest; Compose(anchor);
   }
   void Compose(DeviceButton* anchor) {
+    const auto request = ++compose_request_;
+    // Showing an activating bubble inside a mouse callback can race the
+    // enclosing window's activation and immediately close it as lost-focus.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+            [](base::WeakPtr<FileShareView> owner,
+               std::unique_ptr<views::ViewTracker> anchor, uint64_t request) {
+              if (!owner || !owner->GetWidget() || owner->GetWidget()->IsClosed() ||
+                  request != owner->compose_request_ || !anchor->view() ||
+                  owner->service_->GetSnapshot().busy) return;
+              owner->ShowCompose(static_cast<DeviceButton*>(anchor->view()));
+            }, weak_.GetWeakPtr(), std::make_unique<views::ViewTracker>(anchor), request));
+  }
+  void ShowCompose(DeviceButton* anchor) {
     CloseToast(); composing_ = true; active_device_ = anchor;
     auto contents = std::make_unique<views::View>();
     auto* layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -806,8 +879,10 @@ class FileShareView : public views::View {
   raw_ptr<DeviceButton> manual_ = nullptr, session_device_ = nullptr, active_device_ = nullptr;
   std::unique_ptr<views::BubbleDialogDelegate> toast_delegate_;
   std::unique_ptr<views::Widget> toast_widget_;
+  std::unique_ptr<views::EventMonitor> compose_monitor_;
   uint64_t summary_generation_ = 0;
   uint64_t shown_session_ = 0;
+  uint64_t compose_request_ = 0;
   NearbySharing::Stage shown_stage_ = NearbySharing::Stage::kOff;
   bool toast_prompt_ = false, composing_ = false;
   base::RepeatingTimer timer_;

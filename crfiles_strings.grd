@@ -14,6 +14,8 @@
     <output filename="crfiles_strings_es-419.pak" type="data_package" lang="es-419" />
     <output filename="crfiles_strings_pt-BR.pak" type="data_package" lang="pt-BR" />
     <output filename="crfiles_strings_pt-PT.pak" type="data_package" lang="pt-PT" />
+    <output filename="crfiles_strings_ja.pak" type="data_package" lang="ja" />
+    <output filename="crfiles_strings_ko.pak" type="data_package" lang="ko" />
   </outputs>
   <translations>
     <file path="translations/crfiles_strings_zh-CN.xtb" lang="zh-CN" />
@@ -27,6 +29,8 @@
     <file path="translations/crfiles_strings_es-419.xtb" lang="es-419" />
     <file path="translations/crfiles_strings_pt-BR.xtb" lang="pt-BR" />
     <file path="translations/crfiles_strings_pt-PT.xtb" lang="pt-PT" />
+    <file path="translations/crfiles_strings_ja.xtb" lang="ja" />
+    <file path="translations/crfiles_strings_ko.xtb" lang="ko" />
   </translations>
   <release seq="1">
     <!-- Reserve 31000-31999 for strings; keep binary assets in a separate range. -->
@@ -41,7 +45,7 @@
       <include name="IDR_CRFILES_AVATAR_7" file="../chrome/app/theme/default_200_percent/common/profile_avatar_ninja.png" type="BINDATA" />
       <include name="IDR_CRFILES_AVATAR_8" file="../chrome/app/theme/default_200_percent/common/profile_avatar_sun_cloud.png" type="BINDATA" />
     </includes>
-    <messages first_id="31000">
+    <messages first_id="31000" fallback_to_english="true">
       <message name="IDS_CRFILES_ABOUT" desc="crFiles file manager interface.">About</message>
       <message name="IDS_CRFILES_MAC_ABOUT" desc="macOS application menu item.">About crFiles</message>
       <message name="IDS_CRFILES_MAC_SETTINGS" desc="macOS application menu item.">Settings…</message>
@@ -283,6 +287,7 @@
       <message name="IDS_CRFILES_SKIP" desc="Archive conflict confirmation and recovery.">Skip</message>
       <message name="IDS_CRFILES_EXTRACT_EXISTS" desc="Archive conflict confirmation and recovery.">Already exists: <ph name="PATH">$1<ex>/Downloads/example</ex></ph></message>
       <message name="IDS_CRFILES_EXTRACT_RECOVERY" desc="Archive conflict confirmation and recovery.">Replacement failed. The original entry is preserved in: <ph name="PATH">$1<ex>/Downloads/example</ex></ph></message>
+      <message name="IDS_CRFILES_FOLDER_ACCESS_PROMPT" desc="Explanation in the macOS folder access permission picker.">Allow crFiles to access this folder. Select it or a containing folder.</message>
     </messages>
   </release>
 </grit>

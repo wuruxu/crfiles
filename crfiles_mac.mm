@@ -30,7 +30,8 @@
 #include "base/synchronization/lock.h"
 #include "skia/ext/skia_utils_mac.h"
 
-#include "base/check_op.h"
+#include "base/check.h"
+#include "base/logging.h"
 #include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
 #include "ui/menus/cocoa/menu_controller.h"
 #include "ui/gfx/mac/coordinate_conversion.h"
@@ -167,11 +168,15 @@ void InitializeCrFilesApplicationMac() {
   [MenuControllerCocoa
       initializeWithNewMenuIconScheme:base::mac::MacOSMajorVersion() >= 26];
 
-  // Like Views Examples, support launching an unbundled binary from Terminal.
-  ProcessSerialNumber process = {0, kCurrentProcess};
-  CHECK_EQ(TransformProcessType(&process,
-                               kProcessTransformToForegroundApplication),
-           noErr);
+  // Bundled applications may already be regular foreground applications.
+  // Use AppKit for both Finder launches and standalone Terminal launches;
+  // the legacy Process Manager transformation can reject a valid app launch.
+  // Worker modes return before RunApplication and never enter this UI setup.
+  NSApplication* application = [NSApplication sharedApplication];
+  if (application.activationPolicy != NSApplicationActivationPolicyRegular &&
+      ![application setActivationPolicy:NSApplicationActivationPolicyRegular]) {
+    LOG(ERROR) << "Unable to set the application's regular activation policy";
+  }
 }
 
 void InstallCrFilesApplicationMenuMac(views::Widget* window) {

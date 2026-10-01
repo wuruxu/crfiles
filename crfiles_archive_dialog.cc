@@ -28,6 +28,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/border.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/window/client_view.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -98,6 +99,7 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
       base::OnceCallback<void(FileOperationResult)> completion, std::vector<base::FilePath> sources = {});
   ~ArchiveDialog() override;
   void Show(std::unique_ptr<ArchiveDialog> self) {
+    ReleaseParentInput();
     // Keep the delegate owned until the widget is destroyed. Native widget
     // ownership alone does not transfer ownership of a BubbleDialogDelegate.
     widget_ = CreateCrFilesBubble(this, base::BindOnce(
@@ -108,8 +110,9 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
           // A button callback may still be running on the delegate's stack.
           base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(dialog));
         }, std::move(self)));
-    widget_->ShowInactive();
+    widget_->Show();
     Begin();
+    ScheduleActivation();
   }
   void Begin() {
     UpdateAnchor();
@@ -128,6 +131,30 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
   }
 
  private:
+  void ReleaseParentInput() {
+    auto* parent = anchor_widget();
+    if (!parent || parent->IsClosed()) return;
+    // Views focus and native mouse capture are independent. A capture left
+    // by the invoking file/menu interaction routes pointer events to the
+    // parent even after the bubble becomes key.
+    parent->ReleaseCapture();
+    auto* focus = parent->GetFocusManager();
+    if (focus && focus->GetFocusedView()) focus->StoreFocusedView(true);
+  }
+  void ScheduleActivation() {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ArchiveDialog::ActivateControls, weak_.GetWeakPtr()));
+  }
+  void ActivateControls() {
+    if (!widget_ || widget_->IsClosed()) return;
+    ReleaseParentInput();
+    widget_->Activate();
+    // Activate the window without choosing a default button. Password input
+    // keeps its explicit focus handling in AskPassword().
+    widget_->GetFocusManager()->ClearFocus();
+    if (password_ && password_->GetVisible() && password_->GetEnabled())
+      password_->RequestFocus();
+  }
   void ReleaseContents() {
     StopUpdates();
     contents_observation_.Reset();
@@ -206,6 +233,7 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
     SizeToContents();
     GetWidget()->Activate();
     password_->RequestFocus();
+    ScheduleActivation();
   }
   void ResolveConflict(ArchiveConflictChoice choice) {
     if (displayed_conflict_.empty()) return;
@@ -228,6 +256,7 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
         set_fixed_width(std::max(360, conflict_controls_->GetPreferredSize({}).width() + 40 + margins().width()));
         SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
         SizeToContents();
+        ScheduleActivation();
       }
       return;
     }
@@ -272,9 +301,17 @@ class ArchiveDialog : public views::BubbleDialogDelegate, public views::ViewObse
             (failed ? IDS_CRFILES_COMPRESS_ERROR : IDS_CRFILES_COMPRESS_SUCCESS)));
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kCancel));
     SetButtonLabel(ui::mojom::DialogButton::kCancel, Text(IDS_CRFILES_CLOSE));
-    set_close_on_deactivate(sources_.empty());
+    SetButtonEnabled(ui::mojom::DialogButton::kCancel, true);
+    set_close_on_deactivate(false);
+    // DialogModelChanged rebuilds the button row and invalidates its layout.
+    // SizeToContents only sets native bounds; complete layout even when the
+    // new bounds equal the old ones, so painting and hit testing agree.
+    GetWidget()->GetRootView()->InvalidateLayout();
     SizeToContents();
-    if (!failed && sources_.empty()) timer_.Start(FROM_HERE, base::Seconds(5),
+    GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
+    GetWidget()->GetRootView()->SchedulePaint();
+    ScheduleActivation();
+    if (!failed) timer_.Start(FROM_HERE, base::Seconds(5),
         base::BindRepeating(&ArchiveDialog::Dismiss, weak_.GetWeakPtr()));
   }
   void Dismiss() { GetWidget()->Close(); }
@@ -308,6 +345,7 @@ ArchiveDialog::ArchiveDialog(views::View* anchor, base::FilePath archive, base::
     SetTitle(Text(sources_.empty() ? IDS_CRFILES_EXTRACT : IDS_CRFILES_COMPRESS));
     set_shadow(views::BubbleBorder::STANDARD_SHADOW);
     SetModalType(ui::mojom::ModalType::kNone);
+    SetInitiallyFocusedView(nullptr);
     set_close_on_deactivate(false);
     set_adjust_if_offscreen(true);
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kCancel));

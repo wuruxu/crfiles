@@ -6,6 +6,11 @@ controls, menu, SVG renderer, themes and Viz compositor.
 
 ## Interface
 
+- Thumbnail scheduling coalesces requests into one UI task and refills worker
+  slots on completion. Receiving-directory checks run immediately on startup,
+  window restoration and preference changes, with a 30-second fallback check.
+  Shared-session bubbles reorder only on creation, owner activation or
+  visibility changes, foreground/background transitions and anchor changes.
 - History creates rows only for the visible region and nearby overscan, with
   lazily measured heights for wrapped paths and search highlights. Unchanged
   History tabs reuse their loaded data and scroll position. More appends 200
@@ -184,7 +189,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
   Scrolling reaches every entry without a Show more step. Hidden entries are
   excluded until Show Hidden Files is enabled. On Windows, the hidden attribute
   is also respected.
-- English source strings plus zh-CN, zh-HK, zh-TW, ar, fr, fr-CA, ru, es, es-419,
+- English source strings plus ja, ko, zh-CN, zh-HK, zh-TW, ar, fr, fr-CA, ru, es, es-419,
   pt-BR and pt-PT resource packs. Change language in Settings, then restart.
 
 | Shortcut | Action |
@@ -256,6 +261,8 @@ showing the same directory and view options. Drag the divider to resize panes.
 Clicking a pane activates it; the shared breadcrumbs, editable path, history and
 view-options controls operate on that pane. Selection, scroll position, sorting,
 column widths and directory requests remain local to each pane.
+Cmd+W (Ctrl+W on other platforms) closes the active split when a tab has multiple
+panes; with a single pane it retains the existing tab-close behavior.
 
 The Show more menu contains Rename pane, Close pane and Move to Trash. Closing
 a pane promotes its sibling (including any nested splits); the final pane omits
@@ -293,10 +300,10 @@ shared directory. Pairing and receive approval still apply. Catalogs refresh on
 identity probes (normally within 30 seconds), and revoked targets are checked at
 transfer time rather than relying on stale discovery records.
 
-Drag an item or existing selection into another pane to move it. Dragging empty space continues to select items with a rectangle. Drops
+Drag an item or existing selection into another pane to copy it, preserving the source files. Native drags offer copy and link operations without offering move. Dragging empty space continues to select items with a rectangle. Drops
 highlight the target and run file IO on a worker. Existing destination names are
-skipped, never merged or overwritten. Copy failure leaves the source intact;
-failed source removal after a move leaves the published copy and reports failure.
+skipped, never merged or overwritten. Both successful and failed drops leave the
+source files intact.
 Symbolic links, special files and transfers into the source's own subtree are
 rejected. Local operation errors are reported in the pane status bar.
 

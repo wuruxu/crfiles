@@ -45,7 +45,8 @@ more restrictive security boundary than the parent. See Apple's
   libraries are in `Contents/Frameworks`; Chromium's macOS GL initializer now
   recognizes standalone `.app` bundles as well as framework bundles.
 - Search, archive and video jobs use `Contents/Helpers/crFiles Helper`, a separate
-  copy of the executable with its own signature. A loose development executable
+  copy of the executable with its own signature in App Store packages, or a
+  symlink to the main executable in Developer ID packages. A loose development executable
   still launches itself. Missing packaged helpers fail instead of falling back
   to launching the sandboxed UI executable as a worker.
 - Authorized folders are saved as app-scoped security-scoped bookmarks, restored
@@ -83,13 +84,17 @@ interface changes in this patch. Do not package an old binary with the new plist
 
 Supply a final `.icns` icon, profile and certificate names. The script defaults to
 the bundle/team IDs above, derives the marketing version from `crFiles/VERSION`,
-and requires a monotonically increasing App Store build number. Paths below are
+and requires a monotonically increasing App Store build number. The default minimum
+macOS version is 13.0. The script rejects executables or private dylibs whose
+Mach-O deployment target exceeds the declared minimum. The main and helper use
+the same input executable. `make pkg` installs the bundle as `/Applications/crFiles.app`
+and retains `/tmp/crFiles-store.pkg` as the package filename. Paths below are
 examples, not generated artifacts:
 
 ```sh
 python3 crFiles/tools/package_macos.py \
   --build-dir out/arm64 \
-  --output /tmp/crFiles-store.app \
+  --output /tmp/crFiles.app \
   --icon /path/to/crFiles.icns \
   --build-number 1 \
   --profile /path/to/crFiles.provisionprofile \
@@ -134,8 +139,106 @@ these files. Validate with the actual newly built and signed application:
    target, app icon and architecture, then validate it with Apple's upload tools.
 
 Submission also needs App Store Connect metadata, privacy policy/disclosures,
-export-compliance answers and a required-reason API/privacy-manifest audit of the
-actual linked Chromium/libcr build. This change does not claim to eliminate
+export-compliance answers and review of the privacy manifest against any changes
+to the actual linked Chromium/libcr build. This change does not claim to eliminate
 private APIs inside Chromium, provide that audit, or guarantee App Review
 approval. No fabricated privacy reasons or broad temporary sandbox exceptions
 are added to make a failing binary appear compliant.
+
+
+## Privacy manifest scope
+
+`PrivacyInfo.xcprivacy` is copied into `Contents/Resources` before signing.
+The plain helper executable belongs to this same app bundle. No separate helper
+bundle is introduced. The declarations are based on the following code paths:
+
+| Category | Reasons | Current use |
+| --- | --- | --- |
+| File timestamps | C617.1, 3B52.1 | Container cache metadata and user-authorized files: `crfiles_thumbnail_cache.cc`, `crfiles_image_preview.cc`, `crfiles_window.cc`, and archive/search workers. |
+| System boot time | 35F9.1 | Chromium monotonic clocks for in-app elapsed time, timers, animation, and search/archive/transfer timeouts. |
+| Disk space | E174.1 | `sharing/nearby_sharing.cc` checks `fstatvfs` before receiving files and fails the transfer if space is insufficient. |
+
+No tracking domains or developer-side collected data are declared. The current
+sharing implementation sends user-selected content directly to peers, not to a
+developer-operated collection or analytics service. This does not mean that no
+data leaves the device; file sharing and peer discovery are network features.
+Revisit these declarations if adding telemetry, remote crash reporting, a relay,
+or another backend that retains user data.
+
+The native macOS dependencies also read system preferences (`AppleActionOnDoubleClick`,
+trackpad settings, and accessibility cursor settings) with `NSUserDefaults`.
+These are deliberately NOT described using CA92.1, which excludes reading values
+written by the system. No fabricated reason is supplied for these macOS paths.
+Apple's current required-reason enforcement article lists iOS, iPadOS, tvOS,
+visionOS, and watchOS, not native macOS. The manifest records the uses that map to
+approved reasons; it is not a claim of exhaustive certification for Chromium or
+a manifest suitable for an iOS/Mac Catalyst port. Re-audit the system-preference
+paths if Apple's native macOS requirements change.
+
+References: [Required reason APIs](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api)
+and [approved reasons](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype).
+
+
+## Developer ID DMG distribution
+
+`make dmg` signs existing `out/arm64` artifacts using Developer ID Application,
+creates `/tmp/crFiles-<version>.dmg` using `crFiles/VERSION`, submits it with `notarytool`, waits for `Accepted`,
+and staples and validates the DMG ticket. A final Gatekeeper assessment must
+also pass. It does not compile or publish the DMG to a download server.
+
+The staging directory is `/tmp/crFiles-dmg`; the disk image contains `crFiles.app`
+and an `Applications` shortcut. The Finder window uses a bundled background,
+centered 90-point icons, and a fixed 720 x 440 window. Creating the image uses
+Finder automation; allow Terminal (or the invoking app) to control Finder when
+macOS prompts. A graphical login session is required. The default staging directory and DMG are
+replaced on each `make dmg` invocation. Custom output paths are not deleted.
+The App Store `.app` and `.pkg` outputs are separate and remain untouched.
+
+The direct-download app uses hardened runtime with no sandbox or
+sandbox-inheritance entitlements and no App Store provisioning profile.
+`Contents/Helpers/crFiles Helper` is a relative symlink to `../MacOS/crFiles`:
+search, archive and video jobs launch separate processes using the same binary
+and its signature. The App Store package retains a separate helper executable
+with sandbox-inheritance entitlements. Never sign the DMG helper symlink with a
+different identity or entitlements, since that would modify the main executable.
+`make dmg` strips debug and local symbols from staged binaries before signing;
+the original build outputs are preserved. External symbols remain available for
+dynamic linking. The existing bundle initialization and helper lookup remain in use; sandbox-only
+bookmark handling is bypassed by the existing runtime checks. macOS privacy
+controls still apply. No JIT, unsigned executable memory, or library-validation
+exceptions are added without demonstrated need. Verify the hardened app's UI,
+GPU rendering and helper jobs before publishing.
+
+```sh
+make dmg
+make dmg BUILD_NUMBER=2
+# Create/sign a DMG without submitting to Apple:
+make package-dmg
+# Retry submission and stapling of an existing DMG:
+make notarize-dmg
+# Use credentials already stored by notarytool:
+make dmg NOTARY_KEYCHAIN_PROFILE=crFiles-notary
+```
+
+Override `DEVELOPER_IDENTITY`, `DMG_STAGE`, or `DMG_OUTPUT` as needed. Install the
+Developer ID Application certificate and its private key in the signing keychain;
+a Mac App Distribution identity or Developer ID Installer identity is not a
+substitute. DMGs do not require an installer signing certificate.
+
+The existing `API_KEY` and `P8_FILE` variables default to the individual API key.
+`NOTARY_ISSUER` must remain empty for individual keys. For a team API key, set it
+to the real issuer UUID; do not reuse altool's key-ID issuer placeholder.
+Submission status is saved next to the DMG as `.notary.json`; rejected
+submissions also attempt to download `.notary-log.json`. A failed submission,
+staple or Gatekeeper check stops the target rather than reporting success.
+
+See Apple's [notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
+and [distribution packaging guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
+
+Packaging artwork is generated from the project SVG using AppKit (no external
+image libraries). To regenerate the white macOS icon and DMG background:
+
+```sh
+swift crFiles/tools/generate_macos_artwork.swift crFiles /tmp/crfiles-white.iconset
+iconutil -c icns /tmp/crfiles-white.iconset -o crFiles/crFiles.icns
+```

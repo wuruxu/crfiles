@@ -1,0 +1,2 @@
+// English fallback for the native macOS permission prompt.
+"NSLocalNetworkUsageDescription" = "crFiles discovers nearby devices and sends and receives files on your local network.";

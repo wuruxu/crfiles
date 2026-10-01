@@ -21,9 +21,16 @@ std::vector<base::WeakPtr<views::Widget>>& Bubbles() {
   return *bubbles;
 }
 
+std::vector<base::WeakPtr<views::Widget>>& Dialogs() {
+  static base::NoDestructor<std::vector<base::WeakPtr<views::Widget>>> dialogs;
+  return *dialogs;
+}
+
 void PruneBubbles() {
   std::erase_if(Bubbles(), [](const auto& widget) {
-    return !widget || widget->IsClosed();
+    // IsClosed() can become true before asynchronous native teardown ends.
+    // Keep such widgets registered so shutdown can finish closing them.
+    return !widget;
   });
 }
 
@@ -59,9 +66,24 @@ class DialogOwner {
 bool IsInsideCrFilesBubble(const gfx::Point& screen_point) {
   PruneBubbles();
   return std::ranges::any_of(Bubbles(), [&](const auto& widget) {
-    return widget->IsVisible() &&
+    return !widget->IsClosed() && widget->IsVisible() &&
            widget->GetWindowBoundsInScreen().Contains(screen_point);
   });
+}
+
+void CloseCrFilesDialogs() {
+  // Closing a window can destroy other windows through their owners. Use weak
+  // pointers and a snapshot so callbacks cannot invalidate this traversal.
+  auto windows = std::move(Bubbles());
+  Bubbles().clear();
+  auto dialogs = std::move(Dialogs());
+  Dialogs().clear();
+  windows.insert(windows.end(), dialogs.begin(), dialogs.end());
+  for (const auto& widget : windows) {
+    // Close() may already have marked it closed while native teardown is still
+    // queued. CloseNow() must finish that teardown as well.
+    if (widget) widget->CloseNow();
+  }
 }
 
 std::unique_ptr<views::Widget> CreateCrFilesBubble(
@@ -91,6 +113,8 @@ void ShowCrFilesDialog(std::unique_ptr<views::DialogDelegate> delegate,
                        views::Widget* parent) {
   auto owner = std::make_unique<DialogOwner>(std::move(delegate), parent);
   auto* widget = owner->widget();
+  std::erase_if(Dialogs(), [](const auto& dialog) { return !dialog; });
+  Dialogs().push_back(widget->GetWeakPtr());
   // Close moves this callback out of the widget before invoking it. Releasing
   // its owner then destroys the widget first and the delegate second. Native
   // parent-window teardown also invokes this callback.

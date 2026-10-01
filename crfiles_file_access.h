@@ -12,7 +12,8 @@
 
 namespace views { class Widget; }
 namespace crfiles {
-// Packaged macOS builds launch the separately signed inherited-sandbox helper.
+// Packaged macOS builds use the helper path: a separately signed executable for
+// App Sandbox, or a symlink to the main executable for Developer ID distribution.
 // Loose development executables retain the original self-launch behavior.
 bool GetCrFilesHelperExecutable(base::FilePath* executable);
 std::vector<uint8_t> CreateFileAccessBookmark(const base::FilePath& path);

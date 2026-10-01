@@ -1,0 +1,2 @@
+// Local network permission prompt shown by macOS.
+"NSLocalNetworkUsageDescription" = "crFiles はローカルネットワーク上の近くのデバイスを検出し、ファイルを送受信します。";

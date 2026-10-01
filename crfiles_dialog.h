@@ -17,6 +17,9 @@ namespace crfiles {
 // UI-thread-only hit test for visible bubbles, including nested popups.
 bool IsInsideCrFilesBubble(const gfx::Point& screen_point);
 
+// Closes native dialog and bubble windows before compositor shutdown.
+void CloseCrFilesDialogs();
+
 // Defers client destruction until native activation/event callbacks unwind.
 // A queued close is discarded if the original widget has been destroyed.
 std::unique_ptr<views::Widget> CreateCrFilesBubble(

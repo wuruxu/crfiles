@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_file_access.h"
+#include "crFiles/grit/crfiles_strings.h"
 #import <AppKit/AppKit.h>
 #include <Security/SecTask.h>
 #include <unistd.h>
@@ -23,6 +24,7 @@
 #include "base/synchronization/lock.h"
 #include "base/task/thread_pool.h"
 #include "ui/views/widget/widget.h"
+#include "ui/base/l10n/l10n_util_mac.h"
 
 namespace crfiles {
 namespace {
@@ -117,7 +119,7 @@ void AccessChecked(base::WeakPtr<views::Widget> widget, base::FilePath path,
   panel.canChooseDirectories = YES;
   panel.allowsMultipleSelection = NO;
   panel.directoryURL = base::apple::FilePathToNSURL(path);
-  panel.message = @"Allow crFiles to access this folder. Select it or a containing folder.";
+  panel.message = l10n_util::GetNSString(IDS_CRFILES_FOLDER_ACCESS_PROMPT);
   auto completion = std::make_shared<base::OnceCallback<void(bool)>>(std::move(reply));
   [panel beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
     if (response != NSModalResponseOK || !widget || widget->IsClosed()) {

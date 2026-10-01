@@ -15,7 +15,7 @@ if (is_linux) {
     packages = [ "gio-unix-2.0" ]
   }
 }
-crfiles_locales = libcr_supported_locales
+crfiles_locales = libcr_supported_locales + [ "ja", "ko" ]
 
 test("crfiles_dialog_unittests") {
   sources = [

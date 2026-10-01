@@ -105,7 +105,7 @@ constexpr char kDefaultLocale[] = "en-US";
 
 bool IsSupportedLocale(std::string_view locale) {
   constexpr std::string_view kLocales[] = {
-      "en-US", "zh-CN", "zh-HK", "zh-TW", "ar", "fr",
+      "en-US", "ja", "ko", "zh-CN", "zh-HK", "zh-TW", "ar", "fr",
       "fr-CA", "ru", "es", "es-419", "pt-BR", "pt-PT"};
   for (std::string_view candidate : kLocales) {
     if (locale == candidate) {
@@ -140,7 +140,8 @@ std::string ResolveLocale(std::string_view locale) {
   if (language == "pt") {
     return canonical.find("PT") != std::string::npos ? "pt-PT" : "pt-BR";
   }
-  if (language == "ar" || language == "ru") {
+  if (language == "ar" || language == "ru" ||
+      language == "ja" || language == "ko") {
     return std::string(language);
   }
   return kDefaultLocale;
@@ -327,6 +328,9 @@ int RunApplication() {
   crfiles::ShowCrFilesWindow(run_loop.QuitClosure());
   run_loop.Run();
   crfiles::DestroyCrFilesWindow();
+  // Native close notifications defer client-owned bubble destruction. Finish
+  // those UI tasks while the Views delegate and Viz service are still alive.
+  base::RunLoop().RunUntilIdle();
 #if BUILDFLAG(IS_LINUX)
   ui::LinuxUi::SetInstance(previous_linux_ui);
 #endif
