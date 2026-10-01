@@ -164,6 +164,10 @@ crfiles_sources = [
     "crfiles_thumbnail_cache.h",
     "crfiles_image_preview.cc",
     "crfiles_image_preview.h",
+    "crfiles_heic_thumbnail.cc",
+    "crfiles_heic_thumbnail.h",
+    "third_party/libheif/heif.h",
+    "third_party/libheif/heif_version.h",
     "crfiles_video_thumbnail.cc",
     "crfiles_video_thumbnail.h",
     "crfiles_video_thumbnail_client.cc",
@@ -229,14 +233,19 @@ executable("crFiles") {
       "crfiles_mac.mm",
       "crfiles_tray_mac.mm",
       "crfiles_file_access_mac.mm",
+      "crfiles_heic_thumbnail_mac.mm",
     ]
     frameworks = [
       "AppKit.framework",
       "ApplicationServices.framework",
       "AVFoundation.framework",
       "CoreMedia.framework",
+      "ImageIO.framework",
       "Security.framework",
     ]
+  }
+  if (!is_mac) {
+    data = [ "third_party/libheif/COPYING" ]
   }
   include_dirs = [ "//third_party/pdfium" ]
   deps = [

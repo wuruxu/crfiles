@@ -1,0 +1,16 @@
+Name: libheif public API headers
+URL: https://github.com/strukturag/libheif
+Version: 1.19.8
+License: LGPL-3.0-or-later
+License File: COPYING
+Security Critical: yes
+
+Only API declarations are vendored. No libheif implementation or codec plugin
+is built here. crFiles dynamically loads the system libheif.so.1 on Linux and
+app-local heif.dll on Windows. Windows packaging accepts a prepared runtime
+with a built-in HEVC backend and validates its exports and DLL dependencies.
+Deployments must keep runtime libraries and decoder plugins updated.
+macOS uses ImageIO and does not load libheif.
+
+Local modifications: heif.h's version include points to the local version
+header. heif_version.h contains the pinned release's version constants.

@@ -74,6 +74,7 @@
 #include "crFiles/crfiles_app_icon.h"
 #include "crFiles/crfiles_file_icons.h"
 #include "crFiles/crfiles_image_preview.h"
+#include "crFiles/crfiles_heic_thumbnail.h"
 #include "crFiles/crfiles_text_thumbnail.h"
 #include "crFiles/crfiles_video_thumbnail.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -4730,7 +4731,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
               (pane->footer_shown_ && pane->footer_->GetBoundsInScreen().Contains(point))) return;
           for (const auto& [entry, button] : pane->visible_buttons_) {
             if (entry->directory || pane->Current().removed.contains(entry->path) ||
-                (!entry->mime.starts_with("image/") && !entry->path.MatchesExtension(FILE_PATH_LITERAL(".svg")))) continue;
+                (!entry->mime.starts_with("image/") && !IsHeicThumbnailPath(entry->path) &&
+                 !entry->path.MatchesExtension(FILE_PATH_LITERAL(".svg")))) continue;
             auto row = pane->row_views_.find(entry->path);
             if (row != pane->row_views_.end() && row->second->GetBoundsInScreen().Contains(point)) {
               *owner = pane; *path = entry->path; return;
@@ -7067,7 +7069,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       const bool video = IsVideoThumbnailPath(entry->path);
       const bool pdf = entry->mime == "application/pdf" || entry->path.MatchesExtension(FILE_PATH_LITERAL(".pdf"));
       const bool thumbnail = !entry->directory && !Current().failed_thumbnails.contains(entry->path) && !Current().visuals[entry->path].thumbnail_attempted &&
-          (text ? text_preview : (video || pdf || entry->mime.starts_with("image/") || entry->path.MatchesExtension(FILE_PATH_LITERAL(".svg"))));
+          (text ? text_preview : (video || pdf || IsHeicThumbnailPath(entry->path) ||
+              entry->mime.starts_with("image/") || entry->path.MatchesExtension(FILE_PATH_LITERAL(".svg"))));
       if (lane == FileVisualLane::kCache) {
         if (!thumbnail || visual_cache_checked_.contains(entry->path)) continue;
         batch.push_back({entry->path, entry->mime, false, options.icon_index, false, true, true});

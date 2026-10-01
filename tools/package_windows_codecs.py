@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage existing HEVC DLLs and their dependencies; never build or download."""
+"""Stage existing HEVC/HEIF DLLs and their dependencies; never build or download."""
 
 import argparse
 import hashlib
@@ -39,6 +39,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out-dir', type=Path, required=True)
     parser.add_argument('--runtime', default='', help='Defaults to OUT/hevc-runtime, OUT/heif-runtime, then OUT')
+    parser.add_argument('--heif-runtime', default='', help='HEIF runtime directory; defaults to the shared runtime, OUT/heif-runtime, then OUT')
     parser.add_argument('--destination', type=Path, required=True)
     args = parser.parse_args()
     output = args.out_dir.resolve(strict=True)
@@ -61,20 +62,40 @@ def main():
                 result[key] = path
         return result
 
-    runtime_files = dlls(runtime)
-    decoder = next((runtime_files[name] for name in ('libde265.dll', 'de265.dll') if name in runtime_files), None)
-    if decoder is None:
-        if args.runtime or runtime != output:
-            raise ValueError(f'Missing libde265.dll or de265.dll in codec runtime: {runtime}')
-        print('WARNING: No HEVC runtime found; HEVC thumbnails will be unavailable. '
-              'Set CRFILES_HEVC_RUNTIME_DIR to a prepared x64 runtime directory.', file=sys.stderr)
+    if args.heif_runtime:
+        heif_runtime = Path(args.heif_runtime).resolve(strict=True)
+    elif 'heif.dll' in dlls(runtime):
+        heif_runtime = runtime
+    else:
+        heif_runtime = output / 'heif-runtime' if (output / 'heif-runtime').exists() else output
+    if not heif_runtime.is_dir():
+        raise ValueError(f'HEIF runtime must be a directory: {heif_runtime}')
+
+    groups = []
+    for kind, folder, names, explicit, source, macro in (
+        ('HEVC', runtime, ('libde265.dll', 'de265.dll'), bool(args.runtime),
+         'crfiles_video_thumbnail.cc', 'CRFILES_DE265_FUNCTIONS'),
+        ('HEIF', heif_runtime, ('heif.dll',), bool(args.heif_runtime),
+         'crfiles_heic_thumbnail.cc', 'HEIC_SYMBOLS'),
+    ):
+        files = dlls(folder)
+        decoder = next((files[name] for name in names if name in files), None)
+        if decoder is None:
+            if explicit or folder != output:
+                raise ValueError(f'Missing {" or ".join(names)} in {kind} runtime: {folder}')
+            setting = 'CRFILES_HEVC_RUNTIME_DIR' if kind == 'HEVC' else 'CRFILES_HEIF_RUNTIME_DIR'
+            print(f'WARNING: No {kind} runtime found; {kind} thumbnails will be unavailable. '
+                  f'Set {setting} to a prepared x64 runtime directory.', file=sys.stderr)
+            continue
+        groups.append((kind, folder, files, decoder, source, macro))
+    if not groups:
         return
 
     reader = project.parent / 'third_party/llvm-build/Release+Asserts/bin/llvm-readobj'
     if not reader.is_file():
         located = shutil.which('llvm-readobj')
         if not located:
-            raise ValueError('llvm-readobj is required to validate HEVC DLL dependencies')
+            raise ValueError('llvm-readobj is required to validate codec DLL dependencies')
         reader = Path(located)
 
     def inspect(path, option):
@@ -83,33 +104,36 @@ def main():
 
     # Check the precise dynamically loaded API used by crFiles, without trying
     # to execute a Windows DLL on the Linux packaging host.
-    source = (project / 'crfiles_video_thumbnail.cc').read_text()
-    api = source.split('#define CRFILES_DE265_FUNCTIONS(V)', 1)[1].split('class HevcDecoder', 1)[0]
-    required = set(re.findall(r'V\((de265_\w+)\)', api))
-    exported = set(re.findall(r'^\s+Name: (\S+)$', inspect(decoder, '--coff-exports'), re.MULTILINE))
-    if not required or required - exported:
-        raise ValueError(f'Incompatible HEVC decoder {decoder}: missing {sorted(required - exported)}')
-    available = dlls(destination)
-    available.update(dlls(output))
-    available.update(runtime_files)
     selected = {}
-    pending = [decoder]
-    while pending:
-        path = pending.pop()
-        name = path.name.lower()
-        if name in selected:
-            continue
-        if name in EXCLUDED_DLLS:
-            raise ValueError(f'Codec requires excluded shader compiler: {name}')
-        imports = inspect(path, '--coff-imports')
-        selected[name] = path
-        for dependency in re.findall(r'^\s+Name: (\S+\.dll)$', imports, re.MULTILINE | re.IGNORECASE):
-            key = dependency.lower()
-            if key in SYSTEM_DLLS or key.startswith(('api-ms-win-', 'ext-ms-win-')):
+    for kind, folder, files, decoder, source, macro in groups:
+        declarations = (project / source).read_text()
+        api = declarations.split(f'#define {macro}(V)', 1)[1].split('\n\n', 1)[0]
+        required = set(re.findall(r'V\((\w+)\)', api))
+        exported = set(re.findall(r'^\s+Name: (\S+)$', inspect(decoder, '--coff-exports'), re.MULTILINE))
+        if not required or required - exported:
+            raise ValueError(f'Incompatible {kind} decoder {decoder}: missing {sorted(required - exported)}')
+        available = dlls(destination)
+        available.update(dlls(output))
+        available.update(files)
+        pending = [decoder]
+        while pending:
+            path = pending.pop()
+            name = path.name.lower()
+            if name in selected:
+                if digest(selected[name]) != digest(path):
+                    raise ValueError(f'Conflicting codec DLL: {name}')
                 continue
-            if key not in available:
-                raise ValueError(f'Missing dependency {dependency} required by {path.name}')
-            pending.append(available[key])
+            if name in EXCLUDED_DLLS:
+                raise ValueError(f'Codec requires excluded shader compiler: {name}')
+            imports = inspect(path, '--coff-imports')
+            selected[name] = path
+            for dependency in re.findall(r'^\s+Name: (\S+\.dll)$', imports, re.MULTILINE | re.IGNORECASE):
+                key = dependency.lower()
+                if key in SYSTEM_DLLS or key.startswith(('api-ms-win-', 'ext-ms-win-')):
+                    continue
+                if key not in available:
+                    raise ValueError(f'Missing dependency {dependency} required by {path.name}')
+                pending.append(available[key])
     existing = dlls(destination)
     for name, path in selected.items():
         if name in existing and digest(existing[name]) != digest(path):
@@ -118,14 +142,15 @@ def main():
         # Canonical lowercase names also match the app's explicit loader paths.
         if name not in existing:
             shutil.copy2(path, destination / name)
-    notices = runtime / 'licenses'
-    if notices.is_dir():
-        shutil.copytree(notices, destination / 'licenses/hevc-runtime', dirs_exist_ok=True)
-    print(f'HEVC runtime: {runtime}; packaged {", ".join(sorted(selected))}')
+    for kind, folder, *_ in groups:
+        notices = folder / 'licenses'
+        if notices.is_dir():
+            shutil.copytree(notices, destination / f'licenses/{kind.lower()}-runtime', dirs_exist_ok=True)
+    print(f'Codec DLLs packaged: {", ".join(sorted(selected))}')
 
 
 if __name__ == '__main__':
     try:
         main()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        sys.exit(f'HEVC packaging failed: {error}')
+        sys.exit(f'Codec packaging failed: {error}')

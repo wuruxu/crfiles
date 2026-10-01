@@ -704,6 +704,32 @@ files and limits; results can therefore be incomplete for unsupported, protected
 unreadable or oversized files. No persistent content index is created.
 
 
+## HEIC and HEIF thumbnails
+
+List and Icon modes and hover previews recognize `.heic` and `.heif`, including
+when the system does not provide an image MIME type. They use the existing
+thumbnail cache and file-change invalidation; decoding runs on workers.
+
+macOS uses ImageIO to downsample the primary image and apply its orientation,
+then converts to premultiplied sRGB pixels. No external HEIF library is required.
+Linux and Windows use libheif, with container rotation and mirroring applied
+once. ICC/NCLX color information is respected, and PQ/HLG HDR is tone mapped to
+SDR using the same approach as crPhotos. Suitable embedded thumbnails are used
+for SDR images; HDR uses the primary image.
+
+Encoded data is limited to 64 MiB, primary and decoded images to 64 megapixels
+and 16,384 pixels per dimension. HEIC decodes are serialized separately from
+ordinary raster thumbnails. Cancellation is checked around codec calls and
+during HDR conversion; an executing native codec call cannot be interrupted.
+Missing codecs or decode failures retain the normal file icon.
+
+- Linux requires system `libheif.so.1` version 1.19.8 or newer with an HEVC
+  decoder backend. The Linux ZIP includes the license, not the system library.
+- Windows requires app-local `heif.dll` with a built-in HEVC backend and its
+  dependencies. `make wf0` validates and packages existing runtime DLLs from
+  `CRFILES_HEIF_RUNTIME_DIR`, a shared codec runtime, `OUT/heif-runtime`, or OUT.
+  The packager reports an unavailable codec when no runtime is supplied.
+
 ## Video thumbnails
 
 List and Icon modes show a static video frame, fitted to the selected icon size.

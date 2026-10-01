@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_image_preview.h"
+#include "crFiles/crfiles_heic_thumbnail.h"
 #include "crFiles/crfiles_thumbnail_cache.h"
 #include "crFiles/crfiles_text_thumbnail.h"
 #include "crFiles/crfiles_video_thumbnail.h"
@@ -245,7 +246,10 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
   if (path.MatchesExtension(FILE_PATH_LITERAL(".pdf")) || encoded.starts_with("%PDF-"))
     return RenderPdfThumbnail(encoded, maximum_edge, canceled);
   SkBitmap result;
-  if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
+  if (IsHeicThumbnailPath(path)) {
+    result = DecodeHeicThumbnail(encoded, maximum_edge, canceled);
+    if (result.drawsNothing()) return {};
+  } else if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
     SkMemoryStream stream(encoded.data(), encoded.size(), true);
     auto dom = SkSVGDOM::MakeFromStream(stream);
     if (!dom || !dom->getRoot()) return {};
