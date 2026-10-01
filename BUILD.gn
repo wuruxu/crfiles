@@ -228,6 +228,10 @@ action("crfiles_buildtime") {
 executable("crFiles") {
   sources = crfiles_sources
   if (is_mac) {
+    # Apply link-time optimization to the standalone application, as Chromium
+    # does for its main executable. The config is inactive without ThinLTO.
+    configs -= [ "//build/config/compiler:thinlto_optimize_default" ]
+    configs += [ "//build/config/compiler:thinlto_optimize_max" ]
     sources += [
       "crfiles_mac.h",
       "crfiles_mac.mm",

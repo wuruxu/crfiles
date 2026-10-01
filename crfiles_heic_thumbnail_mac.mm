@@ -17,7 +17,7 @@ bool Stopped(const std::shared_ptr<std::atomic_bool>& canceled) {
   return canceled && canceled->load(std::memory_order_relaxed);
 }
 bool ReadDimension(CFDictionaryRef properties, CFStringRef key, int* value) {
-  const auto number = CFDictionaryGetValue(properties, key);
+  const void* const number = CFDictionaryGetValue(properties, key);
   return number && CFGetTypeID(number) == CFNumberGetTypeID() &&
       CFNumberGetValue(static_cast<CFNumberRef>(number), kCFNumberIntType, value);
 }

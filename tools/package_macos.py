@@ -79,12 +79,26 @@ def check_minimum_system_version(binary, minimum):
                              '--minimum-system-version')
 
 
-def copy_libraries(build, executables, destination):
-    # ANGLE is loaded with dlopen and therefore does not appear in otool -L.
+def uses_static_angle(build):
+    flags = build / 'gen/ui/gl/buildflags.h'
+    if not flags.is_file():
+        raise ValueError(f'Missing generated GL build flags: {flags}')
+    match = re.search(
+        r'^#define BUILDFLAG_INTERNAL_USE_STATIC_ANGLE\(\) \(([01])\)$',
+        flags.read_text(), re.MULTILINE)
+    if not match:
+        raise ValueError(f'Cannot determine static ANGLE configuration: {flags}')
+    return match.group(1) == '1'
+
+
+def copy_libraries(build, executables, destination, static_angle):
+    # Dynamic ANGLE is loaded with dlopen and does not appear in otool -L.
+    # Static builds generate placeholder dylibs for Chromium infrastructure;
+    # they contain no ANGLE implementation and must not be bundled or signed.
     queue = list(executables)
     copied = set()
-    for name in ('libEGL.dylib', 'libGLESv2.dylib'):
-        if (build / name).is_file():
+    if not static_angle:
+        for name in ('libEGL.dylib', 'libGLESv2.dylib'):
             shutil.copy2(build / name, destination / name)
             copied.add(name)
             queue.append(destination / name)
@@ -135,8 +149,10 @@ def package(args):
         raise ValueError('--unsigned cannot be combined with signing or installer arguments')
     if args.pkg and (not args.installer_identity or args.pkg.exists()):
         raise ValueError('--pkg requires --installer-identity and a new output path')
-    required = ['crFiles', 'icudtl.dat', 'crfiles_resources.pak', 'crfiles_resources',
-                'libEGL.dylib', 'libGLESv2.dylib']
+    static_angle = uses_static_angle(build)
+    required = ['crFiles', 'icudtl.dat', 'crfiles_resources.pak', 'crfiles_resources']
+    if not static_angle:
+        required += ['libEGL.dylib', 'libGLESv2.dylib']
     for name in required:
         if not (build / name).exists():
             raise ValueError(f'Missing build resource: {name}')
@@ -180,7 +196,7 @@ def package(args):
     shutil.copy2(privacy_path, resources / 'PrivacyInfo.xcprivacy')
     for localization in sorted((PROJECT / 'mac').glob('*.lproj')):
         shutil.copytree(localization, resources / localization.name)
-    libraries = copy_libraries(build, executables, frameworks)
+    libraries = copy_libraries(build, executables, frameworks, static_angle)
     for library in libraries:
         check_minimum_system_version(library, args.minimum_system_version)
         for directory in (macos, helpers):
