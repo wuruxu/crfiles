@@ -63,6 +63,8 @@
 #include <sys/stat.h>
 #if BUILDFLAG(IS_LINUX)
 #include <fcntl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 #endif
 #include "cc/paint/paint_flags.h"
@@ -110,6 +112,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/events/event_handler.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
@@ -164,6 +167,31 @@
 #endif
 namespace crfiles {
 namespace {
+
+// Share the navigation surface with the active tab, including theme changes.
+ui::ColorId NavigationColor(const views::View* view) {
+  const auto* widget = view->GetWidget();
+  const bool light = widget->GetColorMode() == ui::ColorProviderKey::ColorMode::kLight;
+  const bool normal_contrast =
+      widget->GetNativeTheme()->preferred_contrast() !=
+          ui::NativeTheme::PreferredContrast::kMore &&
+      widget->GetForcedColors() == ui::ColorProviderKey::ForcedColors::kNone;
+  return light && normal_contrast ? ui::kColorSysSurface3 : ui::kColorSysBase;
+}
+
+class NavigationBackground : public views::Background {
+ public:
+  NavigationBackground() { SetColor(ui::kColorSysBase); }
+
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
+    canvas->DrawColor(color().ResolveToSkColor(view->GetColorProvider()));
+  }
+
+  void OnViewThemeChanged(views::View* view) override {
+    SetColor(NavigationColor(view));
+    view->SchedulePaint();
+  }
+};
 
 // Paint the outline and fill together so both have square bottom corners.
 class FooterBackground : public views::Background {
@@ -339,8 +367,9 @@ void ReadExtraMetadata(Entry& entry, const base::FileEnumerator::FileInfo* enume
         base::Microseconds(metadata.st_birthtimespec.tv_nsec / 1000);
 #elif BUILDFLAG(IS_LINUX)
   struct statx birth = {};
-  if (statx(AT_FDCWD, entry.path.value().c_str(), AT_STATX_SYNC_AS_STAT,
-            STATX_BTIME, &birth) == 0 && (birth.stx_mask & STATX_BTIME))
+  // Avoid requiring the glibc 2.28 statx wrapper in the compatibility sysroot.
+  if (syscall(SYS_statx, AT_FDCWD, entry.path.value().c_str(), AT_STATX_SYNC_AS_STAT,
+              STATX_BTIME, &birth) == 0 && (birth.stx_mask & STATX_BTIME))
     entry.created = base::Time::FromTimeT(birth.stx_btime.tv_sec) +
         base::Microseconds(birth.stx_btime.tv_nsec / 1000);
 #endif
@@ -2429,7 +2458,7 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     } else {
       cc::PaintFlags flags;
       flags.setAntiAlias(true);
-      flags.setColor(GetColorProvider()->GetColor(ui::kColorSysBase));
+      flags.setColor(GetColorProvider()->GetColor(NavigationColor(this)));
       const float w = width(), h = height();
       SkPathBuilder path;
       path.moveTo(0, h).cubicTo(5, h, 8, h - 3, 8, h - 8)
@@ -3287,7 +3316,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : ui::kColorSysSurface));
     if (!root_) {
     toolbar_ = AddChildView(std::make_unique<views::View>());
-    toolbar_->SetBackground(views::CreateSolidBackground(ui::kColorSysBase));
+    toolbar_->SetBackground(std::make_unique<NavigationBackground>());
     auto* tools = toolbar_->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(6, 8), 4));
     tools->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
@@ -3310,7 +3339,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto* path_area = toolbar_->AddChildView(std::make_unique<views::View>());
     path_area->SetLayoutManager(std::make_unique<views::FillLayout>());
     path_area->SetPreferredSize(gfx::Size(240, 32));
-    path_area->SetBackground(views::CreateSolidBackground(ui::kColorSysBase));
     tools->SetFlexForView(path_area, 1);
     crumbs_scroll_ = path_area->AddChildView(std::make_unique<NavigationScrollView>(
         Deferred(base::BindRepeating(&FilesView::EditAddress, weak_.GetWeakPtr()))));
