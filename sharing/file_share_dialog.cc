@@ -33,6 +33,7 @@
 #include "base/task/thread_pool.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "components/vector_icons/vector_icons.h"
 #include "crFiles/crfiles_app_icon.h"
 #include "crFiles/crfiles_context_actions.h"
@@ -72,6 +73,9 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 namespace crfiles {
 namespace {
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
@@ -111,6 +115,15 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   }
   ~ShareSessionToastImpl() override { owner_observation_.Reset(); timer_.Stop(); Close(); }
  private:
+  bool UseParentWindow(const ShareBubbleAnchor& anchor) const {
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE)
+    return owner_ && !anchor.background &&
+        !ui::OzonePlatform::GetInstance()->GetPlatformProperties()
+             .supports_global_screen_coordinates;
+#else
+    return false;
+#endif
+  }
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
     if (!active) return;
     stacking_dirty_ = true;
@@ -160,6 +173,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     }
   }
   void UpdateProgress(const NearbySharing::Snapshot& state) {
+    displayed_state_ = state;
     using Stage = NearbySharing::Stage;
     const auto filename = base::UTF8ToUTF16(state.current_file.empty() ?
         (state.files.empty() ? std::string() : state.files.front()) : state.current_file);
@@ -192,13 +206,18 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (!state.busy) cancel_->SetEnabled(true);
     if (resize && delegate_ && widget_) delegate_->SizeToContents();
   }
-  void Show(const NearbySharing::Snapshot& state, bool transfer = false) {
-    // Repositioning never recreates controls or clears a submitted decision.
-    const bool same_prompt = session_ == state.session && stage_ == state.stage;
+  void Show(const NearbySharing::Snapshot& state, bool transfer = false,
+            std::optional<ShareBubbleAnchor> position = std::nullopt) {
+    // A Wayland surface must be recreated when changing its parent role.
+    const bool same_prompt = session_ == state.session && stage_ == state.stage &&
+        transfer_view_ == transfer;
     const bool decided = same_prompt && decided_;
+    const bool trusted = same_prompt && trust_ && trust_->GetChecked();
+    const auto ready = same_prompt ? ready_ : base::TimeTicks::Now() + base::Milliseconds(500);
     Close(); session_ = state.session; stage_ = state.stage; decided_ = decided;
+    displayed_state_ = state;
     transfer_view_ = transfer;
-    ready_ = base::TimeTicks::Now() + base::Milliseconds(500);
+    ready_ = ready;
     auto contents = std::make_unique<views::View>();
     auto* contents_layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 12));
     contents_layout->set_minimum_cross_axis_size(336);
@@ -221,6 +240,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       auto* code = Label(contents.get(), Text(IDS_CRFILES_COMPARE_CODE) + u"\n" + base::UTF8ToUTF16(state.code));
       code->SetElideBehavior(gfx::NO_ELIDE);
       trust_ = contents->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_NEARBY_TRUST_DEVICE)));
+      trust_->SetChecked(trusted);
     } else {
       auto* summary = contents->AddChildView(std::make_unique<views::View>());
       summary->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(12), 6));
@@ -241,13 +261,20 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     } else {
       accept_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), true), Text(IDS_CRFILES_ACCEPT)));
       reject_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), false), Text(IDS_CRFILES_REJECT)));
-      accept_->SetEnabled(false); reject_->SetEnabled(false);
+      const bool enabled = !decided_ && base::TimeTicks::Now() >= ready_;
+      accept_->SetEnabled(enabled); reject_->SetEnabled(enabled);
     }
-    const auto anchor = anchor_.Run(state);
+    const auto anchor = position ? *position : anchor_.Run(state);
     delegate_ = std::make_unique<views::BubbleDialogDelegate>(nullptr, anchor.arrow);
-    // The main window owns this controller, but must not natively parent its
-    // bubble: parent visibility and window modality must not hide consent UI.
-    delegate_->set_has_parent(false);
+    // Wayland cannot position an independent toplevel at the requested screen
+    // coordinates. Foreground bubbles need the owner's subsurface coordinates.
+    // Background consent UI remains independent of the owner's visibility.
+    parented_ = UseParentWindow(anchor);
+    delegate_->set_has_parent(parented_);
+    if (parented_) {
+      delegate_->set_parent_window(owner_->GetNativeView());
+      delegate_->SetAnchorWidget(owner_.get());
+    }
     delegate_->SetAnchorRect(anchor.bounds);
     delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
     delegate_->SetShowCloseButton(false); delegate_->set_close_on_deactivate(false);
@@ -271,6 +298,11 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   }
   void Position(const ShareBubbleAnchor& anchor) {
     if (!widget_ || !delegate_) return;
+    if (parented_ != UseParentWindow(anchor) && displayed_state_) {
+      const auto state = *displayed_state_;
+      Show(state, transfer_view_, anchor);
+      return;
+    }
     const bool mode_changed = !background_mode_ || *background_mode_ != anchor.background;
     const bool anchor_changed = delegate_->arrow() != anchor.arrow ||
         delegate_->GetAnchorRect() != anchor.bounds;
@@ -285,7 +317,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       PrepareCrFilesShareBubbleMac(widget_.get(), anchor.background);
 #endif
     if (widget_->IsVisible() && (stacking_dirty_ || mode_changed || anchor_changed)) {
-      if (!anchor.background && owner_ && owner_->IsVisible() &&
+      if (!parented_ && !anchor.background && owner_ && owner_->IsVisible() &&
           !owner_->IsMinimized()) {
         // A parentless bubble does not follow its owner's native stacking.
         // Reapply after activation or anchor changes, rather than every tick.
@@ -319,6 +351,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       if (!transfer_view_) Close();
       else if (widget_ && state.session != session_) {
         cancel_->SetText(Text(IDS_CRFILES_CLOSE)); cancel_->SetEnabled(true);
+        if (displayed_state_) displayed_state_->busy = false;
       }
       else if (widget_ && !state.enabled && state.session == session_) UpdateProgress(state);
       if (widget_) Position(anchor_.Run(state));
@@ -336,6 +369,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor_;
   std::unique_ptr<views::BubbleDialogDelegate> delegate_;
   std::unique_ptr<views::Widget> widget_;
+  std::optional<NearbySharing::Snapshot> displayed_state_;
   raw_ptr<views::Checkbox> trust_ = nullptr;
   raw_ptr<views::MdTextButton> accept_ = nullptr, reject_ = nullptr;
   raw_ptr<views::MdTextButton> cancel_ = nullptr;
@@ -346,6 +380,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   NearbySharing::Stage stage_ = NearbySharing::Stage::kOff;
   bool decided_ = false;
   bool transfer_view_ = false, dismiss_ = false;
+  bool parented_ = false;
   std::optional<bool> background_mode_;
   bool stacking_dirty_ = true;
   base::TimeTicks ready_;
