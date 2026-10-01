@@ -854,7 +854,9 @@ class FileShareView : public views::View, public ui::EventObserver {
     peers_->SetVisible(!fallback);
     session_device_->SetTrusted(state.peer_trusted);
     if (session) session_device_->SetIdentity(PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
-    if (state.receiving && toast_widget_) CloseToast();
+    // The direction is retained with completed/canceled/failed sessions.
+    // An old receive result must not dismiss a newly composed outgoing offer.
+    if (state.receiving && state.busy && toast_widget_) CloseToast();
     shown_session_ = state.session; shown_stage_ = state.stage;
     auto* transfer_target = fallback ? session_device_.get() : active_device_.get();
     if (active_device_ && active_device_ != transfer_target) active_device_->SetTransfer(false, false, 0);

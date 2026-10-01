@@ -1401,6 +1401,12 @@ class AddressOutsideClickHandler : public ui::EventHandler {
   void OnMouseEvent(ui::MouseEvent* event) override {
     auto* target = static_cast<views::View*>(event->target());
     if (!target || target->GetWidget() != root_->GetWidget()) return;
+    if (IsCrFilesWindowBlockedByModal(root_->GetWidget())) {
+      // Allow mouse-exit cleanup even while new hover/press input is blocked.
+      if (event->type() == ui::EventType::kMouseExited) return;
+      if (event->cancelable()) event->StopPropagation();
+      return;
+    }
     auto screen_point = event->location();
     views::View::ConvertPointToScreen(target, &screen_point);
     // Native capture may route a popup-area event through the main window.
@@ -4965,6 +4971,38 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void PollFooterHover() {
     if (root_ || tabs_.empty() || !display::Screen::Get()) return;
+    if (IsCrFilesWindowBlockedByModal(GetWidget())) {
+      if (!modal_hover_blocked_) {
+        modal_hover_blocked_ = true;
+        auto* root = GetWidget()->GetRootView();
+        modal_previous_mouse_input_ = root->GetCanProcessEventsWithinSubtree();
+        root->SetCanProcessEventsWithinSubtree(false);
+        GetWidget()->ReleaseCapture();
+        CloseHoverPreview(false);
+        // Clear hover left behind when AppKit begins a sheet without sending
+        // a mouse-exit event to the parent Views controls.
+        const auto clear_hover = [](auto&& self, views::View* view) -> void {
+          if (auto* button = views::AsViewClass<views::Button>(view);
+              button && button->GetState() == views::Button::STATE_HOVERED)
+            button->SetState(views::Button::STATE_NORMAL);
+          for (views::View* child : view->children()) self(self, child);
+        };
+        clear_hover(clear_hover, GetWidget()->GetRootView());
+        VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
+          if (!pane->footer_hovered_) return;
+          pane->footer_hovered_ = false;
+          pane->UpdateFooterVisibility();
+        }));
+        fullscreen_hide_timer_.Stop();
+        fullscreen_shown_ = false;
+        fullscreen_exit_->SetVisible(false);
+      }
+      return;
+    }
+    if (modal_hover_blocked_) {
+      GetWidget()->GetRootView()->SetCanProcessEventsWithinSubtree(modal_previous_mouse_input_);
+      modal_hover_blocked_ = false;
+    }
     const auto cursor = display::Screen::Get()->GetCursorScreenPoint();
     // Screen coordinates alone also hit panes underneath a bubble. Preserve
     // their hover state while the pointer belongs to an owned popup instead.
@@ -7375,6 +7413,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   base::OneShotTimer footer_hide_timer_;
   base::RepeatingTimer footer_pointer_timer_;
   bool footer_active_ = false, footer_expired_ = false;
+  bool modal_hover_blocked_ = false;
+  bool modal_previous_mouse_input_ = true;
   bool footer_hovered_ = false, footer_shown_ = false, drop_highlight_shown_ = false;
   bool trash_footer_animation_pending_ = false;
   std::vector<base::WeakPtr<views::View>> dragging_rows_;

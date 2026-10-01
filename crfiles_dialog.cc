@@ -21,8 +21,13 @@ std::vector<base::WeakPtr<views::Widget>>& Bubbles() {
   return *bubbles;
 }
 
-std::vector<base::WeakPtr<views::Widget>>& Dialogs() {
-  static base::NoDestructor<std::vector<base::WeakPtr<views::Widget>>> dialogs;
+struct DialogRecord {
+  base::WeakPtr<views::Widget> widget;
+  base::WeakPtr<views::Widget> parent;
+};
+
+std::vector<DialogRecord>& Dialogs() {
+  static base::NoDestructor<std::vector<DialogRecord>> dialogs;
   return *dialogs;
 }
 
@@ -71,6 +76,25 @@ bool IsInsideCrFilesBubble(const gfx::Point& screen_point) {
   });
 }
 
+bool IsCrFilesWindowBlockedByModal(views::Widget* window) {
+  if (!window || window->IsClosed()) return false;
+  // AppKit sheets need not appear in the same native ownership traversal as
+  // ordinary child windows. Keep the explicit parent passed at creation.
+  for (const auto& dialog : Dialogs()) {
+    if (dialog.parent.get() == window && dialog.widget &&
+        !dialog.widget->IsClosed() && dialog.widget->IsVisible() &&
+        dialog.widget->widget_delegate()->GetModalType() == ui::mojom::ModalType::kWindow)
+      return true;
+  }
+  for (views::Widget* child : views::Widget::GetAllOwnedWidgets(window->GetNativeView())) {
+    if (child != window && !child->IsClosed() && child->IsVisible() &&
+        child->widget_delegate() &&
+        child->widget_delegate()->GetModalType() == ui::mojom::ModalType::kWindow)
+      return true;
+  }
+  return false;
+}
+
 void CloseCrFilesDialogs() {
   // Closing a window can destroy other windows through their owners. Use weak
   // pointers and a snapshot so callbacks cannot invalidate this traversal.
@@ -78,7 +102,7 @@ void CloseCrFilesDialogs() {
   Bubbles().clear();
   auto dialogs = std::move(Dialogs());
   Dialogs().clear();
-  windows.insert(windows.end(), dialogs.begin(), dialogs.end());
+  for (const auto& dialog : dialogs) windows.push_back(dialog.widget);
   for (const auto& widget : windows) {
     // Close() may already have marked it closed while native teardown is still
     // queued. CloseNow() must finish that teardown as well.
@@ -113,8 +137,8 @@ void ShowCrFilesDialog(std::unique_ptr<views::DialogDelegate> delegate,
                        views::Widget* parent) {
   auto owner = std::make_unique<DialogOwner>(std::move(delegate), parent);
   auto* widget = owner->widget();
-  std::erase_if(Dialogs(), [](const auto& dialog) { return !dialog; });
-  Dialogs().push_back(widget->GetWeakPtr());
+  std::erase_if(Dialogs(), [](const auto& dialog) { return !dialog.widget; });
+  Dialogs().push_back({widget->GetWeakPtr(), parent->GetWeakPtr()});
   // Close moves this callback out of the widget before invoking it. Releasing
   // its owner then destroys the widget first and the delegate second. Native
   // parent-window teardown also invokes this callback.

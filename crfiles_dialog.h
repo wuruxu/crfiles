@@ -16,6 +16,8 @@ namespace crfiles {
 
 // UI-thread-only hit test for visible bubbles, including nested popups.
 bool IsInsideCrFilesBubble(const gfx::Point& screen_point);
+// Whether a visible window-modal child blocks input to this window.
+bool IsCrFilesWindowBlockedByModal(views::Widget* window);
 
 // Closes native dialog and bubble windows before compositor shutdown.
 void CloseCrFilesDialogs();
