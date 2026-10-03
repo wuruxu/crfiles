@@ -104,12 +104,14 @@ def copy_libraries(build, executables, destination, static_angle):
             queue.append(destination / name)
     while queue:
         binary = queue.pop()
+        install_names = (set(run('otool', '-D', binary).splitlines()[1:])
+                         if binary.suffix == '.dylib' else set())
         for dependency in linked_libraries(binary):
             if dependency.startswith(('/System/Library/', '/usr/lib/')):
                 continue
             name = Path(dependency).name
             # A dylib's first entry may be its own install name.
-            if name == binary.name and binary.suffix == '.dylib':
+            if dependency in install_names:
                 continue
             if not dependency.startswith(('@rpath/', '@loader_path/', '@executable_path/')):
                 raise ValueError(f'Non-relocatable dependency: {dependency}')

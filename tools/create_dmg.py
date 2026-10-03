@@ -2,6 +2,7 @@
 """Create a Finder-configured disk image from an already signed app stage."""
 import argparse
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -43,17 +44,21 @@ def main():
     parser.add_argument('--stage', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--app-name', default='crFiles')
     args = parser.parse_args()
     stage = args.stage.resolve()
     output = args.output.absolute()
     if output.exists():
         parser.error('Output already exists')
-    if not (stage / 'crFiles.app').is_dir():
-        parser.error('Missing staged crFiles.app')
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', args.app_name):
+        parser.error('Invalid app name')
+    app_filename = f'{args.app_name}.app'
+    if not (stage / app_filename).is_dir():
+        parser.error(f'Missing staged {app_filename}')
     background = Path(__file__).resolve().parents[1] / 'mac/dmg/background.png'
     (stage / '.background').mkdir(exist_ok=True)
     shutil.copy2(background, stage / '.background/background.png')
-    with tempfile.TemporaryDirectory(prefix='crfiles-dmg-') as temp:
+    with tempfile.TemporaryDirectory(prefix=f'{args.app_name.lower()}-dmg-') as temp:
         temp = Path(temp)
         image = temp / 'layout.dmg'
         # Finder can resolve aliases to an already mounted volume with the same
@@ -82,7 +87,7 @@ def main():
         set icon size of options to 90
         set text size of options to 13
         set background picture of options to file ".background:background.png" of targetFolder
-        set position of item "crFiles.app" of targetFolder to {210, 220}
+        set position of item (item 2 of argv) of targetFolder to {210, 220}
         set position of item "Applications" of targetFolder to {510, 220}
         update targetFolder without registering applications
         delay 2
@@ -91,7 +96,7 @@ def main():
 end run
 '''
             for attempt in range(2):
-                subprocess.run(['osascript', '-', str(mount)], input=script,
+                subprocess.run(['osascript', '-', str(mount), app_filename], input=script,
                                text=True, check=True, timeout=45)
                 print('Waiting for Finder to save the disk image layout...', flush=True)
                 if wait_for_layout(mount / '.DS_Store'):
@@ -103,7 +108,7 @@ end run
                     'Finder did not save .DS_Store after two attempts. Check Finder '
                     'automation permission and desktopservices DSDontWriteUSBStores/'
                     'DSDontWriteNetworkStores preferences. No final DMG was created.')
-            run('diskutil', 'renameVolume', device, f'crFiles {args.version}')
+            run('diskutil', 'renameVolume', device, f'{args.app_name} {args.version}')
         finally:
             run('hdiutil', 'detach', device)
         run('hdiutil', 'convert', image, '-format', 'UDZO', '-o', output)

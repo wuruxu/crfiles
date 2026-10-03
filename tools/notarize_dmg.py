@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--keychain-profile', default='')
     args = parser.parse_args()
     if not args.dmg.is_file():
-        parser.error('DMG not found; run make package-dmg first')
+        parser.error('DMG not found; create the signed disk image before notarization')
     if args.keychain_profile:
         auth = ['--keychain-profile', args.keychain_profile]
     else:
