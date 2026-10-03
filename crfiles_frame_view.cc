@@ -366,7 +366,7 @@ void LayoutOptionsMenu() {
   const gfx::Insets insets = options_menu_view_->GetInsets();
   const int x = std::clamp(options_button_->bounds().right() - size.width() + insets.right(),
                            0, std::max(0, width() - size.width()));
-  options_menu_view_->SetBounds(x, kTitlebarHeight - insets.top(), size.width(), size.height());
+  options_menu_view_->SetBounds(x, options_button_->bounds().bottom() - insets.top(), size.width(), size.height());
   options_menu_view_->DeprecatedLayoutImmediately();
 }
 void HandleOptionsMenuCommand(int command) {

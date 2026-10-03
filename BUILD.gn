@@ -9,6 +9,10 @@ import("//testing/test.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 import("//tools/grit/grit_rule.gni")
 import("//tools/grit/repack.gni")
+declare_args() {
+  # Linux packaging enables this explicitly; Windows and macOS keep it on.
+  crfiles_thinlto_optimize_max = is_win || is_mac
+}
 if (is_linux) {
   import("//build/config/linux/pkg_config.gni")
   pkg_config("context_gio") {
@@ -227,11 +231,13 @@ action("crfiles_buildtime") {
 
 executable("crFiles") {
   sources = crfiles_sources
-  if (is_mac) {
+  if (crfiles_thinlto_optimize_max && (is_linux || is_win || is_mac)) {
     # Apply link-time optimization to the standalone application, as Chromium
     # does for its main executable. The config is inactive without ThinLTO.
     configs -= [ "//build/config/compiler:thinlto_optimize_default" ]
     configs += [ "//build/config/compiler:thinlto_optimize_max" ]
+  }
+  if (is_mac) {
     sources += [
       "crfiles_mac.h",
       "crfiles_mac.mm",

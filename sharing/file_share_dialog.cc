@@ -72,6 +72,7 @@
 #include "ui/events/event_observer.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
+#include "ui/views/window/client_view.h"
 #include "ui/views/window/dialog_delegate.h"
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE)
 #include "ui/ozone/public/ozone_platform.h"
@@ -105,6 +106,31 @@ ui::ImageModel PeerAvatar(const NearbySharing::Snapshot& state) {
   }
   return Avatar(state.peer_avatar);
 }
+class ShareSessionBubbleDelegate : public views::BubbleDialogDelegate {
+ public:
+  ShareSessionBubbleDelegate(views::BubbleBorder::Arrow arrow,
+                            base::WeakPtr<views::Widget> bounds_owner)
+      : views::BubbleDialogDelegate(nullptr, arrow), bounds_owner_(bounds_owner) {
+    if (bounds_owner_) {
+      set_available_screen_bounds_callback(base::BindRepeating(
+          [](base::WeakPtr<views::Widget> owner, const gfx::Rect&) {
+            return owner ? owner->GetClientAreaBoundsInScreen() : gfx::Rect();
+          }, bounds_owner_));
+    }
+  }
+  gfx::Rect GetBubbleBounds() override {
+    if (!bounds_owner_) return views::BubbleDialogDelegate::GetBubbleBounds();
+    // Wayland disables screen-based adjustment. A parented bubble can instead
+    // fit within its owner's coordinates without moving the arrow's anchor.
+    auto* frame = GetBubbleFrameView();
+    frame->set_use_anchor_window_bounds(false);
+    frame->SetPreferredArrowAdjustment(views::BubbleFrameView::PreferredArrowAdjustment::kOffset);
+    return frame->GetUpdatedWindowBounds(GetAnchorRect(), arrow(),
+        GetWidget()->client_view()->GetPreferredSize({}), true);
+  }
+ private:
+  base::WeakPtr<views::Widget> bounds_owner_;
+};
 class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObserver {
  public:
   ShareSessionToastImpl(views::Widget* owner, std::shared_ptr<NearbySharing> service,
@@ -133,6 +159,9 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   }
   void OnWidgetVisibilityChanged(views::Widget*, bool) override {
     stacking_dirty_ = true;
+  }
+  void OnWidgetBoundsChanged(views::Widget*, const gfx::Rect&) override {
+    if (parented_ && delegate_ && widget_) delegate_->SizeToContents();
   }
   void OnWidgetDestroying(views::Widget*) override {
     owner_observation_.Reset();
@@ -265,11 +294,12 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       accept_->SetEnabled(enabled); reject_->SetEnabled(enabled);
     }
     const auto anchor = position ? *position : anchor_.Run(state);
-    delegate_ = std::make_unique<views::BubbleDialogDelegate>(nullptr, anchor.arrow);
     // Wayland cannot position an independent toplevel at the requested screen
     // coordinates. Foreground bubbles need the owner's subsurface coordinates.
     // Background consent UI remains independent of the owner's visibility.
     parented_ = UseParentWindow(anchor);
+    delegate_ = std::make_unique<ShareSessionBubbleDelegate>(anchor.arrow,
+        parented_ ? owner_ : base::WeakPtr<views::Widget>());
     delegate_->set_has_parent(parented_);
     if (parented_) {
       delegate_->set_parent_window(owner_->GetNativeView());

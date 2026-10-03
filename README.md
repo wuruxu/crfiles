@@ -232,6 +232,19 @@ manual interoperability checks.
 configurations. The Chromium root Makefile includes `chromium_src_Makefile`, which
 provides `crfiles` and `crfileswin` targets using **autoninja** exclusively.
 
+`make lf` (also `make crfiles`) sets `crfiles_thinlto_optimize_max=false` in
+`out/debian/args.gn`, regenerates GN files and builds with the default ThinLTO
+link optimization level (O0). `make lf0` sets this argument to `true`, regenerates
+GN files, builds with `thinlto_optimize_max` and then packages the result. With
+the current official Release configuration and ThinLTO enabled, this selects
+link optimization level O2. Both commands preserve the other GN arguments and
+explicitly select their mode so a later `make lf` restores O0 after packaging.
+Explicit GN generation runs only when the mode changes or `build.ninja` is
+missing. Repeating the same mode leaves `args.gn` untouched and proceeds to
+autoninja, which still handles regeneration required by other build changes.
+Switching modes normally reuses existing C++ objects and runs the ThinLTO link
+again. Windows and macOS default to `crfiles_thinlto_optimize_max=true`.
+
 For a future authorized build, run `autoninja -C out/debian crFiles` (Linux) or
 `autoninja -C out/win10 crFiles` (Windows). The application accepts folder arguments,
 for example `out/debian/crFiles /home/user /tmp --lang=zh-CN`.

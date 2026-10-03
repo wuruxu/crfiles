@@ -5,6 +5,7 @@ CRFILES_RESOURCE_PAKS := crfiles_resources.pak crfiles_resources_200_percent.pak
 
 .PHONY: crfiles crfileswin
 crfiles:
+	@python3 crFiles/tools/set_thinlto_mode.py --out-dir out/debian --optimize-max false --gn buildtools/linux64/gn
 	autoninja -C out/debian crFiles
 
 crfileswin:
