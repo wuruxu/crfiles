@@ -55,6 +55,7 @@
 #include "media/filters/ffmpeg_glue.h"
 #include "crFiles/third_party/libde265/de265.h"
 extern "C" {
+#include "third_party/dav1d/libdav1d/include/dav1d/dav1d.h"
 #include <libavutil/mem.h>
 }
 #endif
@@ -101,7 +102,11 @@ SkBitmap FrameThumbnail(const AVFrame& frame, const media::VideoDecoderConfig& c
   if (frame.width <= 0 || frame.height <= 0 || frame.width > 8192 || frame.height > 8192 ||
       static_cast<int64_t>(frame.width) * frame.height > 16 * 1024 * 1024) return {};
   int depth = 8, subsample_x = 2, subsample_y = 2;
+  bool monochrome = false;
   switch (frame.format) {
+    case AV_PIX_FMT_GRAY8: monochrome = true; break;
+    case AV_PIX_FMT_GRAY10LE: monochrome = true; depth = 10; break;
+    case AV_PIX_FMT_GRAY12LE: monochrome = true; depth = 12; break;
     case AV_PIX_FMT_YUV420P: case AV_PIX_FMT_YUVJ420P: break;
     case AV_PIX_FMT_YUV422P: case AV_PIX_FMT_YUVJ422P: subsample_y = 1; break;
     case AV_PIX_FMT_YUV444P: case AV_PIX_FMT_YUVJ444P: subsample_x = subsample_y = 1; break;
@@ -120,6 +125,7 @@ SkBitmap FrameThumbnail(const AVFrame& frame, const media::VideoDecoderConfig& c
   const auto data = base::span(frame.data);
   const auto linesize = base::span(frame.linesize);
   for (size_t plane = 0; plane < planes.size(); ++plane) {
+    if (monochrome && plane) continue;
     columns[plane] = plane ? (frame.width + subsample_x - 1) / subsample_x : frame.width;
     rows[plane] = plane ? (frame.height + subsample_y - 1) / subsample_y : frame.height;
     strides[plane] = linesize[plane];
@@ -152,6 +158,7 @@ SkBitmap FrameThumbnail(const AVFrame& frame, const media::VideoDecoderConfig& c
       kPremul_SkAlphaType, colors.GetAsFullRangeRGB().ToSkColorSpace()))) return {};
   auto output = base::subtle::reinterpret_span<float>(UNSAFE_SKBITMAP_TO_BYTES_SPAN(pixels));
   auto sample = [&](size_t plane, float x, float y) {
+    if (monochrome && plane) return (1 << (depth - 1)) / maximum;
     x = std::clamp((x + 0.5f) / (plane ? subsample_x : 1) - 0.5f, 0.0f, static_cast<float>(columns[plane] - 1));
     y = std::clamp((y + 0.5f) / (plane ? subsample_y : 1) - 0.5f, 0.0f, static_cast<float>(rows[plane] - 1));
     const int x0 = static_cast<int>(x), y0 = static_cast<int>(y);
@@ -420,6 +427,173 @@ SkBitmap DecodeHevc(AVFormatContext* format, AVStream* video, const media::Video
   return {};
 }
 
+// Chromium's FFmpeg has no AV1 decoder. Use the bundled dav1d library in
+// this same disposable helper, with one thread and bounded picture storage.
+class Av1Decoder {
+ public:
+  Av1Decoder();
+  ~Av1Decoder();
+  Av1Decoder(const Av1Decoder&) = delete;
+  Av1Decoder& operator=(const Av1Decoder&) = delete;
+  bool valid() const { return context_ != nullptr; }
+  SkBitmap Push(base::span<const uint8_t> bytes, const media::VideoDecoderConfig& config,
+      int edge, const ThumbnailInput& input);
+  SkBitmap Drain(const media::VideoDecoderConfig& config, int edge);
+  bool failed() const { return failed_; }
+ private:
+  static int Allocate(Dav1dPicture* picture, void* cookie);
+  static void Release(Dav1dPicture* picture, void* cookie);
+  static SkBitmap Convert(const Dav1dPicture& picture, const media::VideoDecoderConfig& config, int edge);
+  raw_ptr<Dav1dContext> context_ = nullptr;
+  Dav1dData data_ = {};
+  std::map<void*, size_t> allocations_;
+  size_t bytes_ = 0;
+  bool failed_ = false;
+};
+Av1Decoder::Av1Decoder() {
+  Dav1dSettings settings;
+  dav1d_default_settings(&settings);
+  settings.n_threads = 1;
+  settings.max_frame_delay = 1;
+  settings.frame_size_limit = 16 * 1024 * 1024;
+  settings.allocator = {this, &Allocate, &Release};
+  Dav1dContext* context = nullptr;
+  if (dav1d_open(&context, &settings) == 0) context_ = context;
+}
+Av1Decoder::~Av1Decoder() {
+  dav1d_data_unref(&data_);
+  if (context_) {
+    Dav1dContext* context = context_.ExtractAsDangling();
+    dav1d_close(&context);
+  }
+}
+int Av1Decoder::Allocate(Dav1dPicture* picture, void* cookie) {
+  auto& self = *static_cast<Av1Decoder*>(cookie);
+  const auto& p = picture->p;
+  if (p.w <= 0 || p.h <= 0 || p.w > 8192 || p.h > 8192 ||
+      static_cast<int64_t>(p.w) * p.h > 16 * 1024 * 1024 ||
+      (p.bpc != 8 && p.bpc != 10 && p.bpc != 12) ||
+      p.layout < DAV1D_PIXEL_LAYOUT_I400 || p.layout > DAV1D_PIXEL_LAYOUT_I444) return DAV1D_ERR(EINVAL);
+  const size_t width = (p.w + 127) & ~127;
+  const size_t height = (p.h + 127) & ~127;
+  const bool chroma = p.layout != DAV1D_PIXEL_LAYOUT_I400;
+  const size_t y_stride = width * (p.bpc > 8 ? 2 : 1);
+  const size_t uv_stride = chroma ? y_stride / (p.layout == DAV1D_PIXEL_LAYOUT_I444 ? 1 : 2) : 0;
+  const size_t y_size = y_stride * height;
+  const size_t uv_size = uv_stride * (height / (p.layout == DAV1D_PIXEL_LAYOUT_I420 ? 2 : 1));
+  const size_t size = y_size + 2 * uv_size + 2 * DAV1D_PICTURE_ALIGNMENT;
+  if (self.allocations_.size() >= 32 || size > 384 * 1024 * 1024 - self.bytes_) return DAV1D_ERR(ENOMEM);
+  auto* allocation = static_cast<uint8_t*>(av_malloc(size));
+  if (!allocation) return DAV1D_ERR(ENOMEM);
+  // SAFETY: av_malloc returned size bytes. Align and pad for dav1d SIMD;
+  // each plane offset is aligned because dimensions are rounded up to 128.
+  auto storage = UNSAFE_BUFFERS(base::span(allocation, size));
+  storage = storage.subspan(DAV1D_PICTURE_ALIGNMENT -
+      reinterpret_cast<uintptr_t>(allocation) % DAV1D_PICTURE_ALIGNMENT);
+  auto planes = base::span(picture->data);
+  planes[0] = storage.data();
+  planes[1] = chroma ? storage.subspan(y_size).data() : nullptr;
+  planes[2] = chroma ? storage.subspan(y_size + uv_size).data() : nullptr;
+  picture->stride[0] = y_stride; picture->stride[1] = uv_stride;
+  picture->allocator_data = allocation;
+  self.allocations_.emplace(allocation, size); self.bytes_ += size;
+  return 0;
+}
+void Av1Decoder::Release(Dav1dPicture* picture, void* cookie) {
+  auto& self = *static_cast<Av1Decoder*>(cookie);
+  auto found = self.allocations_.find(picture->allocator_data);
+  if (found != self.allocations_.end()) { self.bytes_ -= found->second; self.allocations_.erase(found); }
+  av_free(picture->allocator_data);
+}
+SkBitmap Av1Decoder::Convert(const Dav1dPicture& picture, const media::VideoDecoderConfig& config, int edge) {
+  if (!picture.seq_hdr) return {};
+  const int depth = picture.p.bpc;
+  if (depth != 8 && depth != 10 && depth != 12) return {};
+  AVFrame frame = {};
+  frame.width = picture.p.w; frame.height = picture.p.h;
+  switch (picture.p.layout) {
+    case DAV1D_PIXEL_LAYOUT_I400:
+      frame.format = depth == 8 ? AV_PIX_FMT_GRAY8 : depth == 10 ? AV_PIX_FMT_GRAY10LE : AV_PIX_FMT_GRAY12LE; break;
+    case DAV1D_PIXEL_LAYOUT_I420:
+      frame.format = depth == 8 ? AV_PIX_FMT_YUV420P : depth == 10 ? AV_PIX_FMT_YUV420P10LE : AV_PIX_FMT_YUV420P12LE; break;
+    case DAV1D_PIXEL_LAYOUT_I422:
+      frame.format = depth == 8 ? AV_PIX_FMT_YUV422P : depth == 10 ? AV_PIX_FMT_YUV422P10LE : AV_PIX_FMT_YUV422P12LE; break;
+    case DAV1D_PIXEL_LAYOUT_I444:
+      frame.format = depth == 8 ? AV_PIX_FMT_YUV444P : depth == 10 ? AV_PIX_FMT_YUV444P10LE : AV_PIX_FMT_YUV444P12LE; break;
+    default: return {};
+  }
+  auto planes = base::span(frame.data);
+  auto strides = base::span(frame.linesize);
+  const auto source = base::span(picture.data);
+  const auto source_strides = base::span(picture.stride);
+  for (size_t plane = 0; plane < 3; ++plane) {
+    const ptrdiff_t stride = source_strides[plane ? 1 : 0];
+    if (stride < 0 || stride > 128 * 1024) return {};
+    planes[plane] = static_cast<uint8_t*>(source[plane]);
+    strides[plane] = static_cast<int>(stride);
+  }
+  frame.color_primaries = static_cast<AVColorPrimaries>(picture.seq_hdr->pri);
+  frame.color_trc = static_cast<AVColorTransferCharacteristic>(picture.seq_hdr->trc);
+  frame.colorspace = static_cast<AVColorSpace>(picture.seq_hdr->mtrx);
+  frame.color_range = picture.seq_hdr->color_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+  return FrameThumbnail(frame, config, edge);
+}
+SkBitmap Av1Decoder::Drain(const media::VideoDecoderConfig& config, int edge) {
+  Dav1dPicture picture = {};
+  const int received = dav1d_get_picture(context_, &picture);
+  if (received < 0) { failed_ = received != DAV1D_ERR(EAGAIN); return {}; }
+  auto result = Convert(picture, config, edge);
+  dav1d_picture_unref(&picture);
+  failed_ = result.isNull();
+  return result;
+}
+SkBitmap Av1Decoder::Push(base::span<const uint8_t> bytes, const media::VideoDecoderConfig& config,
+    int edge, const ThumbnailInput& input) {
+  if (bytes.empty() || bytes.size() > 8 * 1024 * 1024 || data_.sz) { failed_ = true; return {}; }
+  auto* buffer = dav1d_data_create(&data_, bytes.size());
+  if (!buffer) { failed_ = true; return {}; }
+  // SAFETY: dav1d_data_create allocated bytes.size() writable bytes. Copy so
+  // that FFmpeg can release its packet independently of decoder references.
+  UNSAFE_BUFFERS(base::span(buffer, bytes.size())).copy_from(bytes);
+  for (int work = 0; work < 512 && !input.Expired(); ++work) {
+    const int sent = dav1d_send_data(context_, &data_);
+    if (sent < 0 && sent != DAV1D_ERR(EAGAIN)) { failed_ = true; return {}; }
+    auto result = Drain(config, edge);
+    if (!result.isNull() || failed_) return result;
+    if (!data_.sz) return {};
+  }
+  failed_ = true;
+  return {};
+}
+SkBitmap DecodeAv1(AVFormatContext* format, AVStream* video, const media::VideoDecoderConfig& config,
+    int edge, const ThumbnailInput& input) {
+  Av1Decoder decoder;
+  if (!decoder.valid()) return {};
+  auto extra = media::AVCodecParametersExtraDataToSpan(video->codecpar);
+  if (extra.size() > 1024 * 1024) return {};
+  // MP4 stores an av1C record; Matroska may provide raw sequence-header OBUs.
+  if (!extra.empty() && (extra[0] & 0x80)) {
+    if (extra[0] != 0x81 || extra.size() < 4) return {};
+    extra = extra.subspan(4u);
+  }
+  if (!extra.empty()) {
+    auto result = decoder.Push(extra, config, edge, input);
+    if (!result.isNull() || decoder.failed()) return result;
+  }
+  std::unique_ptr<AVPacket, media::ScopedPtrAVFreePacket> packet(av_packet_alloc());
+  if (!packet) return {};
+  for (int count = 0; count < 512 && !input.Expired(); ++count) {
+    const int read = av_read_frame(format, packet.get());
+    if (read < 0) return read == AVERROR_EOF ? decoder.Drain(config, edge) : SkBitmap();
+    if (packet->stream_index == video->index) {
+      auto result = decoder.Push(media::AVPacketData(*packet), config, edge, input);
+      if (!result.isNull() || decoder.failed()) return result;
+    }
+    av_packet_unref(packet.get());
+  }
+  return {};
+}
+
 SkBitmap DecodeVideo(const base::FilePath& path, int edge) {
   media::InitializeMediaLibrary();
   av_max_alloc(64 * 1024 * 1024);
@@ -444,6 +618,7 @@ SkBitmap DecodeVideo(const base::FilePath& path, int edge) {
   media::VideoDecoderConfig config;
   if (!media::AVStreamToVideoDecoderConfig(video, &config)) return {};
   if (video->codecpar->codec_id == AV_CODEC_ID_HEVC) return DecodeHevc(format, video, config, edge, input);
+  if (video->codecpar->codec_id == AV_CODEC_ID_AV1) return DecodeAv1(format, video, config, edge, input);
   auto context = media::AVStreamToAVCodecContext(video);
   const auto* decoder = avcodec_find_decoder(video->codecpar->codec_id);
   if (!context || !decoder) return {};
