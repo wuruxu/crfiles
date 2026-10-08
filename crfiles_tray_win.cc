@@ -6,17 +6,26 @@
 
 #include <shellapi.h>
 
-#include <cwchar>
+#include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
+#include "base/memory/weak_ptr.h"
+#include "base/strings/string_util.h"
+#include "base/strings/string_util_win.h"
 #include "base/task/single_thread_task_runner.h"
+#include "crFiles/grit/crfiles_strings.h"
 #include "crFiles/resources/win/crfiles_resource.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/display/win/screen_win.h"
 
 namespace crfiles {
 namespace {
 constexpr UINT kTrayMessage = WM_APP + 1;
+constexpr UINT kOpenCommand = 1;
+constexpr UINT kSettingsCommand = 2;
+constexpr UINT kQuitCommand = 3;
 constexpr wchar_t kWindowClass[] = L"CrFilesTrayWindow";
 class CrFilesTrayWin : public CrFilesTray {
  public:
@@ -47,6 +56,9 @@ class CrFilesTrayWin : public CrFilesTray {
     }
   }
   ~CrFilesTrayWin() override {
+    if (menu_open_) {
+      EndMenu();
+    }
     if (window_) {
       KillTimer(window_, 1);
       auto data = IconData();
@@ -85,7 +97,7 @@ class CrFilesTrayWin : public CrFilesTray {
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = kTrayMessage;
     data.hIcon = icon_;
-    wcscpy_s(data.szTip, L"crFiles");
+    base::wcslcpy(data.szTip, L"crFiles");
     return data;
   }
   void AddIcon() {
@@ -102,6 +114,61 @@ class CrFilesTrayWin : public CrFilesTray {
   void Dispatch(TrayCommand command) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(callback_, command));
+  }
+  void ShowMenu() {
+    POINT cursor = {};
+    if (!window_ || menu_open_ || !GetCursorPos(&cursor)) {
+      return;
+    }
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+      return;
+    }
+    const auto append_item = [menu](UINT command, int string_id) {
+      const std::u16string label = l10n_util::GetStringUTF16(string_id);
+      return AppendMenuW(menu, MF_STRING, command, base::as_wcstr(label)) !=
+             FALSE;
+    };
+    if (!append_item(kOpenCommand, IDS_CRFILES_TRAY_OPEN) ||
+        !append_item(kSettingsCommand, IDS_CRFILES_SETTINGS) ||
+        !AppendMenuW(menu, MF_SEPARATOR, 0, nullptr) ||
+        !append_item(kQuitCommand, IDS_CRFILES_MAC_QUIT)) {
+      DestroyMenu(menu);
+      return;
+    }
+    SetMenuDefaultItem(menu, kOpenCommand, FALSE);
+    UINT flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON |
+                 TPM_BOTTOMALIGN;
+    flags |= base::i18n::IsRTL() ? TPM_RIGHTALIGN | TPM_LAYOUTRTL
+                               : TPM_LEFTALIGN;
+    // The native menu runs a nested loop; the tray can be removed meanwhile.
+    const auto weak = weak_factory_.GetWeakPtr();
+    menu_open_ = true;
+    SetForegroundWindow(window_);
+    if (!weak) {
+      DestroyMenu(menu);
+      return;
+    }
+    const UINT command =
+        TrackPopupMenuEx(menu, flags, cursor.x, cursor.y, window_, nullptr);
+    DestroyMenu(menu);
+    if (!weak) {
+      return;
+    }
+    menu_open_ = false;
+    // Let clicks outside dismiss this menu, including on subsequent openings.
+    PostMessageW(window_, WM_NULL, 0, 0);
+    switch (command) {
+      case kOpenCommand:
+        Dispatch(TrayCommand::kOpen);
+        break;
+      case kSettingsCommand:
+        Dispatch(TrayCommand::kSettings);
+        break;
+      case kQuitCommand:
+        Dispatch(TrayCommand::kQuit);
+        break;
+    }
   }
   static LRESULT CALLBACK WindowProc(HWND window,
                                      UINT message,
@@ -126,7 +193,10 @@ class CrFilesTrayWin : public CrFilesTray {
       }
       if (message == kTrayMessage) {
         const UINT event = LOWORD(lparam);
-        if (event == NIN_SELECT || event == NIN_KEYSELECT) {
+        if (event == WM_CONTEXTMENU) {
+          self->ShowMenu();
+        } else if (!self->menu_open_ &&
+                   (event == NIN_SELECT || event == NIN_KEYSELECT)) {
           self->Dispatch(TrayCommand::kToggle);
         }
         return 0;
@@ -138,7 +208,9 @@ class CrFilesTrayWin : public CrFilesTray {
   HICON icon_ = nullptr;
   UINT taskbar_created_ = 0;
   bool installed_ = false;
+  bool menu_open_ = false;
   base::RepeatingCallback<void(TrayCommand)> callback_;
+  base::WeakPtrFactory<CrFilesTrayWin> weak_factory_{this};
 };
 }  // namespace
 std::unique_ptr<CrFilesTray> CreateCrFilesTray(

@@ -5,14 +5,22 @@
 #include <array>
 #include <string>
 #include <optional>
+#include "base/files/file_path.h"
 #include "ui/gfx/image/image_skia.h"
 namespace crfiles {
 inline constexpr std::array<int, 6> kFileIconSizes = {22, 32, 48, 64, 96, 128};
 using FileIcons = std::array<gfx::ImageSkia, kFileIconSizes.size()>;
+struct FileIconResult {
+  gfx::ImageSkia image;
+  // A transient Shell failure; keep the fallback visible while retrying.
+  bool retry = false;
+};
 // Memory-only lookup, safe on the UI sequence. Nullopt means not loaded yet.
-std::optional<gfx::ImageSkia> FindCachedFileIcon(const std::string& mime, bool directory, int edge);
-// Blocking bundled SVG rasterization; one requested size, cached across panes.
-// Call only on a file worker. Never scans system or project directories.
-gfx::ImageSkia LoadFileIcon(const std::string& mime, bool directory, int edge);
+// Transient failures are not cached here.
+std::optional<gfx::ImageSkia> FindCachedFileIcon(const base::FilePath& path, const std::string& mime, bool directory, int edge);
+// Windows prefers the path's Shell icon, with bundled SVGs as a fallback.
+// Call only on a file worker, in a COM STA on Windows. Cached across panes.
+// The caller should retry transient failures with a bounded delay.
+FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime, bool directory, int edge);
 }
 #endif

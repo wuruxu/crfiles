@@ -6,6 +6,7 @@
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/crfiles_history.h"
+#include "crFiles/grit/crfiles_strings.h"
 #include "crFiles/sharing/phone_sender.h"
 #include "crFiles/sharing/connect_client.h"
 #include "crFiles/crfiles_theme.h"
@@ -63,6 +64,7 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <poll.h>
+#include <stdio.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -183,11 +185,60 @@ struct FailureInfo {
   const char* reason = "open_or_validate_failed";
   int os_error = 0;
   int ssl_error = 0;
+  int message_id = 0;
+  bool notify_peer = false;
+  bool peer_reported = false;
 };
+
+struct TransferError {
+  const char* code;
+  int message_id;
+};
+constexpr TransferError kSourceReadError{"source_read", IDS_CRFILES_TRANSFER_SOURCE_READ_ERROR};
+constexpr TransferError kConnectionError{"connection", IDS_CRFILES_TRANSFER_CONNECTION_ERROR};
+constexpr TransferError kProtocolError{"protocol", IDS_CRFILES_TRANSFER_PROTOCOL_ERROR};
+constexpr TransferError kChecksumError{"checksum", IDS_CRFILES_TRANSFER_CHECKSUM_ERROR};
+constexpr TransferError kWriteError{"write", IDS_CRFILES_TRANSFER_WRITE_ERROR};
+constexpr TransferError kFlushError{"flush", IDS_CRFILES_TRANSFER_FLUSH_ERROR};
+constexpr TransferError kCommitError{"commit", IDS_CRFILES_TRANSFER_COMMIT_ERROR};
+constexpr TransferError kExistsError{"destination_exists", IDS_CRFILES_TRANSFER_EXISTS_ERROR};
+constexpr TransferError kFolderError{"receive_folder", IDS_CRFILES_TRANSFER_FOLDER_ERROR};
+constexpr TransferError kSpaceError{"no_space", IDS_CRFILES_TRANSFER_SPACE_ERROR};
+constexpr TransferError kHistoryError{"history", IDS_CRFILES_TRANSFER_HISTORY_ERROR};
+constexpr TransferError kStatisticsError{"statistics", IDS_CRFILES_TRANSFER_STATISTICS_ERROR};
+constexpr TransferError kConfirmationError{"confirmation", IDS_CRFILES_TRANSFER_CONFIRMATION_ERROR};
+constexpr TransferError kApprovalError{"approval", IDS_CRFILES_TRANSFER_APPROVAL_ERROR};
+constexpr TransferError kTransferErrors[] = {
+    kSourceReadError, kConnectionError, kProtocolError, kChecksumError,
+    kWriteError, kFlushError, kCommitError, kExistsError, kFolderError,
+    kSpaceError, kHistoryError, kStatisticsError, kConfirmationError, kApprovalError};
+
+bool FailTransfer(FailureInfo& failure, TransferError error) {
+  failure.reason = error.code;
+  failure.message_id = error.message_id;
+  return false;
+}
+bool FailFileOperation(FailureInfo& failure, TransferError error) {
+#if BUILDFLAG(IS_WIN)
+  const auto os_error = GetLastError();
+#else
+  const int os_error = errno;
+#endif
+  failure.os_error = os_error;
+  const auto file_error = os_error ? base::File::OSErrorToFileError(os_error) :
+                                   base::File::FILE_ERROR_FAILED;
+  if (file_error == base::File::FILE_ERROR_NO_SPACE) error = kSpaceError;
+  else if (file_error == base::File::FILE_ERROR_EXISTS &&
+           error.message_id == kCommitError.message_id) error = kExistsError;
+  return FailTransfer(failure, error);
+}
 
 void SetStage(const std::shared_ptr<State>& state, Stage stage) {
   base::AutoLock lock(state->lock);
   state->snapshot.stage = state->stop ? Stage::kOff : stage;
+  state->snapshot.status_message_id = stage == Stage::kReceivingConflict ?
+      IDS_CRFILES_TRANSFER_CONFLICT_PROMPT : 0;
+  if (stage == Stage::kReceivingConflict) ++state->snapshot.conflict_id;
   state->decision = 0;
 }
 
@@ -294,7 +345,8 @@ class Channel {
     }
     return bytes.empty();
   }
-  bool SendJson(base::DictValue message, bool log_offer = false) {
+  bool SendJson(base::DictValue message, bool log_offer = false,
+                base::TimeDelta timeout = base::Seconds(30)) {
     std::string json;
     if (!base::JSONWriter::Write(message, &json)) {
       if (log_offer) LOG(ERROR) << "[crPhotos nearby offer] send: JSON serialization failed";
@@ -309,12 +361,12 @@ class Channel {
     std::array<uint8_t, 4> header;
     for (size_t i = 0; i < 4; ++i)
       header.at(i) = static_cast<uint8_t>(json.size() >> (24 - i * 8));
-    if (!Bytes(header, true)) {
+    if (!Bytes(header, true, timeout)) {
       if (log_offer) LOG(ERROR) << "[crPhotos nearby offer] send: header write failed; canceled="
                                << IsCanceled(*state_, generation_);
       return false;
     }
-    if (!Bytes(base::as_writable_byte_span(json), true)) {
+    if (!Bytes(base::as_writable_byte_span(json), true, timeout)) {
       if (log_offer) LOG(ERROR) << "[crPhotos nearby offer] send: body write failed; canceled="
                                << IsCanceled(*state_, generation_);
       return false;
@@ -417,6 +469,22 @@ bool IsMessage(const std::optional<base::DictValue>& message,
                std::string_view type) {
   const auto* value = message ? message->FindString("type") : nullptr;
   return value && *value == type;
+}
+bool CheckTransferMessage(const std::optional<base::DictValue>& message,
+                          std::string_view type, FailureInfo& failure,
+                          TransferError missing) {
+  if (IsMessage(message, type)) return true;
+  if (IsMessage(message, "error")) {
+    failure.peer_reported = true;
+    const auto* reason = message->FindString("reason");
+    // Only fixed protocol codes are translated; never display peer text.
+    for (const auto& error : kTransferErrors) {
+      if (reason && *reason == error.code) {
+        return FailTransfer(failure, error);
+      }
+    }
+  }
+  return FailTransfer(failure, message ? kProtocolError : missing);
 }
 bool HasUnsafeDisplayCharacters(std::string_view text) {
   return std::ranges::any_of(base::UTF8ToUTF16(text), [](char16_t c) {
@@ -688,6 +756,15 @@ bool AwaitDecision(Channel& channel, const std::shared_ptr<State>& state, uint64
   return false;
 }
 
+bool ConfirmReceivedReplacement(Channel& channel, const std::shared_ptr<State>& state,
+                                uint64_t generation, FailureInfo& failure) {
+  // The new file is verified and flushed before asking to replace the old one.
+  if (!AwaitDecision(channel, state, generation, Stage::kReceivingConflict))
+    return FailTransfer(failure, kApprovalError);
+  SetStage(state, Stage::kTransferring);
+  return !IsCanceled(*state, generation);
+}
+
 base::ListValue SharedTargetsJson(const std::shared_ptr<State>& state) {
   base::ListValue list;
   base::AutoLock lock(state->lock);
@@ -860,7 +937,8 @@ std::optional<std::vector<SendFile>> OpenSelectedFiles(
 }
 
 bool SendFiles(Channel& channel, std::vector<SendFile> files,
-               const std::shared_ptr<State>& state, uint64_t generation) {
+               const std::shared_ptr<State>& state, uint64_t generation,
+               FailureInfo& failure) {
   base::ListValue list;
   uint64_t total = 0;
   size_t preview_count = 0;
@@ -877,16 +955,16 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
     list.Append(std::move(entry));
   }
   if (!state->outgoing_target.empty() &&
-      std::ranges::find(state->peer_targets, state->outgoing_target, &NearbySharing::SharedTarget::id) == state->peer_targets.end()) return false;
+      std::ranges::find(state->peer_targets, state->outgoing_target, &NearbySharing::SharedTarget::id) == state->peer_targets.end()) return FailTransfer(failure, kFolderError);
   const bool tree = std::ranges::any_of(files, [](const auto& file) { return file.name.find('/') != std::string::npos || !SafeName(file.name); });
-  if (tree && !state->peer_folder_transfer) return false;
+  if (tree && !state->peer_folder_transfer) return FailTransfer(failure, kProtocolError);
   auto offer = Message("offer");
   if (tree) offer.Set("tree", true);
   if (!state->outgoing_target.empty()) offer.Set("target", state->outgoing_target);
   offer.Set("files", std::move(list));
   LOG(INFO) << "[crPhotos nearby offer] send: files=" << files.size()
             << " previews=" << preview_count << " total_bytes=" << total;
-  if (!channel.SendJson(std::move(offer), true)) return false;
+  if (!channel.SendJson(std::move(offer), true)) return FailTransfer(failure, kConnectionError);
   LOG(INFO) << "[crPhotos nearby offer] send: waiting for acceptance";
   {
     base::AutoLock lock(state->lock);
@@ -897,12 +975,13 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
   SetStage(state, Stage::kWaiting);
   // Allow receive consent, contention with another receiver, and name scanning.
   const auto acceptance = channel.ReadJson(base::Seconds(250));
+  if (!CheckTransferMessage(acceptance, "accept", failure, kConfirmationError)) return false;
   const auto* requested = acceptance ? acceptance->FindList("files") : nullptr;
   if (!IsMessage(acceptance, "accept") || !requested ||
       requested->size() > files.size()) {
     LOG(ERROR) << "[crPhotos nearby offer] send: acceptance missing or invalid; canceled="
                << IsCanceled(*state, generation);
-    return false;
+    return FailTransfer(failure, kProtocolError);
   }
   LOG(INFO) << "[crPhotos nearby offer] send: acceptance received; requested_files="
             << requested->size();
@@ -910,9 +989,9 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
   uint64_t remaining_total = 0;
   for (const auto& value : *requested) {
     const auto* name = value.GetIfString();
-    if (!name || !wanted.insert(*name).second) return false;
+    if (!name || !wanted.insert(*name).second) return FailTransfer(failure, kProtocolError);
     const auto file = std::ranges::find(files, *name, &SendFile::name);
-    if (file == files.end()) return false;
+    if (file == files.end()) return FailTransfer(failure, kProtocolError);
     remaining_total += file->size;
   }
   {
@@ -931,15 +1010,15 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
     std::string recipient;
     { base::AutoLock lock(state->lock); recipient = state->snapshot.peer_name; }
     FileOperationLog log("send", "menu", file.source.AsUTF8Unsafe(), recipient + "/" + state->outgoing_target + "/" + file.name);
-    if (!log.valid()) return false;
+    if (!log.valid()) return FailTransfer(failure, kHistoryError);
     crypto::hash::Hasher hasher(crypto::hash::kSha256);
     uint64_t remaining = file.size;
     while (remaining && !IsCanceled(*state, generation)) {
       auto part = base::span(buffer).first(
           static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size())));
-      if (!file.file.ReadAtCurrentPosAndCheck(part)) return false;
+      if (!file.file.ReadAtCurrentPosAndCheck(part)) return FailTransfer(failure, kSourceReadError);
       hasher.Update(part);
-      if (!channel.Bytes(part, true)) return false;
+      if (!channel.Bytes(part, true)) return FailTransfer(failure, kConnectionError);
       remaining -= part.size();
       base::AutoLock lock(state->lock);
       state->snapshot.transferred += part.size();
@@ -949,12 +1028,17 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
     hasher.Finish(hash);
     auto digest = Message("digest");
     digest.Set("sha256", base::HexEncode(hash));
-    if (!channel.SendJson(std::move(digest)) ||
-        !IsMessage(channel.ReadJson(), "stored")) return false;
+    failure.notify_peer = true;  // The receiver is now waiting for a JSON digest.
+    if (!channel.SendJson(std::move(digest))) return FailTransfer(failure, kConnectionError);
+    // A receiver may need explicit consent before replacing a same-name file.
+    if (!CheckTransferMessage(channel.ReadJson(base::Seconds(250)), "stored", failure,
+                              kConfirmationError)) return false;
+    failure.notify_peer = false;  // The next entry may be an unframed byte stream.
     log.Succeed();
-    if (!UpdateTrust(state, false, file.size, 0)) return false;
+    if (!UpdateTrust(state, false, file.size, 0)) return FailTransfer(failure, kStatisticsError);
   }
-  return IsMessage(channel.ReadJson(), "complete");
+  return CheckTransferMessage(channel.ReadJson(), "complete", failure,
+                              kConfirmationError);
 }
 
 // Walk only the receive root and its Received-* subtrees. Never follow
@@ -1036,17 +1120,18 @@ bool SafeTransferName(std::string_view name, bool tree) {
   return !parts.empty() && parts.size() <= 64 && std::ranges::all_of(parts, [](auto part) { return SafeComponent(part); });
 }
 bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
-                  uint64_t generation) {
+                  uint64_t generation, FailureInfo& failure) {
   LOG(INFO) << "[crPhotos nearby offer] receive: waiting for manifest";
   auto offer = channel.ReadJson(base::Seconds(30), true);
+  if (!CheckTransferMessage(offer, "offer", failure, kConnectionError)) return false;
   const auto* list = offer ? offer->FindList("files") : nullptr;
   const bool tree = offer && offer->FindBool("tree").value_or(false);
-  if (tree && !state->peer_folder_transfer) return false;
+  if (tree && !state->peer_folder_transfer) return FailTransfer(failure, kProtocolError);
   if (!IsMessage(offer, "offer") || !list || list->empty() ||
       list->size() > (tree ? kMaximumTreeEntries : kMaximumFiles)) {
     LOG(ERROR) << "[crPhotos nearby offer] receive: invalid offer or file list; files="
                << (list ? list->size() : 0);
-    return false;
+    return FailTransfer(failure, kProtocolError);
   }
   std::vector<std::pair<std::string, uint64_t>> files;
   std::set<std::string> names;
@@ -1063,12 +1148,12 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
         !names.insert(base::ToLowerASCII(name->ends_with("/") ? name->substr(0, name->size() - 1) : *name)).second) {
       LOG(ERROR) << "[crPhotos nearby offer] receive: invalid name, size or duplicate at index="
                  << files.size();
-      return false;
+      return FailTransfer(failure, kProtocolError);
     }
     total += bytes;
     if (total > kMaximumBatchSize) {
       LOG(ERROR) << "[crPhotos nearby offer] receive: batch size exceeds limit";
-      return false;
+      return FailTransfer(failure, kProtocolError);
     }
     files.emplace_back(*name, bytes);
   }
@@ -1081,10 +1166,10 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     const auto* offered_target = offer->FindString("target");
     // A target announced before pairing must agree with the later manifest.
     if (!state->snapshot.receive_target.empty() &&
-        (!offered_target || *offered_target != state->snapshot.receive_target)) return false;
+        (!offered_target || *offered_target != state->snapshot.receive_target)) return FailTransfer(failure, kProtocolError);
     if (const auto* target = offered_target) {
       auto found = std::ranges::find(state->targets, *target, &NearbySharing::SharedTarget::id);
-      if (found == state->targets.end()) return false;
+      if (found == state->targets.end()) return FailTransfer(failure, kFolderError);
       root = found->directory;
       direct_target = true;
       state->snapshot.receive_target = found->id;
@@ -1146,38 +1231,39 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
       !AwaitDecision(channel, state, generation, Stage::kReceivingOffer)) {
     LOG(ERROR) << "[crPhotos nearby offer] receive: approval failed or timed out; canceled="
                << IsCanceled(*state, generation);
-    return false;
+    return FailTransfer(failure, kApprovalError);
   }
   if (IsCanceled(*state, generation)) return false;
   {
     base::AutoLock lock(state->lock);
     if (!state->snapshot.receive_target.empty()) {
       auto target = std::ranges::find(state->targets, state->snapshot.receive_target, &NearbySharing::SharedTarget::id);
-      if (target == state->targets.end() || target->directory != root || !base::DirectoryExists(root)) return false;
+      if (target == state->targets.end() || target->directory != root || !base::DirectoryExists(root)) return FailTransfer(failure, kFolderError);
     }
   }
-  if (!root.IsAbsolute() || !base::CreateDirectory(root)) return false;
+  if (!root.IsAbsolute()) return FailTransfer(failure, kFolderError);
+  if (!base::CreateDirectory(root)) return FailFileOperation(failure, kFolderError);
   // Pin the destination and use relative operations to prevent path/symlink
   // substitution. Explicit shared targets receive directly into the pane.
 #if BUILDFLAG(IS_WIN)
   DirectoryLock root_lock;
-  if (!root_lock.Open(root)) return false;
+  if (!root_lock.Open(root)) return FailFileOperation(failure, kFolderError);
   const auto lock_deadline = base::TimeTicks::Now() + base::Seconds(60);
   while (!root_lock.TryLock()) {
     if (GetLastError() != ERROR_LOCK_VIOLATION || IsCanceled(*state, generation) ||
-        base::TimeTicks::Now() >= lock_deadline) return false;
+        base::TimeTicks::Now() >= lock_deadline) return FailFileOperation(failure, kFolderError);
     Poll(nullptr, 0, 100);
   }
 #else
   base::ScopedFD root_fd(open(root.value().c_str(), O_RDONLY | O_DIRECTORY |
                              O_CLOEXEC | O_NOFOLLOW));
-  if (!root_fd.is_valid()) return false;
+  if (!root_fd.is_valid()) return FailFileOperation(failure, kFolderError);
   // Serialize crPhotos receivers sharing this directory across processes.
   const auto lock_deadline = base::TimeTicks::Now() + base::Seconds(60);
   while (flock(root_fd.get(), LOCK_EX | LOCK_NB) != 0) {
     if ((errno != EWOULDBLOCK && errno != EAGAIN) ||
         IsCanceled(*state, generation) || base::TimeTicks::Now() >= lock_deadline)
-      return false;
+      return FailFileOperation(failure, kFolderError);
     Poll(nullptr, 0, 100);
   }
 #endif
@@ -1190,7 +1276,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
 #endif
   if (!direct_target && !tree && !CollectReceivedNames(scan_directory, true, 0, entries, existing, *state,
                             generation, base::TimeTicks::Now() + base::Seconds(60)))
-    return false;
+    return FailTransfer(failure, kFolderError);
   const size_t offered_count = files.size();
   std::erase_if(files, [&](const auto& file) {
     return existing.contains(base::ToLowerASCII(file.first));
@@ -1209,8 +1295,9 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     state->snapshot.total = total;
   }
   if (files.empty()) {
-    return channel.SendJson(std::move(acceptance)) &&
-        channel.SendJson(Message("complete"));
+    if (!channel.SendJson(std::move(acceptance)) ||
+        !channel.SendJson(Message("complete"))) return FailTransfer(failure, kConnectionError);
+    return true;
   }
   const std::string folder = direct_target ? std::string() : "Received-" + base::HexEncode(base::RandBytesAsString(8));
   const auto batch = direct_target ? root : root.AppendASCII(folder);
@@ -1219,26 +1306,27 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
   ScopedFileCacheMutation received_changes(std::move(changed_paths));
 #if BUILDFLAG(IS_WIN)
   ULARGE_INTEGER available{};
-  if (!GetDiskFreeSpaceExW(root.value().c_str(), &available, nullptr, nullptr) ||
-      total > available.QuadPart) return false;
-  if (!direct_target && !CreatePrivateDirectory(batch)) return false;
+  if (!GetDiskFreeSpaceExW(root.value().c_str(), &available, nullptr, nullptr)) return FailFileOperation(failure, kFolderError);
+  if (total > available.QuadPart) return FailTransfer(failure, kSpaceError);
+  if (!direct_target && !CreatePrivateDirectory(batch)) return FailFileOperation(failure, kFolderError);
   PinnedDirectory directory;
-  if (!directory.Open(batch)) return false;
+  if (!directory.Open(batch)) return FailFileOperation(failure, kFolderError);
 #else
   struct statvfs space;
-  if (!root_fd.is_valid() || fstatvfs(root_fd.get(), &space) != 0 ||
-      !space.f_frsize || total / space.f_frsize + 1 > space.f_bavail)
-    return false;
-  if (!direct_target && mkdirat(root_fd.get(), folder.c_str(), 0700) != 0) return false;
+  if (fstatvfs(root_fd.get(), &space) != 0) return FailFileOperation(failure, kFolderError);
+  if (!space.f_frsize) return FailTransfer(failure, kFolderError);
+  if (total / space.f_frsize + 1 > space.f_bavail) return FailTransfer(failure, kSpaceError);
+  if (!direct_target && mkdirat(root_fd.get(), folder.c_str(), 0700) != 0) return FailFileOperation(failure, kFolderError);
   base::ScopedFD directory(openat(root_fd.get(), direct_target ? "." : folder.c_str(),
       O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
-  if (!directory.is_valid() || fsync(root_fd.get()) != 0) return false;
+  if (!directory.is_valid()) return FailFileOperation(failure, kFolderError);
+  if (fsync(root_fd.get()) != 0) return FailFileOperation(failure, kFlushError);
 #endif
   {
     base::AutoLock lock(state->lock);
     state->snapshot.batch_directory = batch;
   }
-  if (!channel.SendJson(std::move(acceptance))) return false;
+  if (!channel.SendJson(std::move(acceptance))) return FailTransfer(failure, kConnectionError);
   SetStage(state, Stage::kTransferring);
   std::vector<uint8_t> buffer(kChunkSize);
   for (const auto& [name, size] : files) {
@@ -1250,7 +1338,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     }
     FileOperationLog log("receive", "remote", sender + "/" + name,
         batch.Append(base::FilePath::FromUTF8Unsafe(name)).AsUTF8Unsafe());
-    if (!log.valid()) return false;
+    if (!log.valid()) return FailTransfer(failure, kHistoryError);
     const bool is_directory = tree && name.ends_with("/");
     auto parts = base::SplitString(name, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     const auto& leaf = parts.back();
@@ -1262,37 +1350,43 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     std::vector<PinnedDirectory> pins;
     for (size_t i = 0; i < parents; ++i) {
       parent_path = parent_path.Append(base::FilePath::FromUTF8Unsafe(parts[i]));
-      if (!base::CreateDirectory(parent_path)) return false;
+      if (!base::CreateDirectory(parent_path)) return FailFileOperation(failure, kFolderError);
       PinnedDirectory pin;
-      if (!pin.Open(parent_path)) return false;
+      if (!pin.Open(parent_path)) return FailFileOperation(failure, kFolderError);
       pins.push_back(std::move(pin));
     }
     const auto temporary_path = parent_path.AppendASCII(temporary);
     if (!is_directory) output = OpenRegularFile(temporary_path, true);
 #else
     base::ScopedFD parent_fd(openat(directory.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
-    if (!parent_fd.is_valid()) return false;
+    if (!parent_fd.is_valid()) return FailFileOperation(failure, kFolderError);
     for (size_t i = 0; i < parents; ++i) {
-      if (mkdirat(parent_fd.get(), parts[i].c_str(), 0700) != 0 && errno != EEXIST) return false;
+      if (mkdirat(parent_fd.get(), parts[i].c_str(), 0700) != 0 && errno != EEXIST) return FailFileOperation(failure, kFolderError);
       base::ScopedFD child(openat(parent_fd.get(), parts[i].c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
-      if (!child.is_valid()) return false;
+      if (!child.is_valid()) return FailFileOperation(failure, kFolderError);
       parent_fd = std::move(child);
     }
     if (!is_directory) {
       base::ScopedFD fd(openat(parent_fd.get(), temporary.c_str(),
           O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
-      if (!fd.is_valid()) return false;
+      if (!fd.is_valid()) return FailFileOperation(failure, kWriteError);
       output = base::File(fd.release());
     }
 #endif
-    if (!is_directory && !output.IsValid()) return false;
+    if (!is_directory && !output.IsValid()) return FailFileOperation(failure, kWriteError);
     crypto::hash::Hasher hasher(crypto::hash::kSha256);
     uint64_t remaining = size;
     bool ok = true;
     while (remaining && !IsCanceled(*state, generation)) {
       auto part = base::span(buffer).first(
           static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size())));
-      if (!channel.Bytes(part, false) || !output.WriteAtCurrentPosAndCheck(part)) {
+      if (!channel.Bytes(part, false)) {
+        FailTransfer(failure, kConnectionError);
+        ok = false;
+        break;
+      }
+      if (!output.WriteAtCurrentPosAndCheck(part)) {
+        FailFileOperation(failure, kWriteError);
         ok = false;
         break;
       }
@@ -1306,28 +1400,48 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     hasher.Finish(hash);
     auto digest = ok ? channel.ReadJson() : std::nullopt;
     const auto* expected = digest ? digest->FindString("sha256") : nullptr;
-    ok = ok && IsMessage(digest, "digest") && expected &&
-         *expected == base::HexEncode(hash) && (is_directory || output.Flush());
+    if (ok) ok = CheckTransferMessage(digest, "digest", failure, kConnectionError);
+    if (ok && !expected) ok = FailTransfer(failure, kProtocolError);
+    if (ok && *expected != base::HexEncode(hash)) ok = FailTransfer(failure, kChecksumError);
+    if (ok && !is_directory && !output.Flush()) ok = FailFileOperation(failure, kFlushError);
     output.Close();
 #if BUILDFLAG(IS_WIN)
-    // No REPLACE_EXISTING: another file must never be overwritten.
-    if (ok && !is_directory) ok = MoveFileExW(temporary_path.value().c_str(),
-        parent_path.Append(base::FilePath::FromUTF8Unsafe(leaf)).value().c_str(),
-        MOVEFILE_WRITE_THROUGH) != FALSE;
+    const auto destination = parent_path.Append(base::FilePath::FromUTF8Unsafe(leaf));
+    if (ok && !is_directory && !MoveFileExW(temporary_path.value().c_str(),
+        destination.value().c_str(), MOVEFILE_WRITE_THROUGH)) {
+      const auto error = GetLastError();
+      if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) {
+        ok = ConfirmReceivedReplacement(channel, state, generation, failure);
+        if (ok && !MoveFileExW(temporary_path.value().c_str(), destination.value().c_str(),
+                              MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+          ok = FailFileOperation(failure, kCommitError);
+      } else {
+        ok = FailFileOperation(failure, kCommitError);
+      }
+    }
     if (!is_directory) base::DeleteFile(temporary_path);
-    if (!ok ||
 #else
-    // linkat fails rather than overwriting any existing destination.
-    if (ok && !is_directory) ok = linkat(parent_fd.get(), temporary.c_str(), parent_fd.get(),
-                        leaf.c_str(), 0) == 0;
+    // Create without overwriting first; rename only after explicit consent.
+    if (ok && !is_directory && linkat(parent_fd.get(), temporary.c_str(), parent_fd.get(),
+                        leaf.c_str(), 0) != 0) {
+      if (errno == EEXIST) {
+        ok = ConfirmReceivedReplacement(channel, state, generation, failure);
+        if (ok && renameat(parent_fd.get(), temporary.c_str(), parent_fd.get(), leaf.c_str()) != 0)
+          ok = FailFileOperation(failure, kCommitError);
+      } else {
+        ok = FailFileOperation(failure, kCommitError);
+      }
+    }
     if (!is_directory) unlinkat(parent_fd.get(), temporary.c_str(), 0);
-    if (!ok || fsync(parent_fd.get()) != 0 ||
+    if (ok && fsync(parent_fd.get()) != 0) ok = FailFileOperation(failure, kFlushError);
 #endif
-        !UpdateTrust(state, false, 0, size) ||
-        !channel.SendJson(Message("stored"))) return false;
+    if (!ok) return false;
+    if (!UpdateTrust(state, false, 0, size)) return FailTransfer(failure, kStatisticsError);
+    if (!channel.SendJson(Message("stored"))) return FailTransfer(failure, kConnectionError);
     log.Succeed();
   }
-  return channel.SendJson(Message("complete"));
+  if (!channel.SendJson(Message("complete"))) return FailTransfer(failure, kConnectionError);
+  return true;
 }
 
 // DNS-SD wire helpers. Names are generated locally; incoming DNS names and
@@ -1949,8 +2063,11 @@ void Run(std::shared_ptr<State> state) {
     FailureInfo failure;
     if (outgoing) {
       if (!IsCanceled(*state, generation)) files = OpenSelectedFiles(outgoing->paths);
-      if (files && !IsCanceled(*state, generation))
+      if (!files) FailTransfer(failure, kSourceReadError);
+      if (files && !IsCanceled(*state, generation)) {
+        failure.message_id = kConnectionError.message_id;
         fd = Connect(outgoing->address, *state, generation, failure);
+      }
     } else {
       PollFd pfd{listener.get(), POLLIN, 0};
       if (Poll(&pfd, 1, 200) <= 0) continue;
@@ -2007,21 +2124,32 @@ void Run(std::shared_ptr<State> state) {
       state->snapshot.total = state->snapshot.transferred = 0;
       state->snapshot.stage = Stage::kConnecting;
       state->snapshot.status_message_id = 0;
+      state->snapshot.conflict_id = 0;
     }
     bool ok = false;
     if (fd.is_valid() && !IsCanceled(*state, generation)) {
       Channel channel(std::move(fd), context.get(), !outgoing, state, generation);
       failure.phase = "tls_handshake";
       failure.reason = "handshake_or_alpn_failed";
+      failure.message_id = kConnectionError.message_id;
       const bool handshake_ok = channel.Handshake();
       if (handshake_ok) {
         failure.phase = "pairing";
+        failure.message_id = 0;
         const bool pair_ok = Pair(channel, state, generation, failure);
         if (pair_ok) {
           failure.phase = "transfer";
           failure.reason = "offer_or_transfer_failed";
-          ok = outgoing ? SendFiles(channel, std::move(*files), state, generation)
-                        : ReceiveFiles(channel, state, generation);
+          failure.message_id = kProtocolError.message_id;
+          failure.notify_peer = !outgoing;  // Sender reads framed replies throughout.
+          ok = outgoing ? SendFiles(channel, std::move(*files), state, generation, failure)
+                        : ReceiveFiles(channel, state, generation, failure);
+          if (!ok && failure.notify_peer && !failure.peer_reported &&
+              !IsCanceled(*state, generation)) {
+            auto error = Message("error");
+            error.Set("reason", failure.reason);
+            channel.SendJson(std::move(error), false, base::Seconds(2));
+          }
         }
       }
       if (!ok) failure.ssl_error = channel.last_ssl_error();
@@ -2029,6 +2157,8 @@ void Run(std::shared_ptr<State> state) {
     base::AutoLock lock(state->lock);
     state->snapshot.stage = state->stop ? Stage::kOff : ok ? Stage::kComplete :
         IsCanceled(*state, generation) ? Stage::kCanceled : Stage::kError;
+    state->snapshot.status_message_id = state->snapshot.stage == Stage::kError ?
+        failure.message_id : 0;
     state->snapshot.busy = false;
     state->snapshot.finished_at = base::TimeTicks::Now();
     if (!ok) {
@@ -2036,6 +2166,7 @@ void Run(std::shared_ptr<State> state) {
                  << " receiving=" << state->snapshot.receiving
                  << " phase=" << failure.phase << " reason=" << failure.reason
                  << " canceled=" << IsCanceled(*state, generation)
+                 << " peer_reported=" << failure.peer_reported
                  << " os_error=" << failure.os_error
                  << " last_ssl_error=" << failure.ssl_error;
     }
@@ -2292,10 +2423,13 @@ bool NearbySharing::Send(std::string address, std::vector<base::FilePath> paths,
                                      state_->cancel.load(), std::move(encoded_previews), std::move(phone), std::move(target_id)};
   return true;
 }
-void NearbySharing::Decide(uint64_t session, Stage prompt, bool accept, bool trust) {
+void NearbySharing::Decide(uint64_t session, Stage prompt, bool accept, bool trust,
+                          uint64_t conflict_id) {
   base::AutoLock lock(state_->lock);
   if (state_->snapshot.session == session && state_->snapshot.stage == prompt &&
-      (prompt == Stage::kPairing || prompt == Stage::kReceivingOffer)) {
+      (prompt == Stage::kPairing || prompt == Stage::kReceivingOffer ||
+       (prompt == Stage::kReceivingConflict && conflict_id != 0 &&
+        conflict_id == state_->snapshot.conflict_id))) {
     state_->decision = accept ? 1 : -1;
     if (prompt == Stage::kPairing) state_->trust_requested = accept && trust;
     if (!accept) ++state_->cancel;

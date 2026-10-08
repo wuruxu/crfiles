@@ -242,4 +242,20 @@
   <translation id="4197430498352136921">Activar la barra de título de estilo Windows</translation>
   <translation id="1902971411277288781">Reinicia crFiles para aplicar los cambios en la barra de título.</translation>
   <translation id="4886100923120566693">Permite que crFiles acceda a esta carpeta. Selecciónala o selecciona una carpeta que la contenga.</translation>
+  <translation id="3655882103106476066">No se pudieron leer o validar los archivos de origen seleccionados. Comprueba los permisos de acceso y si los archivos han cambiado.</translation>
+  <translation id="4351760882239164883">La comunicación con el otro dispositivo falló o se agotó el tiempo de espera.</translation>
+  <translation id="2010326661186049544">El otro dispositivo envió un mensaje de transferencia no válido o no compatible.</translation>
+  <translation id="510129484354523467">La verificación del archivo falló: los datos recibidos no coinciden con la suma de comprobación del remitente.</translation>
+  <translation id="8252792824232748618">No se pudo escribir el archivo recibido. Comprueba los permisos de la carpeta y el espacio disponible.</translation>
+  <translation id="2675252763821215787">No se pudo completar la escritura del archivo recibido en el disco.</translation>
+  <translation id="1189665664860445802">No se pudo guardar el archivo temporal con su nombre definitivo. Comprueba los permisos de la carpeta y los bloqueos de archivos.</translation>
+  <translation id="1433696060812176370">No se pudo guardar el archivo recibido porque ya existe un elemento con el mismo nombre.</translation>
+  <translation id="6065524822313010427">No se pudo acceder a la carpeta de recepción o prepararla.</translation>
+  <translation id="1821373738128066811">No hay suficiente espacio libre en la carpeta de recepción.</translation>
+  <translation id="4330824151884297518">No se pudo registrar la transferencia en el historial de operaciones de archivos.</translation>
+  <translation id="2239300538159870573">El archivo se guardó, pero no se pudieron actualizar las estadísticas de transferencia del dispositivo.</translation>
+  <translation id="1675118829866063260">El otro dispositivo no confirmó la transferencia. Es posible que la conexión se haya interrumpido o que se haya agotado el tiempo de espera.</translation>
+  <translation id="4215757694788567066">No se obtuvo autorización para recibir. La solicitud fue rechazada, se agotó el tiempo de espera o se interrumpió la conexión.</translation>
+  <translation id="4999892345800068237">Abrir carpetas con un solo clic</translation>
+  <translation id="4419422432933269866">Ya existe un elemento con el mismo nombre. ¿Quieres reemplazarlo por el archivo recibido?</translation>
 </translationbundle>

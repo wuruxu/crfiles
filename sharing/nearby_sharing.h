@@ -35,6 +35,7 @@ class NearbySharing {
   enum class Stage {
     kOff, kStarting, kReady, kConnecting, kPairing, kWaiting,
     kReceivingOffer, kTransferring, kComplete, kCanceled, kError,
+    kReceivingConflict,
   };
   struct SharedTarget {
     std::string id;
@@ -77,6 +78,7 @@ class NearbySharing {
     Stage stage = Stage::kOff;
     int status_message_id = 0;
     uint64_t session = 0;
+    uint64_t conflict_id = 0;
     base::TimeTicks started_at;
     base::TimeTicks finished_at;
     std::string code;
@@ -122,8 +124,10 @@ class NearbySharing {
             std::optional<ConnectPeer> phone = std::nullopt,
             std::string target_id = {});
   // Decisions are scoped to a prompt and session, so stale buttons cannot
-  // approve a subsequent connection or a different consent step.
-  void Decide(uint64_t session, Stage prompt, bool accept, bool trust = false);
+  // approve a subsequent connection or a different consent step. Replacement
+  // prompts also require the matching conflict_id for that particular entry.
+  void Decide(uint64_t session, Stage prompt, bool accept, bool trust = false,
+              uint64_t conflict_id = 0);
   void Cancel();
   // Ignore cancellation from a UI displaying a different transfer.
   void CancelSession(uint64_t session);

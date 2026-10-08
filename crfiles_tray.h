@@ -10,7 +10,7 @@
 #include "ui/gfx/geometry/rect.h"
 
 namespace crfiles {
-enum class TrayCommand { kToggle };
+enum class TrayCommand { kToggle, kOpen, kSettings, kQuit };
 // UI-thread native status item. Destruction removes the icon and callbacks.
 class CrFilesTray {
  public:

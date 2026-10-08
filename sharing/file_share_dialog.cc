@@ -186,7 +186,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (decided_ || base::TimeTicks::Now() < ready_) return;
     decided_ = true;
     if (accept && stage_ == NearbySharing::Stage::kReceivingOffer) accepted_session_ = session_;
-    service_->Decide(session_, stage_, accept, trust_ && trust_->GetChecked());
+    service_->Decide(session_, stage_, accept, trust_ && trust_->GetChecked(), conflict_id_);
     if (accept_) accept_->SetEnabled(false);
     if (reject_) reject_->SetEnabled(false);
   }
@@ -239,11 +239,12 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
             std::optional<ShareBubbleAnchor> position = std::nullopt) {
     // A Wayland surface must be recreated when changing its parent role.
     const bool same_prompt = session_ == state.session && stage_ == state.stage &&
-        transfer_view_ == transfer;
+        transfer_view_ == transfer && conflict_id_ == state.conflict_id;
     const bool decided = same_prompt && decided_;
     const bool trusted = same_prompt && trust_ && trust_->GetChecked();
     const auto ready = same_prompt ? ready_ : base::TimeTicks::Now() + base::Milliseconds(500);
     Close(); session_ = state.session; stage_ = state.stage; decided_ = decided;
+    conflict_id_ = state.conflict_id;
     displayed_state_ = state;
     transfer_view_ = transfer;
     ready_ = ready;
@@ -265,6 +266,10 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       progress_->SetPreferredSize(gfx::Size(336, 6));
       progress_->GetViewAccessibility().SetName(Text(IDS_CRFILES_TRANSFERRING));
       progress_status_ = Label(contents.get(), std::u16string());
+    } else if (stage_ == NearbySharing::Stage::kReceivingConflict) {
+      auto* filename = Label(contents.get(), base::UTF8ToUTF16(state.current_file));
+      filename->SetTooltipText(base::UTF8ToUTF16(state.current_file));
+      Label(contents.get(), Text(IDS_CRFILES_TRANSFER_CONFLICT_PROMPT));
     } else if (stage_ == NearbySharing::Stage::kPairing) {
       auto* code = Label(contents.get(), Text(IDS_CRFILES_COMPARE_CODE) + u"\n" + base::UTF8ToUTF16(state.code));
       code->SetElideBehavior(gfx::NO_ELIDE);
@@ -288,8 +293,9 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
           base::BindRepeating(&ShareSessionToastImpl::CancelOrClose, weak_.GetWeakPtr()), Text(IDS_CRFILES_CANCEL)));
       UpdateProgress(state);
     } else {
-      accept_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), true), Text(IDS_CRFILES_ACCEPT)));
-      reject_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), false), Text(IDS_CRFILES_REJECT)));
+      const bool conflict = stage_ == NearbySharing::Stage::kReceivingConflict;
+      accept_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), true), Text(conflict ? IDS_CRFILES_REPLACE : IDS_CRFILES_ACCEPT)));
+      reject_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), false), Text(conflict ? IDS_CRFILES_CANCEL : IDS_CRFILES_REJECT)));
       const bool enabled = !decided_ && base::TimeTicks::Now() >= ready_;
       accept_->SetEnabled(enabled); reject_->SetEnabled(enabled);
     }
@@ -364,17 +370,19 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     const auto state = service_->GetSnapshot();
     using Stage = NearbySharing::Stage;
     const bool terminal = state.stage == Stage::kComplete || state.stage == Stage::kCanceled || state.stage == Stage::kError;
-    const bool transfer = state.session && state.session != dismissed_session_ &&
+    const bool conflict = state.busy && state.stage == Stage::kReceivingConflict;
+    const bool transfer = !conflict && state.session && state.session != dismissed_session_ &&
         (state.receiving ? (accepted_session_ == state.session || state.stage == Stage::kTransferring ||
          (terminal && (!state.current_file.empty() || state.stage == Stage::kComplete))) :
          ((state.busy && state.stage != Stage::kPairing) || terminal));
     const bool prompt = state.busy &&
-        (state.stage == NearbySharing::Stage::kPairing || state.stage == NearbySharing::Stage::kReceivingOffer);
+        (state.stage == NearbySharing::Stage::kPairing || state.stage == NearbySharing::Stage::kReceivingOffer || conflict);
     if (transfer) {
       if (!widget_ || !transfer_view_ || session_ != state.session) Show(state, true);
       UpdateProgress(state);
     } else if (prompt) {
-      if (!widget_ || transfer_view_ || session_ != state.session || stage_ != state.stage) Show(state);
+      if (!widget_ || transfer_view_ || session_ != state.session || stage_ != state.stage ||
+          conflict_id_ != state.conflict_id) Show(state);
     } else {
       // Keep the transfer result visible until explicitly dismissed, including
       // when discovery or a later connection replaces the service snapshot.
@@ -406,6 +414,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   raw_ptr<views::Label> filename_ = nullptr, progress_status_ = nullptr;
   raw_ptr<views::ProgressBar> progress_ = nullptr;
   uint64_t session_ = 0;
+  uint64_t conflict_id_ = 0;
   uint64_t accepted_session_ = 0, dismissed_session_ = 0;
   NearbySharing::Stage stage_ = NearbySharing::Stage::kOff;
   bool decided_ = false;

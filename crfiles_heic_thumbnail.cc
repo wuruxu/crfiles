@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "crFiles/crfiles_heic_thumbnail.h"
+#include "crFiles/crfiles_decode_memory.h"
 
 #include <algorithm>
 #include <atomic>
@@ -173,6 +174,8 @@ struct DecodeResources {
     if (handle) api.heif_image_handle_release(handle);
     if (context) api.heif_context_free(context);
   }
+  // Released after the destructor frees libheif pixel planes and context.
+  std::unique_ptr<DecodeMemory> memory;
   const HeicApi& api;
   heif_context* context = nullptr;
   heif_image_handle* handle = nullptr;
@@ -331,6 +334,15 @@ DISABLE_CFI_DLSYM SkBitmap DecodeHandle(DecodeResources& resources,
   if (!source_space) {
     return {};
   }
+  const int source_width = api->heif_image_handle_get_width(resources.handle);
+  const int source_height = api->heif_image_handle_get_height(resources.handle);
+  if (!ValidSize(source_width, source_height)) return {};
+  // libheif's interleaved plane plus our full-size N32 output coexist. Leave
+  // room for stride alignment, HDR scanlines and the bounded resize output.
+  const size_t pixel_count = static_cast<size_t>(source_width) * source_height;
+  resources.memory = std::make_unique<DecodeMemory>(
+      pixel_count * (metadata->is_hdr ? 12 : 8) + 32 * 1024 * 1024, canceled);
+  if (!resources.memory->acquired() || Stopped(canceled)) return {};
   resources.options = api->heif_decoding_options_alloc();
   if (!resources.options) {
     return {};

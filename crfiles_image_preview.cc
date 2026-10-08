@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_image_preview.h"
+#include "crFiles/crfiles_decode_memory.h"
+#include "base/containers/span.h"
+#include "base/files/file.h"
 #include "crFiles/crfiles_heic_thumbnail.h"
 #include "crFiles/crfiles_thumbnail_cache.h"
 #include "crFiles/crfiles_text_thumbnail.h"
@@ -25,7 +28,6 @@
 #include "third_party/pdfium/public/fpdf_progressive.h"
 #include "third_party/pdfium/public/fpdfview.h"
 #include "base/synchronization/lock.h"
-#include "base/synchronization/condition_variable.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "third_party/skia/include/codec/SkCodec.h"
 #include "third_party/skia/include/codec/SkEncodedOrigin.h"
@@ -41,46 +43,6 @@
 #include "third_party/skia/modules/svg/include/SkSVGSVG.h"
 namespace crfiles {
 namespace {
-// Bound simultaneous raster bitmap allocations even when small compressed
-// files expand to large images. Encoded buffers and codec scratch are separate.
-struct RasterBudget {
-  RasterBudget();
-  ~RasterBudget();
-  base::Lock lock;
-  base::ConditionVariable available{&lock};
-  size_t used = 0;
-};
-RasterBudget::RasterBudget() = default;
-RasterBudget::~RasterBudget() = default;
-RasterBudget& GetRasterBudget() {
-  static base::NoDestructor<RasterBudget> budget;
-  return *budget;
-}
-class RasterMemory {
- public:
-  RasterMemory(size_t bytes, const std::shared_ptr<std::atomic_bool>& canceled);
-  ~RasterMemory();
-  bool acquired() const { return bytes_ != 0; }
- private:
-  size_t bytes_ = 0;
-};
-RasterMemory::RasterMemory(size_t bytes, const std::shared_ptr<std::atomic_bool>& canceled) {
-  constexpr size_t limit = 320 * 1024 * 1024;
-  if (!bytes || bytes > limit) return;
-  auto& budget = GetRasterBudget();
-  base::AutoLock guard(budget.lock);
-  while (!canceled || !canceled->load(std::memory_order_relaxed)) {
-    if (bytes <= limit - budget.used) { budget.used += bytes; bytes_ = bytes; return; }
-    budget.available.TimedWait(base::Milliseconds(50));
-  }
-}
-RasterMemory::~RasterMemory() {
-  if (!bytes_) return;
-  auto& budget = GetRasterBudget();
-  base::AutoLock guard(budget.lock);
-  budget.used -= bytes_; budget.available.Broadcast();
-}
-
 // crFiles owns its PDFium instance. All PDF handles, including destruction,
 // stay under this lock; workers may change between requests. Keep the SDK alive
 // for the process lifetime so shutdown cannot race with a file worker.
@@ -104,6 +66,8 @@ gfx::ImageSkia RenderPdfThumbnail(const std::string& encoded, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled) {
   static base::NoDestructor<PdfPreviewRuntime> runtime;
   base::AutoLock guard(runtime->lock);
+  DecodeMemory memory(static_cast<size_t>(maximum_edge) * maximum_edge * 4, canceled);
+  if (!memory.acquired()) return {};
   PdfPreviewPause pause;
   pause.canceled = canceled.get();
   pause.deadline = base::TimeTicks::Now() + base::Seconds(2);
@@ -240,8 +204,17 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
   if (maximum_edge <= 0 || maximum_edge > 2048) return {};
   if (IsTextThumbnailPath(path)) return LoadTextThumbnail(path, maximum_edge, canceled);
   if (IsVideoThumbnailPath(path)) return LoadVideoThumbnail(path, maximum_edge, canceled);
-  std::string encoded;
-  if (!base::ReadFileToStringWithMaxSize(path, &encoded, 64 * 1024 * 1024)) return {};
+  base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  if (!file.IsValid()) return {};
+  const int64_t length = file.GetLength();
+  if (length <= 0 || length > 64 * 1024 * 1024) return {};
+  DecodeMemory encoded_memory(static_cast<size_t>(length) + 1, canceled, DecodeMemory::Kind::kEncoded);
+  if (!encoded_memory.acquired() || stopped()) return {};
+  // Allocate once at the validated length, rather than growing a string while
+  // reading. A length change is rejected before handing the data to a codec.
+  std::string encoded(static_cast<size_t>(length), '\0');
+  if (!file.ReadAtCurrentPosAndCheck(base::as_writable_byte_span(encoded)) || file.GetLength() != length) return {};
+  file.Close();
   if (stopped()) return {};
   if (path.MatchesExtension(FILE_PATH_LITERAL(".pdf")) || encoded.starts_with("%PDF-"))
     return RenderPdfThumbnail(encoded, maximum_edge, canceled);
@@ -250,7 +223,7 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
     result = DecodeHeicThumbnail(encoded, maximum_edge, canceled);
     if (result.drawsNothing()) return {};
   } else if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
-    SkMemoryStream stream(encoded.data(), encoded.size(), true);
+    SkMemoryStream stream(encoded.data(), encoded.size(), false);
     auto dom = SkSVGDOM::MakeFromStream(stream);
     if (!dom || !dom->getRoot()) return {};
     auto size = dom->containerSize();
@@ -264,6 +237,8 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
     if (!std::isfinite(scale)) return {};
     const int width = std::max(1, static_cast<int>(std::round(size.width() * scale)));
     const int height = std::max(1, static_cast<int>(std::round(size.height() * scale)));
+    DecodeMemory memory(static_cast<size_t>(width) * height * 4, canceled);
+    if (!memory.acquired() || stopped()) return {};
     if (!result.tryAllocN32Pixels(width, height)) return {};
     result.eraseColor(SK_ColorTRANSPARENT);
     SkCanvas canvas(result);
@@ -273,7 +248,8 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
     if (stopped()) return {};
     dom->render(&canvas);
   } else {
-    auto data = SkData::MakeWithCopy(encoded.data(), encoded.size());
+    // The codec and its data are destroyed before the encoded string.
+    auto data = SkData::MakeWithoutCopy(encoded.data(), encoded.size());
     std::unique_ptr<SkCodec> codec;
     SkCodec::Result status;
     if (SkJpegDecoder::IsJpeg(encoded.data(), encoded.size()))
@@ -290,7 +266,7 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
     // Some codecs must decode at full resolution before downsampling.
     if (dimensions.width() <= 0 || dimensions.height() <= 0 ||
         static_cast<int64_t>(dimensions.width()) * dimensions.height() > 64 * 1024 * 1024) return {};
-    RasterMemory memory(static_cast<size_t>(dimensions.width()) * dimensions.height() * 4 +
+    DecodeMemory memory(static_cast<size_t>(dimensions.width()) * dimensions.height() * 4 +
         static_cast<size_t>(maximum_edge) * maximum_edge * 4, canceled);
     if (!memory.acquired() || stopped()) return {};
     auto info = SkImageInfo::MakeN32Premul(dimensions.width(), dimensions.height());

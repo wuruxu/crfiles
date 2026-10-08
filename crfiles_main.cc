@@ -343,6 +343,9 @@ int RunApplication() {
 
 int CrFilesEntry(int argc, char** argv) {
   base::CommandLine::Init(argc, argv);
+#if BUILDFLAG(IS_WIN)
+  logging::SetLogItems(true, true, true, false);
+#endif
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
   std::setlocale(LC_ALL, "");
   std::setlocale(LC_NUMERIC, "C");

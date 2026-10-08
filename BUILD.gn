@@ -166,6 +166,8 @@ crfiles_sources = [
     "crfiles_text_thumbnail.h",
     "crfiles_thumbnail_cache.cc",
     "crfiles_thumbnail_cache.h",
+    "crfiles_decode_memory.cc",
+    "crfiles_decode_memory.h",
     "crfiles_image_preview.cc",
     "crfiles_image_preview.h",
     "crfiles_heic_thumbnail.cc",

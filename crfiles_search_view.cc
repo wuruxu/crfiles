@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_search_view.h"
 #include "crFiles/crfiles_search.h"
+#include "crFiles/crfiles_theme.h"
 #include <algorithm>
 #include <set>
 #include <map>
@@ -128,7 +129,7 @@ class SearchResultButton : public views::Button {
  public:
   SearchResultButton(base::RepeatingClosure open, const std::u16string& title,
                      const std::u16string& detail, const std::u16string& query, bool content, bool directory)
-      : views::Button(std::move(open)) {
+      : views::Button(std::move(open)), directory_(directory) {
     SetFocusBehavior(FocusBehavior::ALWAYS);
     SetAccessibleName(content ? title + u" " + detail : title);
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(8, 10), 10));
@@ -150,9 +151,16 @@ class SearchResultButton : public views::Button {
         GetState() == STATE_HOVERED ? views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, 6) : nullptr);
   }
   void NotifyClick(const ui::Event& event) override {
-    if (event.IsMouseEvent() && event.AsMouseEvent()->GetClickCount() != 2) return;
+    if (event.IsMouseEvent() && event.AsMouseEvent()->GetClickCount() != 2) {
+      if (!directory_ || !GetFileViewPreferences().single_click_folders ||
+          !event.AsMouseEvent()->IsOnlyLeftMouseButton() ||
+          event.AsMouseEvent()->GetClickCount() != 1 || event.IsShiftDown() ||
+          event.IsControlDown() || event.IsCommandDown() || event.IsAltDown()) return;
+    }
     views::Button::NotifyClick(event);
   }
+ private:
+  const bool directory_;
 };
 BEGIN_METADATA(SearchResultButton)
 END_METADATA

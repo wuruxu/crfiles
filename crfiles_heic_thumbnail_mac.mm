@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_heic_thumbnail.h"
+#include "crFiles/crfiles_decode_memory.h"
 
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
@@ -32,6 +33,8 @@ SkBitmap DecodeHeicThumbnail(const std::string& encoded, int maximum_edge,
   static base::NoDestructor<base::Lock> lock;
   base::AutoLock guard(*lock);
   if (Stopped(canceled)) return {};
+  // Keep the reservation alive until ImageIO source/image objects are freed.
+  std::unique_ptr<DecodeMemory> memory;
   base::apple::ScopedCFTypeRef<CFDataRef> data(CFDataCreateWithBytesNoCopy(
       kCFAllocatorDefault, reinterpret_cast<const UInt8*>(encoded.data()),
       static_cast<CFIndex>(encoded.size()), kCFAllocatorNull));
@@ -54,6 +57,11 @@ SkBitmap DecodeHeicThumbnail(const std::string& encoded, int maximum_edge,
       !ReadDimension(properties.get(), kCGImagePropertyPixelHeight, &height) ||
       width <= 0 || height <= 0 || width > 16384 || height > 16384 ||
       static_cast<int64_t>(width) * height > 64 * 1000 * 1000) return {};
+  // ImageIO private scratch is opaque; account conservatively for a primary
+  // RGBA surface and both thumbnail surfaces, rather than only the small output.
+  memory = std::make_unique<DecodeMemory>(static_cast<size_t>(width) * height * 4 +
+      static_cast<size_t>(maximum_edge) * maximum_edge * 8, canceled);
+  if (!memory->acquired() || Stopped(canceled)) return {};
   base::apple::ScopedCFTypeRef<CFNumberRef> edge(
       CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &maximum_edge));
   if (!edge) return {};

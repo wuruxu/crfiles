@@ -48,6 +48,17 @@
 #if BUILDFLAG(IS_MAC)
 #include "crFiles/crfiles_mac.h"
 #endif
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#include <cmath>
+#include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "crFiles/crfiles_dialog.h"
+#include "ui/aura/window.h"
+#include "ui/display/win/screen_win.h"
+#include "ui/events/event.h"
+#include "ui/events/event_handler.h"
+#endif
 
 namespace crfiles {
 namespace {
@@ -156,6 +167,67 @@ class OptionsMenuOverlayView : public views::View {
 BEGIN_METADATA(OptionsMenuOverlayView)
 END_METADATA
 
+#if BUILDFLAG(IS_WIN)
+class TitlebarDoubleClickHandler : public ui::EventHandler {
+ public:
+  TitlebarDoubleClickHandler(views::FrameView* frame, views::Widget* widget)
+      : frame_(frame), widget_(widget),
+        event_window_(widget->GetNativeView()->GetRootWindow()) {
+    // Caption input may target the host rather than the content window.
+    event_window_->AddPreTargetHandler(this);
+  }
+  ~TitlebarDoubleClickHandler() override {
+    event_window_->RemovePreTargetHandler(this);
+  }
+  void OnMouseEvent(ui::MouseEvent* event) override {
+    if (event->type() != ui::EventType::kMousePressed) return;
+    const auto previous_press = last_press_;
+    last_press_ = base::TimeTicks();
+    if (!event->IsOnlyLeftMouseButton() || !event->target() ||
+        widget_->IsClosed() || widget_->IsFullscreen() ||
+        !widget_->widget_delegate()->CanMaximize() ||
+        IsCrFilesWindowBlockedByModal(widget_)) return;
+    auto point = event->location();
+    aura::Window::ConvertPointToTarget(
+        static_cast<aura::Window*>(event->target()),
+        widget_->GetNativeView(), &point);
+    views::View::ConvertPointToTarget(widget_->GetRootView(), frame_, &point);
+    if (frame_->NonClientHitTest(point) != HTCAPTION) return;
+    views::View::ConvertPointToScreen(frame_, &point);
+    const auto screen_point =
+        display::win::GetScreenWin()->DIPToScreenPoint(point);
+    const auto elapsed = event->time_stamp() - previous_press;
+    const auto delta = screen_point - last_press_point_;
+    // Client/non-client transitions can reset Chromium's global click count.
+    const bool double_click = !previous_press.is_null() &&
+        elapsed > base::TimeDelta() &&
+        elapsed <= base::Milliseconds(GetDoubleClickTime()) &&
+        std::abs(delta.x()) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+        std::abs(delta.y()) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+    last_press_ = event->time_stamp();
+    last_press_point_ = screen_point;
+    if (!double_click) return;
+    last_press_ = base::TimeTicks();
+    // A frameless translucent HWND cannot use native double-click maximize.
+    event->StopPropagation();
+    // Complete mouse dispatch before changing the HWND's bounds/show state.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce([](base::WeakPtr<views::Widget> widget, bool maximize) {
+          if (!widget || widget->IsClosed() || widget->IsFullscreen() ||
+              IsCrFilesWindowBlockedByModal(widget.get())) return;
+          if (maximize) widget->Maximize();
+          else widget->Restore();
+        }, widget_->GetWeakPtr(), !widget_->IsMaximized()));
+  }
+ private:
+  raw_ptr<views::FrameView> frame_;
+  raw_ptr<views::Widget> widget_;
+  raw_ptr<aura::Window> event_window_;
+  base::TimeTicks last_press_;
+  gfx::Point last_press_point_;
+};
+#endif
+
 class FilesFrameView : public views::FrameView, public views::WidgetObserver {
   METADATA_HEADER(FilesFrameView, views::FrameView)
  public:
@@ -191,6 +263,20 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     UpdateWindowTitle();
     UpdateColors();
   }
+#if BUILDFLAG(IS_WIN)
+  void AddedToWidget() override {
+    views::FrameView::AddedToWidget();
+    titlebar_click_handler_ =
+        std::make_unique<TitlebarDoubleClickHandler>(this, widget_);
+  }
+  void RemovedFromWidget() override {
+    titlebar_click_handler_.reset();
+    views::FrameView::RemovedFromWidget();
+  }
+  void OnWidgetDestroying(views::Widget*) override {
+    titlebar_click_handler_.reset();
+  }
+#endif
   int ShadowMargin() const {
 #if BUILDFLAG(IS_MAC)
     // AppKit constrains the outer window frame to the screen's usable top.
@@ -449,6 +535,9 @@ void ShowInstallResult(bool success) {
   raw_ptr<views::Label> title_ = nullptr;
   raw_ptr<views::Button> minimize_ = nullptr, maximize_ = nullptr;
   raw_ptr<views::Button> restore_ = nullptr, close_ = nullptr;
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<TitlebarDoubleClickHandler> titlebar_click_handler_;
+#endif
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::WeakPtrFactory<FilesFrameView> weak_factory_{this};
 };

@@ -242,4 +242,20 @@
   <translation id="4197430498352136921">启用 Windows 风格标题栏</translation>
   <translation id="1902971411277288781">重启 crFiles 以应用标题栏更改。</translation>
   <translation id="4886100923120566693">允许 crFiles 访问此文件夹。请选择此文件夹或包含它的文件夹。</translation>
+  <translation id="3655882103106476066">无法读取或验证所选源文件。请检查文件访问权限以及文件是否发生变化。</translation>
+  <translation id="4351760882239164883">与另一台设备通信失败或超时。</translation>
+  <translation id="2010326661186049544">另一台设备发送了无效或不受支持的传输消息。</translation>
+  <translation id="510129484354523467">文件校验失败：接收的数据与发送端的校验值不一致。</translation>
+  <translation id="8252792824232748618">无法写入接收的文件。请检查文件夹权限和可用空间。</translation>
+  <translation id="2675252763821215787">无法完成接收文件的磁盘写入。</translation>
+  <translation id="1189665664860445802">无法将临时文件保存为最终文件名。请检查文件夹权限和文件占用情况。</translation>
+  <translation id="1433696060812176370">无法保存接收的文件，因为已存在同名项目。</translation>
+  <translation id="6065524822313010427">无法访问或准备接收文件夹。</translation>
+  <translation id="1821373738128066811">接收文件夹的可用空间不足。</translation>
+  <translation id="4330824151884297518">无法将传输记录写入文件操作历史。</translation>
+  <translation id="2239300538159870573">文件已保存，但无法更新设备的传输统计。</translation>
+  <translation id="1675118829866063260">未收到另一台设备的传输确认。连接可能已中断或超时。</translation>
+  <translation id="4215757694788567066">未获得接收许可。请求被拒绝、已超时或连接已中断。</translation>
+  <translation id="4999892345800068237">单击进入文件夹</translation>
+  <translation id="4419422432933269866">已存在同名项目。是否用接收的文件替换？</translation>
 </translationbundle>

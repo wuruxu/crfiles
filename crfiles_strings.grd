@@ -120,6 +120,21 @@
       <message name="IDS_CRFILES_THEME_SYSTEM" desc="crFiles file manager interface.">Use system theme</message>
       <message name="IDS_CRFILES_TRANSFERRING" desc="crFiles file manager interface.">Transfer progress</message>
       <message name="IDS_CRFILES_TRANSFER_ERROR" desc="crFiles file manager interface.">Transfer failed. Check the connection and receive folder.</message>
+      <message name="IDS_CRFILES_TRANSFER_SOURCE_READ_ERROR" desc="File transfer failed while reading or validating selected source files.">Could not read or validate the selected source files. Check file access and whether the files changed.</message>
+      <message name="IDS_CRFILES_TRANSFER_CONNECTION_ERROR" desc="File transfer network communication failed, including a timeout.">Communication with the other device failed or timed out.</message>
+      <message name="IDS_CRFILES_TRANSFER_PROTOCOL_ERROR" desc="File transfer peer sent an invalid or unsupported protocol message.">The other device sent an invalid or unsupported transfer message.</message>
+      <message name="IDS_CRFILES_TRANSFER_CHECKSUM_ERROR" desc="Received file checksum does not match the sender's checksum.">File verification failed: the received data does not match the sender's checksum.</message>
+      <message name="IDS_CRFILES_TRANSFER_WRITE_ERROR" desc="File transfer failed while writing a received file.">Could not write the received file. Check folder permissions and available space.</message>
+      <message name="IDS_CRFILES_TRANSFER_FLUSH_ERROR" desc="File transfer failed while flushing file or directory changes to disk.">Could not finish writing the received file to disk.</message>
+      <message name="IDS_CRFILES_TRANSFER_COMMIT_ERROR" desc="File transfer failed while committing a temporary file to its final name.">Could not save the temporary file under its final name. Check folder permissions and file locks.</message>
+      <message name="IDS_CRFILES_TRANSFER_EXISTS_ERROR" desc="Received file cannot be committed because the destination already exists.">Could not save the received file because an item with the same name already exists.</message>
+      <message name="IDS_CRFILES_TRANSFER_CONFLICT_PROMPT" desc="Receiver confirmation before replacing a same-name destination with the verified received file.">An item with this name already exists. Replace it with the received file?</message>
+      <message name="IDS_CRFILES_TRANSFER_FOLDER_ERROR" desc="File transfer receive folder is unavailable or cannot be prepared.">Could not access or prepare the receive folder.</message>
+      <message name="IDS_CRFILES_TRANSFER_SPACE_ERROR" desc="File transfer receive folder has insufficient free disk space.">Not enough free space in the receive folder.</message>
+      <message name="IDS_CRFILES_TRANSFER_HISTORY_ERROR" desc="File transfer could not record its operation in local file history.">Could not record the transfer in file history.</message>
+      <message name="IDS_CRFILES_TRANSFER_STATISTICS_ERROR" desc="File was saved but updating trusted device transfer statistics failed.">The file was saved, but device transfer statistics could not be updated.</message>
+      <message name="IDS_CRFILES_TRANSFER_CONFIRMATION_ERROR" desc="File transfer peer's acceptance, saved-file or completion acknowledgement was not received.">The other device did not confirm the transfer. The connection may have been interrupted or timed out.</message>
+      <message name="IDS_CRFILES_TRANSFER_APPROVAL_ERROR" desc="File transfer receive approval was declined, timed out or interrupted by a disconnect.">Transfer approval was not received. The request was declined, timed out, or disconnected.</message>
       <message name="IDS_CRFILES_UP" desc="crFiles file manager interface.">Up</message>
       <message name="IDS_CRFILES_VIEW_OPTIONS" desc="File view options and column labels.">View Options</message>
       <message name="IDS_CRFILES_ICON_SIZE" desc="File view options and column labels.">Icon Size</message>
@@ -214,6 +229,7 @@
       <message name="IDS_CRFILES_OPEN_WITH" desc="File and folder context menu.">Open With</message>
       <message name="IDS_CRFILES_AUTO_HIDE_TOOLBAR" desc="Toolbar preferences and file sharing dialog.">Automatically hide toolbar</message>
       <message name="IDS_CRFILES_ANIMATE_FOLDERS" desc="Toolbar preferences and file sharing dialog.">Animate folder contents</message>
+      <message name="IDS_CRFILES_SINGLE_CLICK_FOLDERS" desc="General settings checkbox to open folders with a single mouse click, disabled by default.">Open folders with a single click</message>
       <message name="IDS_CRFILES_SHARE_TO" desc="Toolbar preferences and file sharing dialog.">Share to</message>
       <message name="IDS_CRFILES_FILES" desc="Toolbar preferences and file sharing dialog.">Files</message>
       <message name="IDS_CRFILES_FOLDERS" desc="Toolbar preferences and file sharing dialog.">Folders</message>

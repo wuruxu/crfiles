@@ -1,14 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <!-- 柜体阴影 -->
     <filter id="drop-shadow" x="-10%" y="-10%" width="125%" height="125%">
-      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.22" />
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.12" />
+      <feGaussianBlur in="SourceAlpha" stdDeviation="18" result="body-blur" />
+      <feOffset in="body-blur" dx="0" dy="16" result="body-offset" />
+      <feFlood flood-color="#000000" flood-opacity="0.22" result="body-color" />
+      <feComposite in="body-color" in2="body-offset" operator="in" result="body-shadow" />
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="edge-blur" />
+      <feOffset in="edge-blur" dx="0" dy="4" result="edge-offset" />
+      <feFlood flood-color="#000000" flood-opacity="0.12" result="edge-color" />
+      <feComposite in="edge-color" in2="edge-offset" operator="in" result="edge-shadow" />
+      <feMerge>
+        <feMergeNode in="body-shadow" />
+        <feMergeNode in="edge-shadow" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
     </filter>
 
     <!-- 把手阴影 -->
     <filter id="handle-shadow" x="-20%" y="-20%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#000000" flood-opacity="0.28" />
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="handle-blur" />
+      <feOffset in="handle-blur" dx="0" dy="5" result="handle-offset" />
+      <feFlood flood-color="#000000" flood-opacity="0.28" result="handle-color" />
+      <feComposite in="handle-color" in2="handle-offset" operator="in" result="handle-shadow" />
+      <feMerge>
+        <feMergeNode in="handle-shadow" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
     </filter>
 
     <!-- 外框立体渐变 -->
@@ -107,7 +125,7 @@
       <!-- 内部顶沿微光 -->
       <rect x="92" y="48" width="328" height="3" fill="url(#highlight-line)" />
       <!-- 把手 -->
-      <use href="#handle" x="208" y="98" />
+      <use xlink:href="#handle" x="208" y="98" />
       <!-- 缝隙下阴影 -->
       <rect x="92" y="179" width="328" height="3" fill="#B31412" opacity="0.6" />
     </g>
@@ -119,7 +137,7 @@
       <rect x="92" y="182" width="328" height="8" fill="url(#drawer-crevice)" />
       <rect x="92" y="183" width="328" height="2" fill="url(#highlight-line)" />
       <!-- 把手 -->
-      <use href="#handle" x="208" y="234" />
+      <use xlink:href="#handle" x="208" y="234" />
       <!-- 缝隙下阴影 -->
       <rect x="92" y="315" width="328" height="3" fill="#0D652D" opacity="0.6" />
     </g>
@@ -131,7 +149,7 @@
       <rect x="92" y="318" width="328" height="8" fill="url(#drawer-crevice)" />
       <rect x="92" y="319" width="328" height="2" fill="url(#highlight-line)" />
       <!-- 把手 -->
-      <use href="#handle" x="208" y="370" />
+      <use xlink:href="#handle" x="208" y="370" />
     </g>
   </g>
 

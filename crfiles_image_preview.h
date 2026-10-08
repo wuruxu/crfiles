@@ -10,8 +10,10 @@ namespace crfiles {
 // Images/SVG/HEIC/HEIF, PDF first pages, and static video frames (up to 128 px).
 // Video decode runs in a time-limited child; all calls below are worker-only.
 // Blocking decode: use MayBlock + WithBaseSyncPrimitives worker traits.
-// PDFium and HEIC access are serialized separately; ordinary raster bitmap
-// allocations share a 320 MiB budget. HEIC limits primary images to 64 MP.
+// Encoded inputs share a 128 MiB admission budget. Raster/HEIC pixels and
+// PDF/SVG outputs share 320 MiB; larger HEIC requests run exclusively (up to
+// 800 MiB estimated buffers). Codec-private scratch and retained caches are
+// separate. PDFium/HEIC access is serialized; HEIC primary images allow 64 MP.
 gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge);
 // Worker-only memory/disk lookup: validates metadata, never decodes the source
 // file on a cache miss. Folder thumbnails also have a 256 MiB / 4096-item disk LRU.

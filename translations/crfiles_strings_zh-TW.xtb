@@ -242,4 +242,20 @@
   <translation id="4197430498352136921">啟用 Windows 風格標題列</translation>
   <translation id="1902971411277288781">重新啟動 crFiles 以套用標題列變更。</translation>
   <translation id="4886100923120566693">允許 crFiles 存取此資料夾。請選擇此資料夾或包含它的資料夾。</translation>
+  <translation id="3655882103106476066">無法讀取或驗證所選來源檔案。請檢查檔案存取權限及檔案是否已變更。</translation>
+  <translation id="4351760882239164883">與另一台裝置通訊失敗或逾時。</translation>
+  <translation id="2010326661186049544">另一台裝置傳送了無效或不支援的傳輸訊息。</translation>
+  <translation id="510129484354523467">檔案驗證失敗：接收的資料與傳送端的校驗值不符。</translation>
+  <translation id="8252792824232748618">無法寫入接收的檔案。請檢查資料夾權限及可用空間。</translation>
+  <translation id="2675252763821215787">無法完成接收檔案的磁碟寫入。</translation>
+  <translation id="1189665664860445802">無法將暫存檔案儲存為最終檔名。請檢查資料夾權限及檔案鎖定狀態。</translation>
+  <translation id="1433696060812176370">無法儲存接收的檔案，因為已有同名項目。</translation>
+  <translation id="6065524822313010427">無法存取或準備接收資料夾。</translation>
+  <translation id="1821373738128066811">接收資料夾的可用空間不足。</translation>
+  <translation id="4330824151884297518">無法將傳輸記錄寫入檔案操作歷程。</translation>
+  <translation id="2239300538159870573">檔案已儲存，但無法更新裝置的傳輸統計。</translation>
+  <translation id="1675118829866063260">未收到另一台裝置的傳輸確認。連線可能已中斷或逾時。</translation>
+  <translation id="4215757694788567066">未獲得接收許可。請求遭拒、已逾時或連線已中斷。</translation>
+  <translation id="4999892345800068237">按一下進入資料夾</translation>
+  <translation id="4419422432933269866">已有同名項目。是否以接收的檔案取代？</translation>
 </translationbundle>

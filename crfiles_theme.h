@@ -32,6 +32,7 @@ struct FileViewPreferences {
   bool auto_hide_toolbar = true;
   bool animate_folders = true;
   bool hover_image_preview = false;
+  bool single_click_folders = false;
 };
 FileViewPreferences GetFileViewPreferences();
 bool SetFileViewPreferences(const FileViewPreferences& preferences);

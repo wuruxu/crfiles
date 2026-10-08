@@ -354,6 +354,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     system_tray_ = nullptr;
     animate_folders_ = nullptr;
     hover_image_preview_ = nullptr;
+    single_click_folders_ = nullptr;
     discovery_ = nullptr;
     auto_accept_ = nullptr;
     apply_ = nullptr;
@@ -429,10 +430,12 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     auto_hide_toolbar_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_AUTO_HIDE_TOOLBAR)));
     animate_folders_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_ANIMATE_FOLDERS)));
     hover_image_preview_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_HOVER_IMAGE_PREVIEW)));
+    single_click_folders_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_SINGLE_CLICK_FOLDERS)));
     auto_hide_toolbar_->SetChecked(preferences.auto_hide_toolbar);
     animate_folders_->SetChecked(preferences.animate_folders);
     hover_image_preview_->SetChecked(preferences.hover_image_preview);
-    for (auto* checkbox : {auto_hide_toolbar_.get(), animate_folders_.get(), hover_image_preview_.get()}) {
+    single_click_folders_->SetChecked(preferences.single_click_folders);
+    for (auto* checkbox : {auto_hide_toolbar_.get(), animate_folders_.get(), hover_image_preview_.get(), single_click_folders_.get()}) {
       checkbox->SetFocusBehavior(views::View::FocusBehavior::NEVER);
       checkbox->SetCallback(base::BindRepeating(&Settings::FileViewChanged, base::Unretained(this)));
     }
@@ -490,13 +493,14 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     else system_tray_->SetChecked(GetSystemTrayEnabled());
   }
   void FileViewChanged() {
-    const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked(), hover_image_preview_->GetChecked()});
+    const bool saved = SetFileViewPreferences({auto_hide_toolbar_->GetChecked(), animate_folders_->GetChecked(), hover_image_preview_->GetChecked(), single_click_folders_->GetChecked()});
     error_->SetVisible(!saved);
     if (!saved) {
       const auto preferences = GetFileViewPreferences();
       auto_hide_toolbar_->SetChecked(preferences.auto_hide_toolbar);
       animate_folders_->SetChecked(preferences.animate_folders);
       hover_image_preview_->SetChecked(preferences.hover_image_preview);
+      single_click_folders_->SetChecked(preferences.single_click_folders);
     }
     ApplyCrFilesViewSettings();
   }
@@ -774,6 +778,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   raw_ptr<views::Textfield> name_ = nullptr, directory_ = nullptr;
   raw_ptr<views::Label> error_ = nullptr;
   raw_ptr<views::Checkbox> auto_hide_toolbar_ = nullptr, animate_folders_ = nullptr, hover_image_preview_ = nullptr;
+  raw_ptr<views::Checkbox> single_click_folders_ = nullptr;
   raw_ptr<views::Checkbox> windows_titlebar_style_ = nullptr;
   raw_ptr<views::Checkbox> system_tray_ = nullptr;
   raw_ptr<views::Checkbox> discovery_ = nullptr, auto_accept_ = nullptr;

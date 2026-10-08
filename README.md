@@ -152,25 +152,49 @@ controls, menu, SVG renderer, themes and Viz compositor.
   both list and icon modes.
   List rows retain their selection background with an animated primary-color
   hover tint and stronger press feedback.
-  All columns share row selection, click feedback and double-click opening. Narrow list views
+  All columns share row selection, click feedback and double-click opening. Settings → General →
+  **Open folders with a single click** also enables single-click folder navigation in file views
+  and search results. It defaults to off; modifier-click selection remains available. Narrow list views
   scroll horizontally.
 - The folder background context menu contains New Folder, Sort by, Paste,
   Select All, Open in Terminal and Properties, with separators between groups.
   Sort by exposes every saved sort mode and marks the current choice; it works
   in both list and icon views. Select All selects all displayed entries, including
   offscreen rows. Terminal and Properties target the current directory.
-- File and folder icons use the bundled, unmodified Adwaita SVG assets selected
-  by MIME type. No system icon directory is scanned at runtime. Workers rasterize
-  only the requested size, with a shared memory cache and no SVG IO under the
-  cache lock. Attribution and licenses are in `resources/file_icons/COPYRIGHT`.
-  Lightweight vector placeholders appear until the SVG icon is ready; PNG, ICO
-  and other raster sources are never used for folder or file type icons.
+- On Windows, file, folder and drive icons prefer the system Shell icon for the
+  actual path, including executable icons, shortcut overlays and customized
+  folders. Failed queries and generic unknown-file icons fall back to the bundled
+  Adwaita SVG selected by MIME type. Transient Shell query or conversion failures
+  keep the fallback visible and retry up to three times, after 250 ms, 1 s and
+  3 s. Successful retries update the current view without navigation. Changing
+  directories cancels pending retries; generic unknown-file icons do not retry.
+  In the Windows `/` drive list, uncached drive icons are grouped into one task
+  per visible batch and queried sequentially on a dedicated COM STA shared across
+  panes and retries. Ordinary file icons and thumbnails retain parallel loading.
+  Shell queries run on COM STA workers and produce 1x and 2x images. Transient
+  failures are not cached. A bounded path cache expires after 30 seconds so later
+  refreshes can pick up changed associations. Other platforms retain the bundled
+  SVG icons and existing macOS application icons. Image, PDF and video thumbnails
+  retain priority. Attribution is in `resources/file_icons/COPYRIGHT`.
+  Lightweight vector placeholders appear while icons load; system queries and
+  SVG rendering run outside the shared cache lock.
+  Windows drive-icon diagnostics use the `[crFiles /]` prefix in the default
+  `debug.log` next to the executable (or the working directory if that location
+  is not writable). They record drive enumeration, Shell results, image-list
+  conversion, cache hits, worker dispatch, retries and the applied icon source.
 - Drag a rectangle across file content to select multiple entries in either view;
   hold Ctrl to add to the existing selection. Dragging suppresses the normal click
   action and scrolls toward the pointer when it moves outside the visible area.
 - Drag a rectangle across file content to select multiple entries in either view;
   hold Ctrl to add to the existing selection. Dragging suppresses the normal click
   action and scrolls toward the pointer when it moves outside the visible area.
+- Windows and Linux folder views use matching overlay scrollbars with capsule
+  thumbs for both vertical scrolling and horizontal scrolling in List mode.
+  Thumb positions follow floating-point content offsets with subpixel layer
+  translation, avoiding integer-position stepping. Positions and sizes update
+  immediately; hover feedback and scrollbar fade animations remain enabled.
+  Scroll-axis pixel snapping is disabled for these thumbs so fractional display
+  scaling does not introduce backward steps when their integer bounds advance.
 - Icon tiles and list rows share the same selection. Lists show the enabled columns.
   Click a folder/file icon or name to select it; Ctrl-click toggles multiple
   selections without checkboxes. Double-click or press Enter on a focused item
@@ -185,7 +209,56 @@ controls, menu, SVG renderer, themes and Viz compositor.
   Moving to Trash and restoring operate on selected files or folders.
 - Directory enumeration runs on a worker; stale results cannot overwrite another
   tab or a later navigation. Both List and Icon modes virtualize the full directory:
-  only the viewport and one viewport of overscan on each side have row views.
+  new row views cover the viewport and one viewport of overscan on each side.
+  Existing rows survive up to two viewports beyond either edge, reducing
+  repeated construction during short scroll reversals without expanding prefetch.
+  Scroll-time row updates keep the full content extent fixed. Up to 32 evicted
+  row widgets remain attached but hidden for reuse within the same file layout;
+  rebinding refreshes callbacks, selection, text, columns and icons. Focused,
+  pressed and dragged rows are retained rather than recycled. A file-specific
+  layout manager skips clean row subtrees during ancestor layout passes.
+  Each update fills all missing visible rows with names and cached or placeholder
+  icons before preparing offscreen rows. Other column cells retain their widths
+  and immediately restore cached formatted text when available; uncached detail
+  cells initially contain no text. Missing details follow in batches of
+  up to 12 rows with a soft 3 ms budget, starting after 16 ms. Visible details
+  precede offscreen details. Full tooltips are generated on demand by the outer
+  file row; inner buttons and labels do not publish duplicate tooltips. Tooltip
+  and ordinary point-event hit testing use the row/column index instead of
+  walking all retained rows, with mirrored coordinates for RTL. Headers retain
+  normal control targeting, while gaps use the existing background selection
+  and drop handling. Area targeting also uses the index, including pointer
+  rectangles expanded by fractional scroll transforms. It retains Chromium's
+  60% target-area coverage threshold, nearest-center selection, reverse child
+  order for ties and center-point fallback; header controls keep normal targeting.
+  Reused rows replace old text before becoming visible,
+  and hidden panes resume pending details when shown again. Visible work counts against the 16-row / 4 ms
+  soft preparation budget but is not deferred by it; only offscreen work waits
+  for the next 16 ms tick. Each update evicts at most 32 old rows.
+  Viewport callbacks coalesce row and icon scheduling; visible gaps advance
+  pending prefetch work to an immediate task outside event/layout dispatch.
+  Windows and Linux folder views use critically damped vertical wheel motion,
+  preserving velocity across consecutive inputs and moving content and thumb
+  together. Touchpad input keeps its native path, and direct manipulation cancels
+  wheel animation.
+  Completed buffered ranges update incrementally: overlapping rows keep their
+  geometry, and the ordered slot index finds outgoing rows and missing entries.
+  Interrupted batches continue filling their gaps. Model, geometry and external
+  row changes rebuild the index, while retained focus/drag rows are still checked.
+  Offscreen rows nearest the viewport in the scrolling direction are prepared
+  first, including after reversing direction. Child ordering preserves the
+  longest already-ordered subsequence to avoid moving unchanged rows repeatedly.
+  Hidden recycled rows keep their slots in the child order, avoiding moves solely
+  to push them to the end. Icon buttons apply their final vertical layout directly,
+  avoiding intermediate horizontal text layout. Idle rows skip transparent hover
+  background drawing while preserving selection and pressed/hover feedback.
+  Each pane caches up to 128 recently used row display records, including lazily
+  formatted text and already-rendered thumbnail representations (a 16 MiB pixel
+  budget). The cache never retains thumbnail resize sources and is invalidated
+  on tab/request/metadata generation changes; image reuse requires matching
+  icon size and scale. During continuous scrolling, pending directory reads
+  wait for 120 ms of quiet or at most 750 ms from the first pending change,
+  apart from existing drag/operation guards.
   Scrolling reaches every entry without a Show more step. Hidden entries are
   excluded until Show Hidden Files is enabled. On Windows, the hidden attribute
   is also respected.
@@ -211,6 +284,10 @@ Select regular files, then click **Send selected files** on a discovered device.
 Compare the entire pairing code on both devices and accept on both ends. The
 receiver separately approves the filename/size offer. Cancel is scoped to the
 current session. Received batches are placed in separate `Received-*` directories.
+When publishing a received file would overwrite a same-name destination, the
+receiver asks for **Replace** or **Cancel** after verifying and flushing the new
+file. Replace publishes the new file; Cancel keeps the existing file and stops
+the remaining transfer. Each conflict requires its own confirmation.
 
 The default receive folder is `~/Downloads/crFiles Received` (the Windows Downloads
 known folder is used on Windows). Settings, local identity and trust storage belong
@@ -308,8 +385,9 @@ The titlebar menu's Sharing folders entry, below Trusted devices, lists local
 shared directories. Remove stops sharing without deleting files; the folder icon
 closes the list and opens that directory in a new tab. The list updates after
 removal and shows an empty state when no folders remain shared.
-Receipts retain the existing isolated Received-* batch folders under the selected
-shared directory. Pairing and receive approval still apply. Catalogs refresh on
+Transfers to an explicit shared target write directly into that directory;
+transfers to Received use isolated Received-* batch folders. Pairing and receive
+approval still apply. Catalogs refresh on
 identity probes (normally within 30 seconds), and revoked targets are checked at
 transfer time rather than relying on stale discovery records.
 
@@ -359,7 +437,9 @@ a History type suppresses new journal rows without blocking the operation. A suc
 reported explicitly. Network sharing remains send/receive, not a destructive move.
 
 Settings uses General, Nearby sharing, History and About pages with the crPlayer
-navigation layout. General contains language and theme controls, without checkboxes.
+navigation layout. General contains language and theme controls, along with
+checkboxes for toolbar hiding, folder animations, hover image previews and
+single-click folder navigation.
 Nearby sharing groups device avatars, name, receive directory with a folder picker,
 discovery and trusted-device acceptance controls; Apply saves and activates changes.
 The avatar picker matches crPhotos: four columns, nine circular presets and a
@@ -398,15 +478,39 @@ One scheduler for the window gives cache lookups their own worker, checking up
 to 32 visible paths per batch without decoding. Cache misses are independent
 single-file jobs: up to four images/icons, one PDF and one video can run at once.
 Images with an encoded size of at least 8 MiB share one image slot, and concurrent
-raster bitmap allocations have a shared 320 MiB budget (excluding encoded data
-and codec-internal scratch). Workers refill immediately on completion, so slow
-files no longer delay already-decoded neighbors.
+encoded source buffers share a separate 128 MiB admission budget. Ordinary raster
+pixels, estimated HEIC buffers and PDF/SVG output pixels share a 320 MiB budget.
+HEIC requests larger than that run exclusively in the pixel pool, with an
+800 MiB maximum estimate, retaining support for 64 MP HDR images. These limits
+exclude codec-private scratch, retained images and GPU allocations; they are not
+process RSS caps. Waits observe cancellation. Separate encoded/pixel pools avoid
+holding source buffers while waiting for capacity in the same pool. Ordinary
+raster and SVG decoders borrow the source buffer instead of copying it.
+Workers refill immediately on completion, so slow files no longer delay
+already-decoded neighbors.
+
+Each pane keeps candidate queues by visibility and decoder type. Scrolling
+retains requests in the overlapping range, prunes outgoing requests and updates
+visible/prefetch priority. Only newly entering ranges and newly bound rows need
+classification; completed rows are not rescanned on every row boundary. Cache
+misses and completed results only reclassify their own path. Large raster
+candidates wait in a separate queue so a busy large-image slot does not force
+repeated scans. Refreshes, icon retries, model changes and view-size changes
+invalidate the relevant queue state.
+Jobs outside the current prefetch range receive per-file cancellation; hidden
+panes cancel their outstanding jobs too. Skipped or canceled results release
+their pending reservations without marking thumbnails as failed or consuming
+icon retries. Active jobs retain their concurrency slots until they return;
+codec or Shell calls without cooperative cancellation must finish normally.
 
 Visible entries across splits precede overscan. Results coalesce for 24 ms, then
 update at most 16 buttons / a 4 ms soft budget per flush; further results wait for
 the next 16 ms tick. Pending results are bounded by viewport scheduling and queue
 backpressure. This preserves row widgets, selection and scroll position while
 reducing scattered redraws. Filesystem cache validation stays on workers.
+Result delivery resolves entries through the materialized-position index.
+Eviction compacts column cells, visible buttons and layout slots once per batch;
+row ordering only invokes reordering for children whose position changed.
 
 Directory/tab changes, closing panes, and switching mode or icon size cancel old
 visual work. Cancellation is checked between entries and around image IO/decode
@@ -441,6 +545,11 @@ cannot populate the cache. Hover previews up to 720 px share this budget; larger
 image previews bypass the thumbnail cache. These
 budgets bound retained cache storage, not images held by live file views or
 in-flight decoders. The directory and decoded-image LRUs are process-local and are not workspace data.
+
+Materialized file entries also retain their current display-size thumbnail.
+Its ImageSkia representations are reused across paints and display scales;
+changing icon size or replacing the source thumbnail rebuilds that display
+image. Removing the row releases the display cache with the other pane images.
 
 Folder thumbnails also have a persistent cache of at most 4096 entries / 256 MiB.
 It covers images, SVG, PDF and video thumbnails up to 128 px; hover previews
@@ -732,7 +841,8 @@ for SDR images; HDR uses the primary image.
 
 Encoded data is limited to 64 MiB, primary and decoded images to 64 megapixels
 and 16,384 pixels per dimension. HEIC decodes are serialized separately from
-ordinary raster thumbnails. Cancellation is checked around codec calls and
+ordinary raster thumbnails, but now shares pixel-memory admission with them.
+Cancellation is checked around codec calls and
 during HDR conversion; an executing native codec call cannot be interrupted.
 Missing codecs or decode failures retain the normal file icon.
 

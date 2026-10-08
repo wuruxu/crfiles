@@ -186,7 +186,8 @@ FileViewPreferences GetFileViewPreferences() {
   base::AutoLock lock(SettingsLock());
   return {Settings().FindBool("auto_hide_toolbar").value_or(true),
           Settings().FindBool("animate_folders").value_or(true),
-          Settings().FindBool("hover_image_preview").value_or(false)};
+          Settings().FindBool("hover_image_preview").value_or(false),
+          Settings().FindBool("single_click_folders").value_or(false)};
 }
 bool GetWindowsTitlebarStyleEnabled() {
   base::AutoLock lock(SettingsLock());
@@ -216,6 +217,7 @@ bool SetFileViewPreferences(const FileViewPreferences& preferences) {
   Settings().Set("auto_hide_toolbar", preferences.auto_hide_toolbar);
   Settings().Set("animate_folders", preferences.animate_folders);
   Settings().Set("hover_image_preview", preferences.hover_image_preview);
+  Settings().Set("single_click_folders", preferences.single_click_folders);
   if (Save()) return true;
   Settings() = std::move(previous); return false;
 }

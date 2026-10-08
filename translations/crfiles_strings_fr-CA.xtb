@@ -242,4 +242,20 @@
   <translation id="4197430498352136921">Activer la barre de titre de style Windows</translation>
   <translation id="1902971411277288781">Redémarrez crFiles pour appliquer les modifications de la barre de titre.</translation>
   <translation id="4886100923120566693">Autorisez crFiles à accéder à ce dossier. Sélectionnez-le ou sélectionnez un dossier qui le contient.</translation>
+  <translation id="3655882103106476066">Impossible de lire ou de vérifier les fichiers source sélectionnés. Vérifiez les droits d’accès et si les fichiers ont été modifiés.</translation>
+  <translation id="4351760882239164883">La communication avec l’autre appareil a échoué ou le délai a expiré.</translation>
+  <translation id="2010326661186049544">L’autre appareil a envoyé un message de transfert invalide ou non pris en charge.</translation>
+  <translation id="510129484354523467">La vérification du fichier a échoué : les données reçues ne correspondent pas à la somme de contrôle de l’expéditeur.</translation>
+  <translation id="8252792824232748618">Impossible d’écrire le fichier reçu. Vérifiez les droits du dossier et l’espace disponible.</translation>
+  <translation id="2675252763821215787">Impossible de terminer l’écriture du fichier reçu sur le disque.</translation>
+  <translation id="1189665664860445802">Impossible d’enregistrer le fichier temporaire sous son nom définitif. Vérifiez les droits du dossier et les verrous de fichiers.</translation>
+  <translation id="1433696060812176370">Impossible d’enregistrer le fichier reçu, car un élément du même nom existe déjà.</translation>
+  <translation id="6065524822313010427">Impossible d’accéder au dossier de réception ou de le préparer.</translation>
+  <translation id="1821373738128066811">L’espace disponible dans le dossier de réception est insuffisant.</translation>
+  <translation id="4330824151884297518">Impossible d’enregistrer le transfert dans l’historique des opérations sur les fichiers.</translation>
+  <translation id="2239300538159870573">Le fichier a été enregistré, mais les statistiques de transfert de l’appareil n’ont pas pu être mises à jour.</translation>
+  <translation id="1675118829866063260">L’autre appareil n’a pas confirmé le transfert. La connexion a peut-être été interrompue ou le délai a expiré.</translation>
+  <translation id="4215757694788567066">L’autorisation de réception n’a pas été obtenue. La demande a été refusée, le délai a expiré ou la connexion a été interrompue.</translation>
+  <translation id="4999892345800068237">Ouvrir les dossiers d’un simple clic</translation>
+  <translation id="4419422432933269866">Un élément du même nom existe déjà. Voulez-vous le remplacer par le fichier reçu ?</translation>
 </translationbundle>

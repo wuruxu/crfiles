@@ -242,4 +242,20 @@
   <translation id="4197430498352136921">Ativar a barra de título ao estilo Windows</translation>
   <translation id="1902971411277288781">Reinicie o crFiles para aplicar as alterações à barra de título.</translation>
   <translation id="4886100923120566693">Permita que o crFiles aceda a esta pasta. Selecione-a ou selecione uma pasta que a contenha.</translation>
+  <translation id="3655882103106476066">Não foi possível ler ou validar os ficheiros de origem selecionados. Verifique as permissões de acesso e se os ficheiros foram alterados.</translation>
+  <translation id="4351760882239164883">A comunicação com o outro dispositivo falhou ou o tempo limite foi excedido.</translation>
+  <translation id="2010326661186049544">O outro dispositivo enviou uma mensagem de transferência inválida ou não suportada.</translation>
+  <translation id="510129484354523467">A verificação do ficheiro falhou: os dados recebidos não correspondem à soma de verificação do remetente.</translation>
+  <translation id="8252792824232748618">Não foi possível escrever o ficheiro recebido. Verifique as permissões da pasta e o espaço disponível.</translation>
+  <translation id="2675252763821215787">Não foi possível concluir a escrita do ficheiro recebido no disco.</translation>
+  <translation id="1189665664860445802">Não foi possível guardar o ficheiro temporário com o nome definitivo. Verifique as permissões da pasta e os bloqueios de ficheiros.</translation>
+  <translation id="1433696060812176370">Não foi possível guardar o ficheiro recebido porque já existe um item com o mesmo nome.</translation>
+  <translation id="6065524822313010427">Não foi possível aceder ou preparar a pasta de receção.</translation>
+  <translation id="1821373738128066811">Não há espaço livre suficiente na pasta de receção.</translation>
+  <translation id="4330824151884297518">Não foi possível registar a transferência no histórico de operações de ficheiros.</translation>
+  <translation id="2239300538159870573">O ficheiro foi guardado, mas não foi possível atualizar as estatísticas de transferência do dispositivo.</translation>
+  <translation id="1675118829866063260">O outro dispositivo não confirmou a transferência. A ligação pode ter sido interrompida ou o tempo limite pode ter sido excedido.</translation>
+  <translation id="4215757694788567066">Não foi obtida autorização para receber. O pedido foi recusado, o tempo limite foi excedido ou a ligação foi interrompida.</translation>
+  <translation id="4999892345800068237">Abrir pastas com um clique</translation>
+  <translation id="4419422432933269866">Já existe um item com o mesmo nome. Pretende substituí-lo pelo ficheiro recebido?</translation>
 </translationbundle>
