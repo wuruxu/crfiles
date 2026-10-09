@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_video_thumbnail.h"
+#include <deque>
 #include <utility>
 #include "crFiles/crfiles_video_thumbnail.mojom.h"
 #include "base/base_paths.h"
@@ -49,6 +50,7 @@ class VideoConnection {
  private:
   bool Connect();
   void StopProcess();
+  void StartDecode(std::shared_ptr<VideoRequest> request);
   void Poll();
   void Disconnected(uint64_t generation);
   void Received(std::shared_ptr<VideoRequest> request, mojom::VideoThumbnailPtr result);
@@ -56,6 +58,7 @@ class VideoConnection {
   base::Process process_;
   mojo::Remote<mojom::VideoThumbnailService> service_;
   std::shared_ptr<VideoRequest> pending_;
+  std::deque<std::shared_ptr<VideoRequest>> queue_;
   base::RepeatingTimer poll_;
   base::OneShotTimer idle_;
   base::TimeTicks deadline_;
@@ -95,7 +98,21 @@ void VideoConnection::StopProcess() {
   }
 }
 void VideoConnection::Decode(std::shared_ptr<VideoRequest> request) {
-  if (pending_) { request->done.Signal(); return; }
+  if (!request || request->abandoned.load() || (request->canceled && request->canceled->load())) {
+    if (request) request->done.Signal();
+    return;
+  }
+  if (pending_) {
+    std::erase_if(queue_, [](const auto& item) {
+      return !item || item->abandoned.load() || (item->canceled && item->canceled->load());
+    });
+    if (queue_.size() < 16) queue_.push_back(std::move(request));
+    else request->done.Signal();
+    return;
+  }
+  StartDecode(std::move(request));
+}
+void VideoConnection::StartDecode(std::shared_ptr<VideoRequest> request) {
   idle_.Stop();
   pending_ = std::move(request);
   if (pending_->abandoned.load() || (pending_->canceled && pending_->canceled->load()) || !Connect()) {
@@ -136,6 +153,15 @@ void VideoConnection::Finish(gfx::ImageSkia image, bool retire) {
   else idle_.Start(FROM_HERE, base::Seconds(30), this, &VideoConnection::StopProcess);
   auto request = std::move(pending_);
   if (request) { request->image = std::move(image); request->done.Signal(); }
+  while (!queue_.empty()) {
+    auto next = std::move(queue_.front());
+    queue_.pop_front();
+    if (next && !next->abandoned.load() && (!next->canceled || !next->canceled->load())) {
+      StartDecode(std::move(next));
+      return;
+    }
+    if (next) next->done.Signal();
+  }
 }
 struct VideoHost {
   VideoHost();
@@ -162,8 +188,18 @@ gfx::ImageSkia LoadVideoThumbnail(const base::FilePath& path, int maximum_edge,
         static base::NoDestructor<VideoConnection> connection;
         connection->Decode(std::move(item));
       }, request))) return {};
-  // A second bound also protects against failure to schedule the IO sequence.
-  if (!request->done.TimedWait(base::Seconds(9))) { request->abandoned = true; return {}; }
+  const auto deadline = base::TimeTicks::Now() + base::Seconds(9);
+  while (!request->done.IsSignaled()) {
+    if (canceled && canceled->load()) {
+      request->abandoned = true;
+      return {};
+    }
+    if (base::TimeTicks::Now() >= deadline) {
+      request->abandoned = true;
+      return {};
+    }
+    request->done.TimedWait(base::Milliseconds(50));
+  }
   if (canceled && canceled->load()) return {};
   return request->image;
 }

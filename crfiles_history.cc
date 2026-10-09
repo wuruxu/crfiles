@@ -16,10 +16,14 @@ std::atomic<uint64_t> history_version{0};
 base::Lock& HistoryLock() { static base::NoDestructor<base::Lock> lock; return *lock; }
 class Database {
  public:
-  Database() {
+  void EnsureOpen() {
+    if (ok_) return;
+    // Retry transient open/schema failures on the next operation, under
+    // HistoryLock. Failed connections must be closed before reopening.
+    db_.reset();
     // Chromium disables SQLite automatic initialization. All journal connections
     // are opened under HistoryLock, including this one-time initialization.
-    static const int initialized = sqlite3_initialize();
+    const int initialized = sqlite3_initialize();
     if (initialized != SQLITE_OK) return;
     const auto trash = TrashRoot();
     if (trash.empty() || !base::CreateDirectory(trash.DirName())) return;
@@ -29,6 +33,7 @@ class Database {
     db_.reset(opened);
     if (result != SQLITE_OK) return;
     sqlite3_busy_timeout(db_.get(), 5000);
+    sqlite3_exec(db_.get(), "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     ok_ = sqlite3_exec(db_.get(), "CREATE TABLE IF NOT EXISTS operations (id INTEGER PRIMARY KEY, time INTEGER NOT NULL, action TEXT NOT NULL, trigger TEXT NOT NULL, source TEXT NOT NULL, destination TEXT NOT NULL, result TEXT NOT NULL)", nullptr, nullptr, nullptr) == SQLITE_OK;
     if (ok_) ok_ = sqlite3_exec(db_.get(), "CREATE INDEX IF NOT EXISTS operations_time ON operations(time DESC,id DESC)", nullptr, nullptr, nullptr) == SQLITE_OK;
   }
@@ -53,6 +58,11 @@ class Database {
   std::unique_ptr<sqlite3, decltype(&sqlite3_close)> db_{nullptr, sqlite3_close};
   bool ok_ = false;
 };
+Database& SharedDatabase() {
+  static base::NoDestructor<Database> db;
+  db->EnsureOpen();
+  return *db;
+}
 class Statement {
  public:
   Statement(sqlite3* db, const char* query) {
@@ -76,7 +86,7 @@ FileOperationLog::FileOperationLog(std::string action, std::string trigger, std:
   for (size_t i = 0; i < kHistoryActions.size(); ++i)
     if (action == kHistoryActions[i] && !preferences.record[i]) { suppressed_ = true; return; }
   base::AutoLock lock(HistoryLock());
-  Database db;
+  auto& db = SharedDatabase();
   db.Prune();
   Statement query(db.get(), "INSERT INTO operations(time,action,trigger,source,destination,result) VALUES(?,?,?,?,?,'pending')");
   if (!query.get()) { LOG(ERROR) << "Cannot open file operation history"; return; }
@@ -87,7 +97,7 @@ FileOperationLog::FileOperationLog(std::string action, std::string trigger, std:
 FileOperationLog::~FileOperationLog() {
   if (!id_) return;
   base::AutoLock lock(HistoryLock());
-  Database db;
+  auto& db = SharedDatabase();
   Statement query(db.get(), "UPDATE operations SET destination=?,result=? WHERE id=?");
   if (!query.get()) { LOG(ERROR) << "Cannot finish file operation history"; return; }
   query.Text(1, destination_); query.Text(2, result_); sqlite3_bind_int64(query.get(), 3, id_);
@@ -97,13 +107,13 @@ FileOperationLog::~FileOperationLog() {
 void FileOperationLog::SetDestination(std::string destination) { destination_ = std::move(destination); }
 void PruneFileHistory() {
   base::AutoLock lock(HistoryLock());
-  Database db; db.Prune();
+  SharedDatabase().Prune();
 }
 uint64_t FileHistoryVersion() { return history_version.load(); }
 FileHistoryPage ReadFileHistory(int limit, std::string path_query,
                                std::string action, FileHistoryCursor before) {
   base::AutoLock lock(HistoryLock());
-  Database db;
+  auto& db = SharedDatabase();
   db.Prune();
   const char* sql = before.id
       ? "SELECT id,time,action,trigger,source,destination,result FROM operations WHERE (? = '' OR instr(source, ?) > 0 OR instr(destination, ?) > 0) AND (? = '' OR action = ?) AND (time,id) < (?,?) ORDER BY time DESC,id DESC LIMIT ?"

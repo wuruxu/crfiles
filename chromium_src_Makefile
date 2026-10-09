@@ -43,3 +43,41 @@ wf0:
 	(cd "$$staging" && zip -r "$(CRFILES_WIN_PACKAGE_NAME).zip" "$(CRFILES_WIN_PACKAGE_NAME)"); \
 	mv -f "$$staging/$(CRFILES_WIN_PACKAGE_NAME).zip" "$(CRFILES_WIN_PACKAGE_ZIP)"; \
 	sha256sum "$(CRFILES_WIN_PACKAGE_ZIP)"
+
+# Package existing Windows x64 outputs as an unsigned MSIX; no compilation.
+CRFILES_MSIX_VERSION := $(shell awk -F= '/^MAJOR=/{major=$$2} /^MINOR=/{minor=$$2} /^PATCH=/{patch=$$2} /^BUILD=/{build=$$2} END{printf "%s.%s.%s.%s", major, minor, patch, build}' crFiles/VERSION)
+CRFILES_MSIX_PACKAGE ?= /tmp/crFiles_$(CRFILES_MSIX_VERSION)_x64.msix
+.PHONY: fmsix
+fmsix:
+	@set -eu; \
+	case "$(CRFILES_MSIX_PACKAGE)" in *.msix) ;; *) echo "Package output must end in .msix" >&2; exit 1 ;; esac; \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+		test -f "$(CRFILES_WIN_OUT_DIR)/$$file" || { echo "Missing build output: $(CRFILES_WIN_OUT_DIR)/$$file" >&2; exit 1; }; \
+	done; \
+	command -v makemsix >/dev/null; \
+	command -v magick >/dev/null; \
+	staging=$$(mktemp -d /tmp/crfiles-msix.XXXXXX); \
+	trap 'rm -rf -- "$$staging"' EXIT; \
+	package="$$staging/package"; \
+	mkdir -p "$$package/crfiles_resources/file_icons" "$$package/licenses" "$$package/Assets"; \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+		cp "$(CRFILES_WIN_OUT_DIR)/$$file" "$$package/$$file"; \
+	done; \
+	for file in "$(CRFILES_WIN_OUT_DIR)"/vcruntime140*.dll "$(CRFILES_WIN_OUT_DIR)"/msvcp140*.dll; do \
+		if test -f "$$file"; then cp "$$file" "$$package/"; fi; \
+	done; \
+	python3 crFiles/tools/package_windows_codecs.py --out-dir "$(CRFILES_WIN_OUT_DIR)" --runtime "$(CRFILES_HEVC_RUNTIME_DIR)" --heif-runtime "$(CRFILES_HEIF_RUNTIME_DIR)" --destination "$$package"; \
+	cp crFiles/third_party/libde265/COPYING "$$package/licenses/libde265-COPYING"; \
+	cp crFiles/third_party/libheif/COPYING "$$package/licenses/libheif-COPYING"; \
+	cp third_party/unrar/src/license.txt "$$package/licenses/UnRAR-LICENSE"; \
+	cp third_party/lzma_sdk/LICENSE "$$package/licenses/LZMA-SDK-LICENSE"; \
+	cp crFiles/README.md crFiles/VERSION crFiles/LICENSE "$$package/"; \
+	cp LICENSE "$$package/licenses/Chromium-LICENSE"; \
+	python3 build/util/version.py -f crFiles/VERSION -i crFiles/crFiles.AppxManifest.xml.version -o "$$package/AppxManifest.xml"; \
+	for asset in StoreLogo:50 Square44x44Logo:44 Square150x150Logo:150; do \
+		name=$${asset%:*}; size=$${asset#*:}; \
+		magick -background none crFiles/crFiles.svg -resize "$${size}x$${size}" -gravity center -extent "$${size}x$${size}" "$$package/Assets/$$name.png"; \
+	done; \
+	makemsix pack -d "$$package" -p "$$staging/crFiles.msix"; \
+	mv -f -- "$$staging/crFiles.msix" "$(CRFILES_MSIX_PACKAGE)"; \
+	sha256sum "$(CRFILES_MSIX_PACKAGE)"

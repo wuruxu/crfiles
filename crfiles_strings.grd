@@ -304,6 +304,34 @@
       <message name="IDS_CRFILES_EXTRACT_EXISTS" desc="Archive conflict confirmation and recovery.">Already exists: <ph name="PATH">$1<ex>/Downloads/example</ex></ph></message>
       <message name="IDS_CRFILES_EXTRACT_RECOVERY" desc="Archive conflict confirmation and recovery.">Replacement failed. The original entry is preserved in: <ph name="PATH">$1<ex>/Downloads/example</ex></ph></message>
       <message name="IDS_CRFILES_FOLDER_ACCESS_PROMPT" desc="Explanation in the macOS folder access permission picker.">Allow crFiles to access this folder. Select it or a containing folder.</message>
+      <message name="IDS_CRFILES_GRAPHICS" desc="Graphics diagnostics in the About page.">Graphics</message>
+      <message name="IDS_CRFILES_GRAPHICS_DEVICE" desc="Graphics diagnostics in the About page.">GPU device</message>
+      <message name="IDS_CRFILES_GRAPHICS_DRIVER" desc="Graphics diagnostics in the About page.">Graphics driver</message>
+      <message name="IDS_CRFILES_GRAPHICS_RENDERER" desc="Graphics diagnostics in the About page.">Renderer</message>
+      <message name="IDS_CRFILES_GRAPHICS_GL" desc="Graphics diagnostics in the About page.">GL / ANGLE backend</message>
+      <message name="IDS_CRFILES_GRAPHICS_SKIA" desc="Graphics diagnostics in the About page.">Skia backend</message>
+      <message name="IDS_CRFILES_GRAPHICS_COMPOSITING" desc="Graphics diagnostics in the About page.">GPU compositing</message>
+      <message name="IDS_CRFILES_GRAPHICS_RASTER" desc="Graphics diagnostics in the About page.">GPU rasterization</message>
+      <message name="IDS_CRFILES_GRAPHICS_DCOMP" desc="Graphics diagnostics in the About page.">DirectComposition</message>
+      <message name="IDS_CRFILES_GRAPHICS_UNAVAILABLE" desc="Graphics diagnostics in the About page.">Not available</message>
+      <message name="IDS_CRFILES_GRAPHICS_ENABLED" desc="Graphics diagnostics in the About page.">Enabled</message>
+      <message name="IDS_CRFILES_GRAPHICS_DISABLED" desc="Graphics diagnostics in the About page.">Disabled</message>
+      <message name="IDS_CRFILES_GRAPHICS_SOFTWARE" desc="Graphics diagnostics in the About page.">Software</message>
+      <message name="IDS_CRFILES_GRAPHICS_NOTE" desc="Graphics diagnostics in the About page.">GPU features can also run through software renderers.</message>
+      <message name="IDS_CRFILES_GRAPHICS_REFRESH_RATE" desc="Refresh rate reported by the window compositor in Graphics diagnostics, not measured FPS.">Compositor-reported refresh rate</message>
+      <message name="IDS_CRFILES_SYSTEM_INFO" desc="Label before the Graphics link on the About page.">System information</message>
+      <message name="IDS_CRFILES_GRAPHICS_RENDERING_MODE" desc="Rendering mode in About graphics diagnostics.">Rendering mode</message>
+      <message name="IDS_CRFILES_GRAPHICS_HARDWARE" desc="Rendering mode in About graphics diagnostics.">Hardware acceleration</message>
+      <message name="IDS_CRFILES_GRAPHICS_SOFTWARE_RENDERING" desc="Rendering mode in About graphics diagnostics.">Software rendering</message>
+      <message name="IDS_CRFILES_GRAPHICS_UNKNOWN_MODE" desc="Rendering mode in About graphics diagnostics.">Unable to determine</message>
+      <message name="IDS_CRFILES_DISPLAY" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Display</message>
+      <message name="IDS_CRFILES_DISPLAY_NAME" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Display name</message>
+      <message name="IDS_CRFILES_DISPLAY_RESOLUTION" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Resolution</message>
+      <message name="IDS_CRFILES_DISPLAY_LOGICAL_SIZE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Logical size</message>
+      <message name="IDS_CRFILES_DISPLAY_WORK_AREA" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Work area size</message>
+      <message name="IDS_CRFILES_DISPLAY_SCALE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Scale factor</message>
+      <message name="IDS_CRFILES_DISPLAY_WINDOW_SIZE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">About window size</message>
+      <message name="IDS_CRFILES_DISPLAY_REFRESH_RATE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Display-reported refresh rate</message>
     </messages>
   </release>
 </grit>

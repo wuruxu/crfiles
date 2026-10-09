@@ -35,6 +35,9 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/rrect_f.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "ui/gfx/skia_paint_util.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/views/controls/label.h"
@@ -360,7 +363,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     const int frame_width = width() - margin * 2;
     auto* client = widget_->client_view();
     client->SetPaintToLayer(); client->layer()->SetFillsBoundsOpaquely(false);
-    client->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(0, 0, margin ? 12 : 0, margin ? 12 : 0));
+    client->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF());
     const bool show = !widget_->IsFullscreen();
     if (!show) HideOptionsMenu();
     options_button_->SetVisible(show);
@@ -406,7 +409,9 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     flags.setColor(GetColorProvider()->GetColor(active ? ui::kColorSysHeader : ui::kColorSysHeaderInactive));
     if (margin) flags.setLooper(gfx::CreateShadowDrawLooper({gfx::ShadowValue(gfx::Vector2d(0, 3), 16,
         SkColorSetA(SK_ColorBLACK, active ? 72 : 40))}));
-    canvas->DrawRoundRect(surface, CornerRadius(), flags);
+    const float radius = CornerRadius();
+    const gfx::RRectF outline(gfx::RectF(surface), radius, radius, radius, radius, 0, 0, 0, 0);
+    canvas->DrawPath(SkPath::RRect(SkRRect{outline}), flags);
   }
   void OnThemeChanged() override { views::FrameView::OnThemeChanged(); UpdateColors(); }
   void OnWidgetActivationChanged(views::Widget*, bool) override { UpdateColors(); }

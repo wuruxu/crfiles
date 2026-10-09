@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_file_icons.h"
+#include "crFiles/crfiles_cache_state.h"
 #include <algorithm>
 #include <map>
 #include <string_view>
@@ -57,12 +58,27 @@ std::string_view IconAsset(const std::string& mime, bool directory) {
   if (mime.find("executable") != std::string::npos || mime.find("sharedlib") != std::string::npos) return "application-x-executable";
   return "application-x-generic";
 }
-gfx::ImageSkia ReadIcon(std::string_view asset, int edge) {
+std::map<std::string, std::string>& SvgSourceCache() {
+  static base::NoDestructor<std::map<std::string, std::string>> cache;
+  return *cache;
+}
+std::string GetSvgSource(std::string_view asset) {
+  {
+    base::AutoLock guard(IconLock());
+    auto found = SvgSourceCache().find(std::string(asset));
+    if (found != SvgSourceCache().end()) return found->second;
+  }
   base::FilePath assets;
   if (!base::PathService::Get(base::DIR_ASSETS, &assets)) return {};
   const auto path = assets.AppendASCII("crfiles_resources").AppendASCII("file_icons").AppendASCII(std::string(asset) + ".svg");
   std::string svg;
   if (!base::ReadFileToStringWithMaxSize(path, &svg, 1024 * 1024)) return {};
+  base::AutoLock guard(IconLock());
+  return SvgSourceCache().try_emplace(std::string(asset), std::move(svg)).first->second;
+}
+gfx::ImageSkia ReadIcon(std::string_view asset, int edge) {
+  std::string svg = GetSvgSource(asset);
+  if (svg.empty()) return {};
   SkMemoryStream stream(svg.data(), svg.size(), true);
   auto dom = SkSVGDOM::MakeFromStream(stream);
   if (!dom) return {};
@@ -95,6 +111,15 @@ gfx::ImageSkia LoadBundledIcon(const std::string& mime, bool directory, int edge
 
 #if BUILDFLAG(IS_WIN)
 namespace {
+Microsoft::WRL::ComPtr<IImageList> GetSystemImageList(int size) {
+  // Keep COM references within the caller's initialized apartment. Worker
+  // threads can outlive a scoped COM initialization; cache decoded icons instead.
+  Microsoft::WRL::ComPtr<IImageList> images;
+  if (SUCCEEDED(SHGetImageList(size, IID_PPV_ARGS(&images)))) {
+    return images;
+  }
+  return nullptr;
+}
 bool IsDriveIconPath(const base::FilePath& path) {
   const auto& value = path.value();
   return value.size() == 3 && value[1] == L':' && (value[2] == L'\\' || value[2] == L'/');
@@ -103,11 +128,55 @@ using SystemIconKey = std::tuple<base::FilePath, bool, std::string, int>;
 struct CachedSystemIcon {
   gfx::ImageSkia image;
   base::TimeTicks loaded_at;
+  std::shared_ptr<FileCacheEpoch> epoch;
+  uint64_t revision = 0;
+  size_t bytes = 0;
 };
-base::LRUCache<SystemIconKey, CachedSystemIcon>& SystemIconCache() {
-  // Path-specific icons cannot share the fixed MIME cache. Bound their memory
-  // and expire results so refreshing can pick up changed file associations.
-  static base::NoDestructor<base::LRUCache<SystemIconKey, CachedSystemIcon>> cache(128);
+// Both levels store only thread-safe pixels, never apartment-bound COM objects.
+// Count shared pixels conservatively in each entry to keep simple hard budgets.
+template <typename Key>
+class BoundedIconCache {
+ public:
+  BoundedIconCache(size_t entries, size_t bytes) : max_entries_(entries), max_bytes_(bytes) {}
+  std::optional<gfx::ImageSkia> Get(const Key& key) {
+    auto found = items_.Get(key);
+    if (found == items_.end()) return std::nullopt;
+    if (base::TimeTicks::Now() - found->second.loaded_at >= base::Seconds(30) ||
+        (found->second.epoch && !found->second.epoch->Matches(found->second.revision))) {
+      bytes_ -= found->second.bytes;
+      items_.Erase(found);
+      return std::nullopt;
+    }
+    return found->second.image;
+  }
+  void Put(const Key& key, gfx::ImageSkia image, std::shared_ptr<FileCacheEpoch> epoch = {}, uint64_t revision = 0) {
+    size_t bytes = 0;
+    for (const auto& rep : image.image_reps())
+      if (!rep.is_null()) bytes += rep.GetBitmap().computeByteSize();
+    if (bytes > max_bytes_ || (epoch && !epoch->Matches(revision))) return;
+    if (auto found = items_.Get(key); found != items_.end()) {
+      bytes_ -= found->second.bytes;
+      items_.Erase(found);
+    }
+    while (!items_.empty() && (items_.size() >= max_entries_ || bytes_ + bytes > max_bytes_)) {
+      bytes_ -= items_.rbegin()->second.bytes;
+      items_.Erase(items_.rbegin());
+    }
+    items_.Put(key, CachedSystemIcon{std::move(image), base::TimeTicks::Now(), std::move(epoch), revision, bytes});
+    bytes_ += bytes;
+  }
+ private:
+  base::LRUCache<Key, CachedSystemIcon> items_{base::LRUCache<Key, CachedSystemIcon>::NO_AUTO_EVICT};
+  const size_t max_entries_, max_bytes_;
+  size_t bytes_ = 0;
+};
+BoundedIconCache<SystemIconKey>& SystemIconCache() {
+  static base::NoDestructor<BoundedIconCache<SystemIconKey>> cache(512, 32 * 1024 * 1024);
+  return *cache;
+}
+using SharedIconKey = std::tuple<int, unsigned, int>;
+BoundedIconCache<SharedIconKey>& SharedIconCache() {
+  static base::NoDestructor<BoundedIconCache<SharedIconKey>> cache(128, 8 * 1024 * 1024);
   return *cache;
 }
 
@@ -126,11 +195,10 @@ SkBitmap ReadSystemIconBitmap(const base::FilePath& path, int index, unsigned ov
   // Choose an image list by its actual pixel size, including Windows DPI scaling.
   base::win::ScopedGDIObject<HICON> smaller;
   for (int size : {SHIL_SMALL, SHIL_LARGE, SHIL_EXTRALARGE, SHIL_JUMBO}) {
-    Microsoft::WRL::ComPtr<IImageList> images;
-    const HRESULT list_result = SHGetImageList(size, IID_PPV_ARGS(&images));
-    if (FAILED(list_result)) {
+    Microsoft::WRL::ComPtr<IImageList> images = GetSystemImageList(size);
+    if (!images) {
       if (trace) LOG(INFO) << "[crFiles /] image_list path=" << path.AsUTF8Unsafe() << " pixels=" << pixels
-          << " list=" << size << " hr=0x" << std::hex << static_cast<unsigned long>(list_result);
+          << " list=" << size << " failed";
       continue;
     }
     int width = 0, height = 0;
@@ -182,7 +250,8 @@ SkBitmap ReadSystemIconBitmap(const base::FilePath& path, int index, unsigned ov
   return bitmap;
 }
 
-FileIconResult ReadSystemIcon(const base::FilePath& path, bool directory, int edge) {
+FileIconResult ReadSystemIcon(const base::FilePath& path, bool directory, int edge,
+    const std::shared_ptr<FileCacheEpoch>& epoch, uint64_t revision) {
   const bool trace = IsDriveIconPath(path);
   SHFILEINFOW info{};
   // SHGetFileInfo does not promise to set last-error; log it only as a hint.
@@ -202,6 +271,11 @@ FileIconResult ReadSystemIcon(const base::FilePath& path, bool directory, int ed
   // Windows also succeeds for unregistered types with a generic blank file.
   // Such files should retain the project's MIME-specific fallback instead.
   if (!directory && !overlay && index == UnknownSystemIconIndex()) return {};
+  const SharedIconKey shared_key{index, overlay, edge};
+  {
+    base::AutoLock guard(IconLock());
+    if (auto cached = SharedIconCache().Get(shared_key)) return {*cached};
+  }
   gfx::ImageSkia image;
   for (int scale : {1, 2}) {
     auto bitmap = ReadSystemIconBitmap(path, index, overlay, fallback.get(), edge * scale);
@@ -211,6 +285,10 @@ FileIconResult ReadSystemIcon(const base::FilePath& path, bool directory, int ed
   }
   if (!image.isNull()) image.MakeThreadSafe();
   const bool retry = image.isNull();
+  if (!retry) {
+    base::AutoLock guard(IconLock());
+    SharedIconCache().Put(shared_key, image, epoch, revision);
+  }
   if (trace) LOG(INFO) << "[crFiles /] system_icon_result path=" << path.AsUTF8Unsafe() << " edge=" << edge
       << " index=" << index << " overlay=" << overlay << " image_empty=" << retry;
   return {std::move(image), retry};
@@ -221,14 +299,7 @@ FileIconResult ReadSystemIcon(const base::FilePath& path, bool directory, int ed
 std::optional<gfx::ImageSkia> FindCachedFileIcon(const base::FilePath& path, const std::string& mime, bool directory, int edge) {
 #if BUILDFLAG(IS_WIN)
   base::AutoLock guard(IconLock());
-  auto& cache = SystemIconCache();
-  auto found = cache.Get(SystemIconKey{path, directory, mime, edge});
-  if (found == cache.end()) return std::nullopt;
-  if (base::TimeTicks::Now() - found->second.loaded_at >= base::Seconds(30)) {
-    cache.Erase(found);
-    return std::nullopt;
-  }
-  return found->second.image;
+  return SystemIconCache().Get(SystemIconKey{path, directory, mime, edge});
 #else
   (void)path;
   return FindCachedBundledIcon(mime, directory, edge);
@@ -246,7 +317,9 @@ FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime,
   if (IsDriveIconPath(path)) LOG(INFO) << "[crFiles /] load_icon path=" << path.AsUTF8Unsafe()
       << " edge=" << edge << " directory=" << directory << " mime=" << mime << " cache=miss";
   // Shell queries and SVG rendering must never run under the shared cache lock.
-  auto result = ReadSystemIcon(path, directory, edge);
+  auto epoch = ObserveFileCachePath(path, false);
+  const uint64_t revision = epoch->revision.load();
+  auto result = ReadSystemIcon(path, directory, edge, epoch, revision);
   const bool bundled = result.image.isNull();
   if (bundled) result.image = LoadBundledIcon(mime, directory, edge);
   if (IsDriveIconPath(path)) LOG(INFO) << "[crFiles /] load_icon_result path=" << path.AsUTF8Unsafe() << " edge=" << edge
@@ -257,7 +330,7 @@ FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime,
   if (!result.retry) {
     base::AutoLock guard(IconLock());
     SystemIconCache().Put(SystemIconKey{path, directory, mime, edge},
-                          CachedSystemIcon{result.image, base::TimeTicks::Now()});
+                          result.image, std::move(epoch), revision);
   }
   return result;
 #else

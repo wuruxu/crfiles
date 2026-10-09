@@ -284,39 +284,48 @@ bool ToneMapHdrPixels(const uint8_t* pixels, int stride, int bit_depth,
     return false;
   }
   const float maximum = (1u << bit_depth) - 1;
-  const auto row_info = SkImageInfo::Make(
-      output.width(), 1, kRGBA_F32_SkColorType, alpha_type, color_space);
-  std::vector<std::array<float, 4>> row(output.width());
+  const int width = output.width();
+  const int height = output.height();
+  constexpr int kChunkRows = 64;
+  std::vector<std::array<float, 4>> chunk(static_cast<size_t>(width) * kChunkRows);
   SkPaint paint;
   paint.setBlendMode(SkBlendMode::kSrc);
   paint.setColorFilter(metadata.makeToneMapColorFilter(0.0f, color_space.get()));
   SkCanvas canvas(output);
-  // Process one floating-point row at a time to bound peak memory for large
-  // HEIC images. RRGGBBAA_LE stores right-aligned 10/12-bit values in 16 bits.
-  for (int y = 0; y < output.height(); ++y) {
+  // Process floating-point pixels in small row batches to bound peak memory
+  // while avoiding per-scanline SkImage allocations.
+  for (int y_start = 0; y_start < height; y_start += kChunkRows) {
     if (Stopped(canceled)) return false;
-    // SAFETY: DecodeHandle validated the decoded dimensions and the stride
-    // against eight bytes per pixel. libheif owns all decoded image rows.
-    const auto bytes = UNSAFE_BUFFERS(base::span(
-        pixels + static_cast<size_t>(y) * stride,
-        static_cast<size_t>(output.width()) * 8));
-    for (int x = 0; x < output.width(); ++x) {
-      for (size_t channel = 0; channel < 4; ++channel) {
-        const size_t offset = static_cast<size_t>(x) * 8 + channel * 2;
-        const unsigned value = bytes[offset] |
-            (static_cast<unsigned>(bytes[offset + 1]) << 8);
-        row[x][channel] = value / maximum;
-      }
-      if (alpha_type == kOpaque_SkAlphaType) {
-        row[x][3] = 1.0f;
+    const int rows_in_chunk = std::min(kChunkRows, height - y_start);
+    for (int r = 0; r < rows_in_chunk; ++r) {
+      const int y = y_start + r;
+      // SAFETY: DecodeHandle validated the decoded dimensions and the stride
+      // against eight bytes per pixel. libheif owns all decoded image rows.
+      const auto bytes = UNSAFE_BUFFERS(base::span(
+          pixels + static_cast<size_t>(y) * stride,
+          static_cast<size_t>(width) * 8));
+      const auto row_data = base::span(chunk).subspan(
+          static_cast<size_t>(r) * width, static_cast<size_t>(width));
+      for (int x = 0; x < width; ++x) {
+        for (size_t channel = 0; channel < 4; ++channel) {
+          const size_t offset = static_cast<size_t>(x) * 8 + channel * 2;
+          const unsigned value = bytes[offset] |
+              (static_cast<unsigned>(bytes[offset + 1]) << 8);
+          row_data[x][channel] = value / maximum;
+        }
+        if (alpha_type == kOpaque_SkAlphaType) {
+          row_data[x][3] = 1.0f;
+        }
       }
     }
+    const auto chunk_info = SkImageInfo::Make(
+        width, rows_in_chunk, kRGBA_F32_SkColorType, alpha_type, color_space);
     const auto image = SkImages::RasterFromPixmap(
-        SkPixmap(row_info, row.data(), row_info.minRowBytes()), nullptr, nullptr);
+        SkPixmap(chunk_info, chunk.data(), chunk_info.minRowBytes()), nullptr, nullptr);
     if (!image) {
       return false;
     }
-    canvas.drawImage(image, 0, y, SkSamplingOptions(), &paint);
+    canvas.drawImage(image, 0, y_start, SkSamplingOptions(), &paint);
   }
   return true;
 }

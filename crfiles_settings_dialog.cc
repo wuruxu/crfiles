@@ -9,7 +9,9 @@
 #include <array>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include "base/base64.h"
+#include "base/i18n/rtl.h"
 #include "base/memory/weak_ptr.h"
 #include "crFiles/crfiles_image_preview.h"
 #include "third_party/skia/include/core/SkPixmap.h"
@@ -66,12 +68,15 @@
 #include "crFiles/grit/crfiles_strings.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "libcr/options_menu.h"
+#include "libcr/viz_context_factory.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/simple_combobox_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom.h"
 #include "ui/color/color_id.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
@@ -214,6 +219,207 @@ class AuthorEmailLink : public views::Link {
 };
 BEGIN_METADATA(AuthorEmailLink)
 END_METADATA
+enum class SystemInfoKind { kGraphics, kDisplay };
+class SystemInfoDetails : public views::View {
+  METADATA_HEADER(SystemInfoDetails, views::View)
+ public:
+  SystemInfoDetails(views::View* source, SystemInfoKind kind) : kind_(kind) {
+    source_.SetView(source);
+    SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(8, 12), 6));
+    if (kind_ == SystemInfoKind::kDisplay) {
+      for (int title : {IDS_CRFILES_DISPLAY_NAME, IDS_CRFILES_DISPLAY_RESOLUTION,
+                        IDS_CRFILES_DISPLAY_LOGICAL_SIZE, IDS_CRFILES_DISPLAY_WORK_AREA,
+                        IDS_CRFILES_DISPLAY_SCALE, IDS_CRFILES_DISPLAY_WINDOW_SIZE,
+                        IDS_CRFILES_DISPLAY_REFRESH_RATE, IDS_CRFILES_GRAPHICS_REFRESH_RATE}) AddRow(title);
+      return;
+    }
+    for (int title : {IDS_CRFILES_GRAPHICS_DEVICE, IDS_CRFILES_GRAPHICS_DRIVER,
+                      IDS_CRFILES_GRAPHICS_RENDERER, IDS_CRFILES_GRAPHICS_GL,
+                      IDS_CRFILES_GRAPHICS_SKIA, IDS_CRFILES_GRAPHICS_COMPOSITING,
+                      IDS_CRFILES_GRAPHICS_RASTER}) AddRow(title);
+#if BUILDFLAG(IS_WIN)
+    AddRow(IDS_CRFILES_GRAPHICS_DCOMP);
+#endif
+    AddRow(IDS_CRFILES_GRAPHICS_RENDERING_MODE);
+    auto* note = Label(this, Text(IDS_CRFILES_GRAPHICS_NOTE));
+    note->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
+  }
+  void AddedToWidget() override {
+    views::View::AddedToWidget();
+    UpdateVisibility();
+  }
+  void RemovedFromWidget() override {
+    timer_.Stop();
+    views::View::RemovedFromWidget();
+  }
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    views::View::VisibilityChanged(starting_from, is_visible);
+    UpdateVisibility();
+  }
+ private:
+  void AddRow(int title) {
+    titles_.push_back(title);
+    auto* label = Label(this, Text(title) + u": " + Text(IDS_CRFILES_GRAPHICS_UNAVAILABLE));
+    label->SetSelectable(true);
+    label->SetAllowCharacterBreak(true);
+    labels_.push_back(label);
+  }
+  void UpdateVisibility() {
+    timer_.Stop();
+    if (!IsDrawn() || !GetWidget()) return;
+    Refresh();
+    timer_.Start(FROM_HERE, base::Seconds(1), this, &SystemInfoDetails::Refresh);
+  }
+  void Refresh() {
+    auto* factory = libcr::VizContextFactory::Get();
+    auto* source = source_.view();
+    auto* widget = source ? source->GetWidget() : nullptr;
+    if (kind_ == SystemInfoKind::kDisplay) {
+      RefreshDisplay(widget);
+      return;
+    }
+    auto info = factory && widget
+        ? factory->GetGraphicsInfo(widget->GetCompositor()) : std::nullopt;
+    std::vector<std::u16string> values(labels_.size(), Text(IDS_CRFILES_GRAPHICS_UNAVAILABLE));
+    values.back() = Text(IDS_CRFILES_GRAPHICS_UNKNOWN_MODE);
+    if (info) {
+      auto value = [](const std::string& text) {
+        return text.empty() ? Text(IDS_CRFILES_GRAPHICS_UNAVAILABLE) : base::UTF8ToUTF16(text);
+      };
+      auto status = [](bool enabled) {
+        return Text(enabled ? IDS_CRFILES_GRAPHICS_ENABLED : IDS_CRFILES_GRAPHICS_DISABLED);
+      };
+      values[0] = value(info->device);
+      values[1] = value(info->driver);
+      values[2] = value(info->renderer);
+      values[3] = value(info->gl_backend);
+      values[4] = info->gpu_compositing ? value(info->skia_backend) : Text(IDS_CRFILES_GRAPHICS_SOFTWARE);
+      values[5] = info->gpu_compositing ? status(true) : Text(IDS_CRFILES_GRAPHICS_SOFTWARE);
+      values[6] = status(info->gpu_rasterization);
+      int mode = IDS_CRFILES_GRAPHICS_UNKNOWN_MODE;
+      switch (info->rendering_mode) {
+        case libcr::VizContextFactory::RenderingMode::kHardware:
+          mode = IDS_CRFILES_GRAPHICS_HARDWARE; break;
+        case libcr::VizContextFactory::RenderingMode::kSoftware:
+          mode = IDS_CRFILES_GRAPHICS_SOFTWARE_RENDERING; break;
+        case libcr::VizContextFactory::RenderingMode::kUnknown:
+          break;
+      }
+      values.back() = Text(mode);
+#if BUILDFLAG(IS_WIN)
+      values[7] = status(info->direct_composition);
+#endif
+    }
+    SetValues(values);
+  }
+  void RefreshDisplay(views::Widget* widget) {
+    std::vector<std::u16string> values(labels_.size(), Text(IDS_CRFILES_GRAPHICS_UNAVAILABLE));
+    auto size_text = [](const gfx::Size& size) {
+      return base::NumberToString16(size.width()) + u" × " + base::NumberToString16(size.height());
+    };
+    auto rate_text = [](double rate) {
+      return std::isfinite(rate) && rate > 0
+          ? base::NumberToString16WithFixedPrecision(rate, 2) + u" Hz"
+          : Text(IDS_CRFILES_GRAPHICS_UNAVAILABLE);
+    };
+    if (widget) {
+      values[5] = size_text(widget->GetWindowBoundsInScreen().size()) + u" DIP";
+      if (widget->GetCompositor()) values[7] = rate_text(widget->GetCompositor()->refresh_rate());
+      if (auto* screen = display::Screen::Get()) {
+        const auto display = screen->GetDisplayNearestWindow(widget->GetNativeWindow());
+        if (display.is_valid()) {
+          if (!display.label().empty()) values[0] = base::UTF8ToUTF16(display.label());
+          const auto pixels = display.GetSizeInPixel();
+          if (!pixels.IsEmpty()) values[1] = size_text(pixels) + u" px";
+          values[2] = size_text(display.bounds().size()) + u" DIP";
+          values[3] = size_text(display.work_area().size()) + u" DIP";
+          const double scale = display.device_scale_factor();
+          if (std::isfinite(scale) && scale > 0)
+            values[4] = base::NumberToString16WithFixedPrecision(scale * 100, 1) + u"%";
+          values[6] = rate_text(display.display_frequency());
+        }
+      }
+    }
+    SetValues(values);
+  }
+  void SetValues(const std::vector<std::u16string>& values) {
+    for (size_t i = 0; i < labels_.size(); ++i) {
+      const auto text = Text(titles_[i]) + u": " + values[i];
+      if (labels_[i]->GetText() != text) labels_[i]->SetText(text);
+    }
+  }
+  const SystemInfoKind kind_;
+  std::vector<int> titles_;
+  std::vector<raw_ptr<views::Label>> labels_;
+  views::ViewTracker source_;
+  base::RepeatingTimer timer_;
+};
+BEGIN_METADATA(SystemInfoDetails)
+END_METADATA
+class SystemInfoLink : public views::Link {
+  METADATA_HEADER(SystemInfoLink, views::Link)
+ public:
+  explicit SystemInfoLink(SystemInfoKind kind)
+      : views::Link(Text(kind == SystemInfoKind::kGraphics ? IDS_CRFILES_GRAPHICS : IDS_CRFILES_DISPLAY)), kind_(kind) {
+    SetFocusBehavior(views::View::FocusBehavior::NEVER);
+    SetForceUnderline(false);
+    SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    SetCallback(base::BindRepeating(&SystemInfoLink::ShowDetails, weak_.GetWeakPtr()));
+  }
+  ~SystemInfoLink() override { CloseDetails(); }
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    views::Link::VisibilityChanged(starting_from, is_visible);
+    if (!is_visible) CloseDetails();
+  }
+  void RemovedFromWidget() override {
+    CloseDetails();
+    views::Link::RemovedFromWidget();
+  }
+ private:
+  void CloseDetails() {
+    if (dialog_) dialog_->SetAnchorView(nullptr);
+    if (widget_) { widget_->CloseNow(); widget_.reset(); }
+    dialog_.reset();
+  }
+  void ShowDetails() {
+    if (!GetWidget()) return;
+    if (widget_ && !widget_->IsClosed() && widget_->IsVisible()) {
+      widget_->Activate();
+      return;
+    }
+    CloseDetails();
+    // Keep the bubble physically to the right, including in RTL locales where
+    // BubbleDialogDelegate mirrors the requested arrow.
+    dialog_ = std::make_unique<views::BubbleDialogDelegate>(this,
+        base::i18n::IsRTL() ? views::BubbleBorder::RIGHT_CENTER : views::BubbleBorder::LEFT_CENTER);
+    dialog_->set_parent_window(GetWidget()->GetNativeView());
+    dialog_->SetTitle(std::u16string(GetText()));
+    dialog_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    dialog_->SetShowCloseButton(true);
+    dialog_->set_close_on_deactivate(true);
+    auto contents = std::make_unique<views::View>();
+    contents->SetPreferredSize(gfx::Size(480, 320));
+    contents->SetLayoutManager(std::make_unique<views::FillLayout>());
+    auto* scroll = contents->AddChildView(std::make_unique<views::ScrollView>(views::ScrollView::ScrollWithLayers::kEnabled));
+    scroll->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
+    scroll->SetUseContentsPreferredSize(true);
+    scroll->SetContents(std::make_unique<SystemInfoDetails>(this, kind_));
+    dialog_->SetContentsView(std::move(contents));
+    widget_ = CreateCrFilesBubble(dialog_.get(), base::BindOnce(
+        &SystemInfoLink::DetailsClosed, weak_.GetWeakPtr()));
+    dialog_->GetBubbleFrameView()->SetDisplayVisibleArrow(true);
+    dialog_->SizeToContents();
+    widget_->Show();
+  }
+  void DetailsClosed(views::Widget::ClosedReason) { CloseDetails(); }
+  const SystemInfoKind kind_;
+  std::unique_ptr<views::BubbleDialogDelegate> dialog_;
+  std::unique_ptr<views::Widget> widget_;
+  base::WeakPtrFactory<SystemInfoLink> weak_{this};
+};
+BEGIN_METADATA(SystemInfoLink)
+END_METADATA
 std::unique_ptr<views::View> AboutBody(bool large) {
   auto body = std::make_unique<views::View>();
   auto* layout = body->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -248,6 +454,21 @@ std::unique_ptr<views::View> AboutBody(bool large) {
     if (large) label->SetFontList(label->font_list().DeriveWithSizeDelta(2));
   }
   if (large) for (auto* link : {project_link, email}) link->SetFontList(link->font_list().DeriveWithSizeDelta(2));
+  auto* system = column->AddChildView(std::make_unique<views::View>());
+  system->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4))
+      ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+  auto* system_title = Label(system, Text(IDS_CRFILES_SYSTEM_INFO) + u":");
+  system_title->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
+  auto* links = system->AddChildView(std::make_unique<views::View>());
+  links->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8))
+      ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+  auto* graphics = links->AddChildView(std::make_unique<SystemInfoLink>(SystemInfoKind::kGraphics));
+  auto* display = links->AddChildView(std::make_unique<SystemInfoLink>(SystemInfoKind::kDisplay));
+  if (large) {
+    system_title->SetFontList(system_title->font_list().DeriveWithSizeDelta(2));
+    graphics->SetFontList(graphics->font_list().DeriveWithSizeDelta(2));
+    display->SetFontList(display->font_list().DeriveWithSizeDelta(2));
+  }
   auto* icon = body->AddChildView(std::make_unique<views::ImageView>(CreateCrFilesIconModel(gfx::Size(115, 115))));
   icon->SetPreferredSize(gfx::Size(156, 115)); icon->SetImageSize(gfx::Size(115, 115));
   icon->SetAccessibleName(u"crFiles");
@@ -808,7 +1029,7 @@ class About : public views::DialogDelegate {
 #if defined(USE_AURA)
     SetCenterTitle(true);
 #endif
-    auto contents = std::make_unique<views::View>(); contents->SetPreferredSize(gfx::Size(640, 280));
+    auto contents = std::make_unique<views::View>(); contents->SetPreferredSize(gfx::Size(640, 320));
     contents->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(4, 4, 0, 4)));
     auto* layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical));
     auto* top = contents->AddChildView(std::make_unique<views::View>()); layout->SetFlexForView(top, 1);

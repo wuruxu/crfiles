@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <utility>
 #include "build/build_config.h"
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -199,15 +200,21 @@ class SevenZipOutput : public seven_zip::Delegate {
         base::File::FLAG_CREATE | base::File::FLAG_READ | base::File::FLAG_WRITE);
   }
   bool OnEntry(const seven_zip::EntryInfo& entry, base::span<uint8_t>& bytes) override {
-    if (entry.is_encrypted || !output_->AddBytes(entry.file_size)) return ok = false;
+    target_ = {};
+    constexpr size_t kMaxSingleEntryMmap = 2ull * 1024 * 1024 * 1024;
+    if (entry.is_encrypted || entry.file_size > kMaxSingleEntryMmap || !output_->AddBytes(entry.file_size)) return ok = false;
     const auto target = output_->Entry(entry.file_path, false);
     if (target.empty()) return ok = false;
     base::File file(target, base::File::FLAG_CREATE | base::File::FLAG_READ | base::File::FLAG_WRITE);
     if (!file.IsValid()) return ok = false;
+    target_ = target;
     bytes = {};
     if (entry.file_size) {
       mapping_.emplace();
-      if (!mapping_->Initialize(std::move(file), {0, entry.file_size}, base::MemoryMappedFile::READ_WRITE_EXTEND)) return ok = false;
+      if (!mapping_->Initialize(std::move(file), {0, entry.file_size}, base::MemoryMappedFile::READ_WRITE_EXTEND)) {
+        mapping_.reset();
+        base::DeleteFile(target); return ok = false;
+      }
       bytes = mapping_->mutable_bytes();
     }
     return true;
@@ -215,13 +222,27 @@ class SevenZipOutput : public seven_zip::Delegate {
   bool OnDirectory(const seven_zip::EntryInfo& entry) override {
     return ok = !output_->Entry(entry.file_path, true).empty();
   }
-  bool EntryDone(seven_zip::Result result, const seven_zip::EntryInfo&) override {
+  bool EntryDone(seven_zip::Result result, const seven_zip::EntryInfo& entry) override {
     mapping_.reset();
-    return ok = result == seven_zip::Result::kSuccess;
+    // Entry() validates and counts a new archive entry. Reuse the path here
+    // rather than registering the same file again for cleanup or timestamps.
+    const auto target = std::exchange(target_, base::FilePath());
+    if (result != seven_zip::Result::kSuccess) {
+      if (!target.empty()) base::DeleteFile(target);
+      return ok = false;
+    }
+    if (!entry.last_modified_time.is_null()) {
+      if (!target.empty()) {
+        base::File file(target, base::File::FLAG_OPEN | base::File::FLAG_WRITE_ATTRIBUTES);
+        if (file.IsValid()) file.SetTimes(entry.last_modified_time, entry.last_modified_time);
+      }
+    }
+    return ok = true;
   }
   bool ok = true;
  private:
   raw_ref<Output> output_;
+  base::FilePath target_;
   base::ScopedTempDir scratch_;
   std::optional<base::MemoryMappedFile> mapping_;
 };

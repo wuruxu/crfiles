@@ -171,7 +171,12 @@ controls, menu, SVG renderer, themes and Viz compositor.
   In the Windows `/` drive list, uncached drive icons are grouped into one task
   per visible batch and queried sequentially on a dedicated COM STA shared across
   panes and retries. Ordinary file icons and thumbnails retain parallel loading.
-  Shell queries run on COM STA workers and produce 1x and 2x images. Transient
+  Shell queries run on COM STA workers and produce 1x and 2x images. Path results
+  use a 512-entry / 32 MiB pixel LRU. Decoded images additionally share a
+  128-entry / 8 MiB LRU keyed by Shell icon index, overlay and requested size.
+  New paths still query Shell to preserve custom icons; no COM objects are cached.
+  Both levels expire after 30 seconds and validate their source cache epochs.
+  Transient
   failures are not cached. A bounded path cache expires after 30 seconds so later
   refreshes can pick up changed associations. Other platforms retain the bundled
   SVG icons and existing macOS application icons. Image, PDF and video thumbnails
@@ -239,7 +244,15 @@ controls, menu, SVG renderer, themes and Viz compositor.
   pending prefetch work to an immediate task outside event/layout dispatch.
   Windows and Linux folder views use critically damped vertical wheel motion,
   preserving velocity across consecutive inputs and moving content and thumb
-  together. Touchpad input keeps its native path, and direct manipulation cancels
+  together without stopping/restarting the animation on each wheel event.
+  New inputs extend the settling deadline; reversing direction clears velocity.
+  Wheel motion and thumb rebound use compositor frames, with the
+  default timer retained as a fallback without a compositor.
+  When the target is a boundary, the viewport snaps once its leading
+  edge reaches the first file row or its trailing edge reaches the last file row
+  (a whole tile row in icon mode). The vertical thumb then rebounds inward and
+  returns over 220 ms without moving content. New input cancels the rebound,
+  and reduced-motion settings disable it. Touchpad input keeps its native path, and direct manipulation cancels
   wheel animation.
   Completed buffered ranges update incrementally: overlapping rows keep their
   geometry, and the ordered slot index finds outgoing rows and missing entries.
@@ -455,7 +468,9 @@ records are retained when an action is unchecked, subject to retention.
 About uses the crFiles icon and the optional /tmp/crFiles_buildtime.h build stamp.
 
 Footer hover is sampled by one window-owned timer every 50 ms against the fixed
-bounds of each split pane. Item and toolbar enter/exit events never
+bounds of each split pane. Switching tabs settles the destination toolbar's
+opacity and position before showing the pane and through its first layout;
+hover and auto-hide transitions retain their animations. Item and toolbar enter/exit events never
 change visibility, preventing child transitions from restarting the animation. Tab close
 controls use vector icons with reserved layout space. History hides the sidebar
 without changing the saved preference for file tabs. Successful local moves
@@ -683,6 +698,16 @@ case-sensitive directories.
 
 The build generates crfiles_buildtime.h in the GN output directory, with
 SOURCE_DATE_EPOCH support. The old /tmp header is no longer required.
+On the Linux cross-build host, `make fmsix` packages existing Windows x64 outputs
+as an unsigned `/tmp/crFiles_<MAJOR>.<MINOR>.<PATCH>.<BUILD>_x64.msix`, using
+`crFiles/VERSION`. It does not compile. The package identity is `WURUXU.crFiles`
+and its publisher is `CN=72E91141-7461-4054-93AE-74652EFFF800`.
+It requires `makemsix` and ImageMagick (`magick`) and includes the same resources,
+codec runtimes and licenses as `make wf0`. Override the input directory with
+`CRFILES_WIN_OUT_DIR` and the output path with `CRFILES_MSIX_PACKAGE`.
+The unsigned package is intended for Store submission or subsequent signing;
+local installation requires a signature trusted by the destination computer.
+
 On the Linux cross-build host, `make wf0` packages existing out/win10 outputs
 without compiling. Override CRFILES_WIN_OUT_DIR and CRFILES_WIN_PACKAGE_ZIP to
 choose the source and ZIP destination. The package includes runtime DLLs,

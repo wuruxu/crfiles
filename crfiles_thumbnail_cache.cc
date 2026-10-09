@@ -152,18 +152,30 @@ gfx::ImageSkia ReadDiskThumbnail(const base::FilePath& path, const base::File::I
   const auto name = CacheKey(path, info, edge);
   std::string encoded;
   auto& cache = Cache();
+  base::FilePath file;
+  bool should_touch = false;
   {
     base::AutoLock guard(cache.lock);
     if (Stopped(canceled) || !cache.Initialize()) return {};
     const auto found = cache.index.find(name);
     if (found == cache.index.end()) return {};
-    const auto file = cache.directory.AppendASCII(name);
-    if (!base::ReadFileToStringWithMaxSize(file, &encoded, kMaximumFileBytes)) { cache.Erase(found->second); return {}; }
+    file = cache.directory.AppendASCII(name);
     const auto now = base::Time::Now();
     if (now - found->second->touched >= base::Minutes(1)) {
-      base::TouchFile(file, now, now); found->second->touched = now;
+      found->second->touched = now;
+      should_touch = true;
     }
     cache.recent.splice(cache.recent.begin(), cache.recent, found->second);
+  }
+  if (Stopped(canceled)) return {};
+  if (!base::ReadFileToStringWithMaxSize(file, &encoded, kMaximumFileBytes)) {
+    base::AutoLock guard(cache.lock);
+    if (auto found = cache.index.find(name); found != cache.index.end()) cache.Erase(found->second);
+    return {};
+  }
+  if (should_touch) {
+    const auto now = base::Time::Now();
+    base::TouchFile(file, now, now);
   }
   if (Stopped(canceled)) return {};
   auto image = DecodeCache(encoded, edge);
@@ -206,11 +218,22 @@ void StoreDiskThumbnail(const base::FilePath& path, const base::File::Info& info
   encoded.WriteString(base::HexEncode(crypto::hash::Sha256(pixels))); encoded.WriteData(pixels);
   const auto name = CacheKey(path, info, edge);
   auto& cache = Cache();
+  base::FilePath target_file;
+  {
+    base::AutoLock guard(cache.lock);
+    if (Stopped(canceled) || !cache.Initialize()) return;
+    if (cache.index.contains(name)) return;
+    // All stores run on DiskWriter's sequence, so another writer cannot
+    // consume this capacity while the lock is released for the file write.
+    if (!cache.Trim(encoded.AsBytes().size())) return;
+    target_file = cache.directory.AppendASCII(name);
+  }
+  if (!base::ImportantFileWriter::WriteFileAtomically(target_file, encoded.AsStringView())) return;
   base::AutoLock guard(cache.lock);
-  if (Stopped(canceled) || !cache.Initialize()) return;
   if (cache.index.contains(name)) return;
-  if (!cache.Trim(encoded.AsBytes().size())) return;
-  if (!base::ImportantFileWriter::WriteFileAtomically(cache.directory.AppendASCII(name), encoded.AsStringView())) return;
+  // A canceled write must not leave an unindexed file. If deletion fails,
+  // register it so subsequent eviction can still account for and retry it.
+  if (Stopped(canceled) && base::DeleteFile(target_file)) return;
   cache.recent.push_front({name, encoded.AsBytes().size(), base::Time::Now()});
   cache.index.emplace(name, cache.recent.begin()); cache.bytes += encoded.AsBytes().size();
 }

@@ -103,6 +103,7 @@
 #include "ui/views/view_utils.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_targeter.h"
+#include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/view_targeter_delegate.h"
 #include "ui/views/rect_based_targeting_utils.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -872,7 +873,7 @@ class LiveDirectoryWatch {
       : path_(std::move(path)), changed_(std::move(changed)) {
     const bool ok = watcher_.Watch(path_, base::FilePathWatcher::Type::kNonRecursive,
         base::BindRepeating(&LiveDirectoryWatch::Changed, base::Unretained(this)));
-    Changed(path_, !ok);
+    if (!ok) StartFallback();
     if (path_ == TrashRoot()) StartFallback();
 #if BUILDFLAG(IS_APPLE)
     // kqueue does not report content changes to files inside a directory.
@@ -1365,16 +1366,29 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
 BEGIN_METADATA(BookmarksView)
 END_METADATA
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
-class FolderScrollBar : public views::OverlayScrollBar {
+class FolderScrollBar : public views::OverlayScrollBar, public views::AnimationDelegateViews {
   METADATA_HEADER(FolderScrollBar, views::OverlayScrollBar)
  public:
   FolderScrollBar(views::ScrollBar::Orientation orientation,
                   views::ScrollView* scroll)
-      : views::OverlayScrollBar(orientation), scroll_(scroll) {
+      : views::OverlayScrollBar(orientation), views::AnimationDelegateViews(this), scroll_(scroll) {
     // Follow content offsets immediately instead of animating thumb bounds.
     // The scrollbar's own layer retains its fade animation.
     GetThumb()->layer()->SetAnimator(ui::LayerAnimator::CreateDefaultAnimator());
     SetRoundedThumb(true);
+  }
+  ~FolderScrollBar() override { rebound_.Stop(); }
+  void StopRebound() {
+    rebound_.Stop();
+    SetThumbSubpixelOffset(base_offset_);
+  }
+  void Rebound(bool bottom) {
+    StopRebound();
+    if (!IsDrawn() || gfx::Animation::PrefersReducedMotion() ||
+        !gfx::Animation::ShouldRenderRichAnimation() || !gfx::Animation::ScrollAnimationsEnabledBySystem()) return;
+    const int travel = std::max(0, GetTrackBounds().height() - GetThumb()->GetLength());
+    amplitude_ = std::min(GetThumb()->GetLength() * 0.16f, travel * 0.05f) * (bottom ? -1.f : 1.f);
+    if (amplitude_ != 0.f) rebound_.Start();
   }
   void Update(int viewport_size, int content_size, int contents_scroll_offset) override {
     views::OverlayScrollBar::Update(viewport_size, content_size, contents_scroll_offset);
@@ -1390,18 +1404,34 @@ class FolderScrollBar : public views::OverlayScrollBar {
     const int travel = std::max(0, track_size - GetThumb()->GetLength());
     const double range = GetMaxPosition();
     const double position = range > 0 ? std::clamp(offset, 0.0, range) * travel / range : 0.0;
-    SetThumbSubpixelOffset(static_cast<float>(position - GetThumb()->GetPosition()));
+    base_offset_ = static_cast<float>(position - GetThumb()->GetPosition());
+    if (rebound_.is_animating() && (range <= 0 ||
+        (amplitude_ > 0 ? offset != 0 : offset != range))) StopRebound();
+    ApplyRebound();
   }
  private:
+  void ApplyRebound() {
+    const double t = rebound_.is_animating() ? rebound_.GetCurrentValue() : 0.0;
+    SetThumbSubpixelOffset(base_offset_ + amplitude_ * static_cast<float>(std::sin(3.141592653589793 * t)));
+  }
+  void AnimationProgressed(const gfx::Animation*) override {
+    if (!IsDrawn()) { StopRebound(); return; }
+    ApplyRebound();
+  }
+  void AnimationEnded(const gfx::Animation*) override { SetThumbSubpixelOffset(base_offset_); }
+  float base_offset_ = 0.f, amplitude_ = 0.f;
+  // AnimationDelegateViews drives this from compositor frames while attached;
+  // the default frame rate is only the fallback without a compositor.
+  gfx::LinearAnimation rebound_{base::Milliseconds(220), gfx::LinearAnimation::kDefaultFrameRate, this};
   raw_ptr<views::ScrollView> scroll_;
 };
 BEGIN_METADATA(FolderScrollBar)
 END_METADATA
 // Animate the content offset, so the thumb and file rows share one trajectory.
-class FolderScrollView : public views::ScrollView, public gfx::AnimationDelegate {
+class FolderScrollView : public views::ScrollView, public views::AnimationDelegateViews {
   METADATA_HEADER(FolderScrollView, views::ScrollView)
  public:
-  FolderScrollView() : views::ScrollView(ScrollWithLayers::kEnabled), cancel_handler_(this) {
+  FolderScrollView() : views::ScrollView(ScrollWithLayers::kEnabled), views::AnimationDelegateViews(this), cancel_handler_(this) {
     AddPreTargetHandler(&cancel_handler_);
     scroll_subscription_ = AddContentsScrolledCallback(base::BindRepeating(
         &FolderScrollView::CancelExternalScroll, base::Unretained(this)));
@@ -1411,6 +1441,7 @@ class FolderScrollView : public views::ScrollView, public gfx::AnimationDelegate
     RemovePreTargetHandler(&cancel_handler_);
   }
   bool OnMouseWheel(const ui::MouseWheelEvent& event) override {
+    StopThumbRebound();
     if (!contents() || !IsDrawn() || event.x_offset() || !event.y_offset() ||
         event.IsShiftDown() || event.IsControlDown() ||
         !gfx::Animation::ShouldRenderRichAnimation() ||
@@ -1428,13 +1459,18 @@ class FolderScrollView : public views::ScrollView, public gfx::AnimationDelegate
       wheel_velocity_ = 0;
     }
     target = std::clamp(target + delta, 0.f, MaxOffset());
-    wheel_animation_.Stop();
-    if (target == current) return false;
+    if (target == current) { wheel_animation_.Stop(); wheel_velocity_ = 0; return false; }
     wheel_target_ = target;
     if (!continuing) wheel_tick_ = base::TimeTicks::Now();
     last_wheel_offset_ = CurrentOffset();
     wheel_contents_.SetView(contents());
-    wheel_animation_.Start();
+    // Reset only the timeline, preserving compositor subscription and velocity.
+    // The 600 ms settling deadline is measured from the latest wheel input.
+    wheel_animation_.SetDuration(base::Milliseconds(600));
+    if (!continuing) {
+      wheel_animation_.Stop();
+      wheel_animation_.Start();
+    }
     return true;
   }
  private:
@@ -1442,21 +1478,28 @@ class FolderScrollView : public views::ScrollView, public gfx::AnimationDelegate
    public:
     explicit CancelHandler(FolderScrollView* owner) : owner_(owner) {}
     void OnMouseEvent(ui::MouseEvent* event) override {
-      if (event->type() == ui::EventType::kMousePressed) owner_->wheel_animation_.Stop();
+      if (event->type() == ui::EventType::kMousePressed) { owner_->wheel_animation_.Stop(); owner_->StopThumbRebound(); }
     }
     void OnKeyEvent(ui::KeyEvent* event) override {
-      if (event->type() == ui::EventType::kKeyPressed) owner_->wheel_animation_.Stop();
+      if (event->type() == ui::EventType::kKeyPressed) { owner_->wheel_animation_.Stop(); owner_->StopThumbRebound(); }
     }
-    void OnScrollEvent(ui::ScrollEvent*) override { owner_->wheel_animation_.Stop(); }
+    void OnScrollEvent(ui::ScrollEvent*) override { owner_->wheel_animation_.Stop(); owner_->StopThumbRebound(); }
    private:
     raw_ptr<FolderScrollView> owner_;
   };
+  bool BoundaryRowReached(double offset, bool bottom) const;
+  void StopThumbRebound() {
+    if (auto* bar = views::AsViewClass<FolderScrollBar>(vertical_scroll_bar())) bar->StopRebound();
+  }
   float MaxOffset() const {
     return static_cast<float>(std::max(0, contents()->height() - GetVisibleRect().height()));
   }
   void CancelExternalScroll() {
     // Layer scroll notifications may arrive after the synchronous write.
-    if (!applying_wheel_ && CurrentOffset() != last_wheel_offset_) wheel_animation_.Stop();
+    if (!applying_wheel_ && CurrentOffset() != last_wheel_offset_) {
+      wheel_animation_.Stop();
+      StopThumbRebound();
+    }
   }
   void AnimationProgressed(const gfx::Animation* animation) override {
     if (!contents() || wheel_contents_.view() != contents() || !IsDrawn()) {
@@ -1468,20 +1511,32 @@ class FolderScrollView : public views::ScrollView, public gfx::AnimationDelegate
     const auto now = base::TimeTicks::Now();
     const double elapsed = (now - wheel_tick_).InSecondsF();
     wheel_tick_ = now;
-    wheel_target_ = std::clamp(wheel_target_, 0.f, MaxOffset());
+    const float max_offset = MaxOffset();
+    wheel_target_ = std::clamp(wheel_target_, 0.f, max_offset);
     const double displacement = CurrentOffset().y() - wheel_target_;
     constexpr double damping = 30.0;
     const double decay = std::exp(-damping * elapsed);
     const double impulse = wheel_velocity_ + damping * displacement;
     const double next = wheel_target_ + (displacement + impulse * elapsed) * decay;
     wheel_velocity_ = (wheel_velocity_ - damping * impulse * elapsed) * decay;
-    const bool settled = std::abs(next - wheel_target_) < 0.05 && std::abs(wheel_velocity_) < 1.0;
+    // Snap by the first/last file row, not a fixed pixel-distance threshold.
+    const bool bottom = wheel_target_ == max_offset;
+    const bool boundary_snap = max_offset > 0 && (wheel_target_ == 0.f || bottom) &&
+        BoundaryRowReached(std::clamp(next, 0.0, static_cast<double>(max_offset)), bottom);
+    const bool settled = boundary_snap ||
+        (std::abs(next - wheel_target_) < 0.05 && std::abs(wheel_velocity_) < 1.0);
+    const bool moved = CurrentOffset().y() != wheel_target_;
     const float offset = std::clamp(static_cast<float>(settled || animation->GetCurrentValue() == 1.0 ? wheel_target_ : next),
-        0.f, MaxOffset());
+        0.f, max_offset);
     base::AutoReset<bool> applying(&applying_wheel_, true);
     last_wheel_offset_ = gfx::PointF(CurrentOffset().x(), offset);
     if (CurrentOffset() != last_wheel_offset_) ScrollToOffset(last_wheel_offset_);
-    if (settled) wheel_animation_.Stop();
+    if (settled) {
+      wheel_velocity_ = 0;
+      wheel_animation_.Stop();
+      if (boundary_snap && moved)
+        if (auto* bar = views::AsViewClass<FolderScrollBar>(vertical_scroll_bar())) bar->Rebound(bottom);
+    }
   }
   void AnimationEnded(const gfx::Animation* animation) override { AnimationProgressed(animation); }
   CancelHandler cancel_handler_;
@@ -1492,6 +1547,8 @@ class FolderScrollView : public views::ScrollView, public gfx::AnimationDelegate
   double wheel_velocity_ = 0;
   base::TimeTicks wheel_tick_;
   float wheel_target_ = 0;
+  // Compositor frame cadence adapts to presentation timing. Motion remains
+  // elapsed-time based, independent of the number of animation callbacks.
   gfx::LinearAnimation wheel_animation_{base::Milliseconds(600), gfx::LinearAnimation::kDefaultFrameRate, this};
 };
 BEGIN_METADATA(FolderScrollView)
@@ -2308,6 +2365,13 @@ class FileLayout : public views::View {
   void SetViewportCallback(base::RepeatingClosure callback) { viewport_changed_ = std::move(callback); }
   int Columns() const { return icons_ ? std::max(1, width() / row_height_) : 1; }
   int RowHeight() const { return row_height_; }
+  bool BoundaryRowReached(double offset, int viewport_height, bool bottom) const {
+    if (!item_count_) return false;
+    const int header = icons_ ? 0 : kListHeaderHeight;
+    if (!bottom) return offset < header + row_height_;
+    const size_t last_row = (item_count_ - 1) / Columns();
+    return offset + viewport_height > header + static_cast<double>(last_row) * row_height_;
+  }
   gfx::Rect ItemBounds(size_t index) const {
     const int columns = Columns();
     const int cell = width() / columns;
@@ -2635,6 +2699,12 @@ class FileLayout : public views::View {
 };
 BEGIN_METADATA(FileLayout)
 END_METADATA
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+bool FolderScrollView::BoundaryRowReached(double offset, bool bottom) const {
+  const auto* layout = views::AsViewClass<FileLayout>(contents());
+  return layout && layout->BoundaryRowReached(offset, GetVisibleRect().height(), bottom);
+}
+#endif
 class FileButton : public views::LabelButton {
   METADATA_HEADER(FileButton, views::LabelButton)
  public:
@@ -4246,6 +4316,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       UpdateFooterVisibility();
       if (footer_->GetVisible()) footer_->DeprecatedLayoutImmediately();
+      if (IsDrawn() && area.width() > 0) footer_restore_pending_ = false;
     }
     if (drop_highlight_) drop_highlight_->SetBoundsRect(drop_highlight_bounds_);
     if (root_) return;
@@ -5487,11 +5558,21 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const bool fits = footer_->parent()->width() >= kMinimumFooterWidth;
     footer_->SetVisible(fits);
     const bool show = fits && (Current().path == TrashRoot() || !GetFileViewPreferences().auto_hide_toolbar || footer_hovered_ || (active && !footer_expired_) || new_folder_widget_ || more_menu_open_);
-    if (footer_shown_ == show) return;
+    if (footer_shown_ == show && !footer_restore_pending_) return;
     footer_shown_ = show;
     footer_->SetCanProcessEventsWithinSubtree(show);
     auto* layer = footer_->layer();
     layer->GetAnimator()->StopAnimating();
+    if (footer_restore_pending_) {
+      // Tab restoration settles even an interrupted animation whose logical
+      // visibility already matches. Keep this mode through the first layout.
+      ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
+      settings.SetTransitionDuration(base::TimeDelta());
+      settings.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_SET_NEW_TARGET);
+      gfx::Transform offset; if (!show) offset.Translate(0, 6);
+      layer->SetTransform(offset); layer->SetOpacity(show ? 1.f : 0.f);
+      return;
+    }
     const bool reveal_capsule = show && Current().path == TrashRoot();
     if (reveal_capsule) {
       auto initial = CenteredScale(footer_, 0.96f);
@@ -6013,13 +6094,23 @@ class FilesView : public views::View, public views::TextfieldController, public 
     ScheduleWorkspaceSave();
   }
   void SelectPaneTab(int id) {
+    const auto target = std::ranges::find(tabs_, id, &Tab::id);
+    if (target == tabs_.end()) return;
     SuspendPanePopups();
     for (size_t i = 0; i < tabs_.size(); ++i) {
       const bool selected = tabs_[i].id == id;
-      tabs_[i].pane_host->SetVisible(selected);
+      if (!selected) tabs_[i].pane_host->SetVisible(false);
       if (selected) active_ = i;
     }
     MaterializeCurrentTab();
+    ActivePane()->footer_active_ = false;
+    VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
+      pane->footer_restore_pending_ = true;
+      pane->footer_hovered_ = false;
+      pane->UpdateFooterVisibility();
+      pane->InvalidateLayout();
+    }));
+    Current().pane_host->SetVisible(true);
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
       if (pane->history_page_) return;
       if (pane->pending_navigation_) {
@@ -6034,7 +6125,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
       pane->LoadHistory();
     if (auto* list = views::AsViewClass<HistoryList>(ActivePane()->files_->contents()))
       list->ScheduleUpdate();
-    ActivePane()->footer_active_ = false;
     UpdatePaneControls(); SyncNavigation(); ScheduleWorkspaceSave();
     ActivePane()->DefaultFocusView()->RequestFocus();
     SyncLiveDirectories();
@@ -8406,6 +8496,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   base::OneShotTimer footer_hide_timer_;
   base::RepeatingTimer footer_pointer_timer_;
   bool footer_active_ = false, footer_expired_ = false;
+  bool footer_restore_pending_ = true;
   bool modal_hover_blocked_ = false;
   bool modal_previous_mouse_input_ = true;
   bool footer_hovered_ = false, footer_shown_ = false, drop_highlight_shown_ = false;
@@ -8625,7 +8716,7 @@ class FilesDelegate : public views::WidgetDelegate {
   base::OnceClosure quit_;
 };
 }
-std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget*) { return g_contents->CreateTabs(); }
+std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget*) { return g_contents ? g_contents->CreateTabs() : nullptr; }
 void ShowCrFilesTrustedDevices() { if (g_contents) g_contents->ShowTrustedDevices(); }
 void ShowCrFilesSharingFolders() { if (g_contents) g_contents->ShowSharingFolders(); }
 void ShowCrFilesHistory() { if (g_contents) g_contents->ShowHistoryTab(); }
@@ -8693,7 +8784,7 @@ void ShowCrFilesWindow(base::OnceClosure quit) {
   params.remove_standard_frame = GetWindowsTitlebarStyleEnabled();
 #endif
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.rounded_corners = gfx::RoundedCornersF(12);
+  params.rounded_corners = gfx::RoundedCornersF(12, 12, 0, 0);
 #if BUILDFLAG(IS_MAC)
   params.shadow_type = views::Widget::InitParams::ShadowType::kDefault;
 #else
@@ -8704,7 +8795,7 @@ void ShowCrFilesWindow(base::OnceClosure quit) {
   params.wayland_app_id = "libcr.crfiles";
 #endif
   Window()->Init(std::move(params)); Window()->CenterWindow(gfx::Size(1180, 760)); Window()->Show();
-  g_contents->RefreshReceivedSidebar();
+  if (g_contents) g_contents->RefreshReceivedSidebar();
 #if BUILDFLAG(IS_MAC)
   InstallCrFilesApplicationMenuMac(Window().get());
 #endif
