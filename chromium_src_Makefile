@@ -1,12 +1,13 @@
 # Include from the Chromium source root Makefile. Never invoke ninja directly.
 # Shared by the Linux and Windows packaging targets; matches crFiles/BUILD.gn.
+CRFILES_LINUX_OUT_DIR ?= out/debian
 CRFILES_LOCALES := zh-CN zh-HK zh-TW ar fr fr-CA ru es es-419 pt-BR pt-PT ja ko
 CRFILES_RESOURCE_PAKS := crfiles_resources.pak crfiles_resources_200_percent.pak $(addprefix crfiles_resources_,$(addsuffix .pak,$(CRFILES_LOCALES)))
 
 .PHONY: crfiles crfileswin
 crfiles:
-	@python3 crFiles/tools/set_thinlto_mode.py --out-dir out/debian --optimize-max false --gn buildtools/linux64/gn
-	autoninja -C out/debian crFiles
+	@python3 crFiles/tools/set_thinlto_mode.py --out-dir $(CRFILES_LINUX_OUT_DIR) --optimize-max false --gn buildtools/linux64/gn
+	autoninja -C $(CRFILES_LINUX_OUT_DIR) crFiles
 
 crfileswin:
 	autoninja -C out/win10 crFiles

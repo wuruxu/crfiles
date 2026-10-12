@@ -1116,3 +1116,30 @@ The sandbox/bundle integration and signing inputs use `com.libcr.crfiles`
 folder authorization, inherited helpers, packaging commands and the required
 signed-build validation. Loose development builds retain their existing data
 paths and helper launch behavior. Packaging does not compile or submit the app.
+
+## Linux shared engine build
+
+Set `enable_libcr_shared=true` and include `//crFiles` in `root_extra_deps` to
+build a business EXE linked to `libcr.so`. Keep `enable_libcr_shared=false` for
+the original static path. Windows and macOS retain their existing build paths.
+Use matching source revisions and GN arguments for all consumers of the engine;
+this is a same-build C++ ABI, not a version-stable SDK.
+
+File operations, discovery/sharing, search, preview orchestration, application
+Mojo implementations, resources and version information stay in the EXE.
+PDFium, SQLite, archive libraries, crypto and media implementations are provided
+by the engine. HEIC/HEVC retain the existing optional libheif/libde265 runtime
+loading behavior; these external libraries are not bundled into libcr.so.
+
+`make lf` and `make lf0` accept `CRFILES_LINUX_OUT_DIR` (default `out/debian`).
+`lf0` builds and packages; it detects the EXE's `libcr.so` dependency and copies
+and strips the package copy. Keep the matching library beside the EXE so that
+both the UI and application subprocesses can load it via `$ORIGIN`.
+The crFiles ThinLTO optimization switch affects the business EXE only; it does
+not change the aggregate engine's optimization settings.
+
+Adding these engine dependencies/export settings requires an initial engine
+rebuild and can also rebuild tools sharing those implementation targets.
+Subsequent edits to business sources or VERSION do not themselves rebuild the
+engine. Actual compilation, linking and runtime validation are still required;
+GN checks only verify the declared build graph.

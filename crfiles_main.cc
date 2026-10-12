@@ -47,6 +47,7 @@
 #include "crFiles/crfiles_version.h"
 #include "crFiles/crfiles_window.h"
 #include "libcr/viz_context_factory.h"
+#include "libcr/startup_timing.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "mojo/core/embedder/embedder.h"
@@ -102,6 +103,12 @@
 namespace {
 
 constexpr char kDefaultLocale[] = "en-US";
+base::TimeTicks startup_last_stage_at;
+
+void LogStartupStage(const char* stage) {
+  startup_last_stage_at =
+      libcr::LogStartupTiming(stage, startup_last_stage_at);
+}
 
 bool IsSupportedLocale(std::string_view locale) {
   constexpr std::string_view kLocales[] = {
@@ -243,6 +250,7 @@ int RunApplication() {
 #endif
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   base::debug::EnableInProcessStackDumping();
+  LogStartupStage("ole_stack_dump_ready");
   command_line->AppendSwitch("single-process");
   // This standalone UI process does not run ContentMain's allocator setup.
   auto* partition_alloc = base::allocator::PartitionAllocSupport::Get();
@@ -256,6 +264,7 @@ int RunApplication() {
   // Enable partition thread caches before starting the Viz compositor thread.
   partition_alloc->ReconfigureAfterFeatureListInit(process_type);
   base::SingleThreadTaskExecutor executor(base::MessagePumpType::UI);
+  LogStartupStage("main_scheduler_ready");
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("crFiles");
   partition_alloc->ReconfigureAfterTaskRunnerInit(process_type);
   base::ScopedClosureRunner thread_pool_shutdown(base::BindOnce([] {
@@ -275,6 +284,14 @@ int RunApplication() {
   mojo::core::ScopedIPCSupport ipc_support(
       mojo_thread.task_runner(),
       mojo::core::ScopedIPCSupport::ShutdownPolicy::CLEAN);
+  LogStartupStage("mojo_ipc_ready");
+
+#if BUILDFLAG(IS_WIN)
+  // Start GPU initialization while the UI thread initializes fonts and other
+  // platform services. Keep Viz alive until after Aura has been destroyed.
+  libcr::VizContextFactory context_factory;
+  LogStartupStage("viz_start_requested");
+#endif
 
 #if BUILDFLAG(IS_OZONE)
 #if BUILDFLAG(IS_LINUX)
@@ -301,15 +318,21 @@ int RunApplication() {
   ui::LinuxUi* previous_linux_ui =
       ui::LinuxUi::SetInstance(ui::GetDefaultLinuxUi());
 #endif
+  LogStartupStage("platform_gl_ready");
   gfx::InitializeFonts();
+  LogStartupStage("font_system_ready");
   ui::InitializeInputMethod();
+  LogStartupStage("input_method_ready");
   base::PowerMonitor::GetInstance()->Initialize(
       std::make_unique<base::PowerMonitorDeviceSource>());
+  LogStartupStage("power_monitor_ready");
 #if defined(USE_AURA)
   std::unique_ptr<aura::Env> env = aura::Env::CreateInstance();
 #endif
   // Both Aura and Cocoa windows need a compositor context factory.
+#if !BUILDFLAG(IS_WIN)
   libcr::VizContextFactory context_factory;
+#endif
 #if defined(USE_AURA)
   env->set_context_factory(&context_factory);
   wm::WMState wm_state;
@@ -320,12 +343,14 @@ int RunApplication() {
 #elif BUILDFLAG(ENABLE_DESKTOP_AURA)
   std::unique_ptr<display::Screen> screen = views::CreateDesktopScreen();
 #endif
+  LogStartupStage("viz_screen_ready");
   views::LayoutProvider layout_provider;
   CrFilesAXPlatformDelegate ax_delegate;
   ui::AXPlatform ax_platform(ax_delegate);
   CrFilesViewsDelegate views_delegate;
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   crfiles::ShowCrFilesWindow(run_loop.QuitClosure());
+  LogStartupStage("window_shown");
   run_loop.Run();
   crfiles::DestroyCrFilesWindow();
   // Native close notifications defer client-owned bubble destruction. Finish
@@ -342,6 +367,8 @@ int RunApplication() {
 }
 
 int CrFilesEntry(int argc, char** argv) {
+  libcr::InitializeStartupTiming("crFiles");
+  startup_last_stage_at = base::TimeTicks::Now();
   base::CommandLine::Init(argc, argv);
 #if BUILDFLAG(IS_WIN)
   logging::SetLogItems(true, true, true, false);
@@ -372,6 +399,7 @@ int CrFilesEntry(int argc, char** argv) {
       !launch->HasSwitch(crfiles::kSearchProcessSwitch)) return 1;
 #endif
   base::i18n::InitializeICU();
+  LogStartupStage("mojo_icu_ready");
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kArchiveProcessSwitch)) {
     base::FeatureList::InitInstance("", "");
     return crfiles::RunArchiveProcess();
@@ -398,6 +426,7 @@ int CrFilesEntry(int argc, char** argv) {
   const std::string locale = ResolveLocale(configured_locale);
   base::i18n::SetICUDefaultLocale(locale);
   InitializeResources(locale);
+  LogStartupStage("resources_ready");
   const int result = RunApplication();
   ui::ResourceBundle::CleanupSharedInstance();
   return result;

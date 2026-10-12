@@ -1,12 +1,13 @@
 # Copyright 2026 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+import("//build/config/libcr.gni")
 import("//build/config/ui.gni")
 import("//build/util/process_version.gni")
 import("//libcr/locales.gni")
 import("//media/media_options.gni")
-import("//testing/test.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
 import("//tools/grit/grit_rule.gni")
 import("//tools/grit/repack.gni")
 declare_args() {
@@ -19,7 +20,10 @@ if (is_linux) {
     packages = [ "gio-unix-2.0" ]
   }
 }
-crfiles_locales = libcr_supported_locales + [ "ja", "ko" ]
+crfiles_locales = libcr_supported_locales + [
+                    "ja",
+                    "ko",
+                  ]
 
 test("crfiles_dialog_unittests") {
   sources = [
@@ -136,79 +140,79 @@ copy("file_icons") {
 }
 
 crfiles_sources = [
-    "crfiles_file_access.h",
-    "crfiles_file_access.cc",
-    "crfiles_cache_state.cc",
-    "crfiles_cache_state.h",
-    "crfiles_history.cc",
-    "crfiles_history.h",
-    "crfiles_file_operations.cc",
-    "crfiles_file_operations.h",
-    "crfiles_app_icon.cc",
-    "crfiles_app_icon.h",
-    "crfiles_file_icons.cc",
-    "crfiles_file_icons.h",
-    "crfiles_archive.cc",
-    "crfiles_archive.h",
-    "crfiles_archive_process.cc",
-    "crfiles_tar.cc",
-    "crfiles_tar.h",
-    "crfiles_archive_dialog.cc",
-    "crfiles_archive_dialog.h",
-    "crfiles_search.cc",
-    "crfiles_search.h",
-    "crfiles_search_process.cc",
-    "crfiles_search_content.cc",
-    "crfiles_search_content.h",
-    "crfiles_search_view.cc",
-    "crfiles_search_view.h",
-    "crfiles_text_thumbnail.cc",
-    "crfiles_text_thumbnail.h",
-    "crfiles_thumbnail_cache.cc",
-    "crfiles_thumbnail_cache.h",
-    "crfiles_decode_memory.cc",
-    "crfiles_decode_memory.h",
-    "crfiles_image_preview.cc",
-    "crfiles_image_preview.h",
-    "crfiles_heic_thumbnail.cc",
-    "crfiles_heic_thumbnail.h",
-    "third_party/libheif/heif.h",
-    "third_party/libheif/heif_version.h",
-    "crfiles_video_thumbnail.cc",
-    "crfiles_video_thumbnail.h",
-    "crfiles_video_thumbnail_client.cc",
-    "third_party/libde265/de265.h",
-    "crfiles_frame_view.cc",
-    "crfiles_frame_view.h",
-    "crfiles_main.cc",
-    "crfiles_settings_dialog.cc",
-    "crfiles_settings_dialog.h",
-    "crfiles_dialog.cc",
-    "crfiles_dialog.h",
-    "crfiles_trash.cc",
-    "crfiles_trash.h",
-    "crfiles_theme.cc",
-    "crfiles_theme.h",
-    "crfiles_window.cc",
-    "crfiles_context_actions.cc",
-    "crfiles_context_actions.h",
-    "crfiles_window.h",
-    "crfiles_tray.h",
-    "sharing/connect_client.cc",
-    "sharing/connect_client.h",
-    "sharing/connect_discovery.cc",
-    "sharing/connect_discovery.h",
-    "sharing/nearby_files_win.h",
-    "sharing/file_share_dialog.cc",
-    "sharing/file_share_dialog.h",
-    "sharing/nearby_sharing.cc",
-    "sharing/nearby_sharing.h",
-    "sharing/nearby_socket.h",
-    "sharing/share_bubble_anchor.cc",
-    "sharing/share_bubble_anchor.h",
-    "sharing/phone_sender.cc",
-    "sharing/phone_sender.h",
-  ]
+  "crfiles_app_icon.cc",
+  "crfiles_app_icon.h",
+  "crfiles_archive.cc",
+  "crfiles_archive.h",
+  "crfiles_archive_dialog.cc",
+  "crfiles_archive_dialog.h",
+  "crfiles_archive_process.cc",
+  "crfiles_cache_state.cc",
+  "crfiles_cache_state.h",
+  "crfiles_context_actions.cc",
+  "crfiles_context_actions.h",
+  "crfiles_decode_memory.cc",
+  "crfiles_decode_memory.h",
+  "crfiles_dialog.cc",
+  "crfiles_dialog.h",
+  "crfiles_file_access.cc",
+  "crfiles_file_access.h",
+  "crfiles_file_icons.cc",
+  "crfiles_file_icons.h",
+  "crfiles_file_operations.cc",
+  "crfiles_file_operations.h",
+  "crfiles_frame_view.cc",
+  "crfiles_frame_view.h",
+  "crfiles_heic_thumbnail.cc",
+  "crfiles_heic_thumbnail.h",
+  "crfiles_history.cc",
+  "crfiles_history.h",
+  "crfiles_image_preview.cc",
+  "crfiles_image_preview.h",
+  "crfiles_main.cc",
+  "crfiles_search.cc",
+  "crfiles_search.h",
+  "crfiles_search_content.cc",
+  "crfiles_search_content.h",
+  "crfiles_search_process.cc",
+  "crfiles_search_view.cc",
+  "crfiles_search_view.h",
+  "crfiles_settings_dialog.cc",
+  "crfiles_settings_dialog.h",
+  "crfiles_tar.cc",
+  "crfiles_tar.h",
+  "crfiles_text_thumbnail.cc",
+  "crfiles_text_thumbnail.h",
+  "crfiles_theme.cc",
+  "crfiles_theme.h",
+  "crfiles_thumbnail_cache.cc",
+  "crfiles_thumbnail_cache.h",
+  "crfiles_trash.cc",
+  "crfiles_trash.h",
+  "crfiles_tray.h",
+  "crfiles_video_thumbnail.cc",
+  "crfiles_video_thumbnail.h",
+  "crfiles_video_thumbnail_client.cc",
+  "crfiles_window.cc",
+  "crfiles_window.h",
+  "sharing/connect_client.cc",
+  "sharing/connect_client.h",
+  "sharing/connect_discovery.cc",
+  "sharing/connect_discovery.h",
+  "sharing/file_share_dialog.cc",
+  "sharing/file_share_dialog.h",
+  "sharing/nearby_files_win.h",
+  "sharing/nearby_sharing.cc",
+  "sharing/nearby_sharing.h",
+  "sharing/nearby_socket.h",
+  "sharing/phone_sender.cc",
+  "sharing/phone_sender.h",
+  "sharing/share_bubble_anchor.cc",
+  "sharing/share_bubble_anchor.h",
+  "third_party/libde265/de265.h",
+  "third_party/libheif/heif.h",
+  "third_party/libheif/heif_version.h",
+]
 
 mojom("crfiles_archive_mojom") {
   sources = [ "crfiles_archive.mojom" ]
@@ -226,9 +230,23 @@ mojom("crfiles_video_thumbnail_mojom") {
 
 action("crfiles_buildtime") {
   script = "tools/generate_buildtime.py"
-  inputs = crfiles_sources + [ "crfiles_archive.mojom", "crfiles_search.mojom", "crfiles_video_thumbnail.mojom", "VERSION", "crfiles_strings.grd", "BUILD.gn", "crfiles_windows.cc", "crfiles_windows.h", "crfiles_exe.rc", "sharing/nearby_files_win.cc" ]
+  inputs = crfiles_sources + [
+             "crfiles_archive.mojom",
+             "crfiles_search.mojom",
+             "crfiles_video_thumbnail.mojom",
+             "VERSION",
+             "crfiles_strings.grd",
+             "BUILD.gn",
+             "crfiles_windows.cc",
+             "crfiles_windows.h",
+             "crfiles_exe.rc",
+             "sharing/nearby_files_win.cc",
+           ]
   outputs = [ "$target_gen_dir/crfiles_buildtime.h" ]
-  args = [ "--output", rebase_path(outputs[0], root_build_dir) ]
+  args = [
+    "--output",
+    rebase_path(outputs[0], root_build_dir),
+  ]
 }
 
 executable("crFiles") {
@@ -241,11 +259,11 @@ executable("crFiles") {
   }
   if (is_mac) {
     sources += [
+      "crfiles_file_access_mac.mm",
+      "crfiles_heic_thumbnail_mac.mm",
       "crfiles_mac.h",
       "crfiles_mac.mm",
       "crfiles_tray_mac.mm",
-      "crfiles_file_access_mac.mm",
-      "crfiles_heic_thumbnail_mac.mm",
     ]
     frameworks = [
       "AppKit.framework",
@@ -260,66 +278,107 @@ executable("crFiles") {
     data = [ "third_party/libheif/COPYING" ]
   }
   include_dirs = [ "//third_party/pdfium" ]
-  deps = [
-    ":crfiles_buildtime",
-    ":crfiles_archive_mojom",
-    "//third_party/lzma_sdk/google:seven_zip_reader",
-    "//third_party/lzma_sdk",
-    "//third_party/lzma_sdk:lzma_sdk_xz",
-    "//third_party/unrar",
-    ":crfiles_search_mojom",
-    ":crfiles_video_thumbnail_mojom",
-    ":crfiles_strings",
-    ":crfiles_version",
-    "//base",
-    "//base/version_info",
-    "//base:i18n",
-    "//cc/paint",
-    "//chrome/app/vector_icons",
-    "//components/discardable_memory/service",
-    "//components/vector_icons",
-    "//crypto",
-    "//libcr",
-    "//libcr:viz",
-    "//media",
-    "//mojo/core/embedder",
-    "//mojo/public/cpp/bindings",
-    "//mojo/public/cpp/platform",
-    "//mojo/public/cpp/system",
-    "//net",
-    "//net/traffic_annotation",
-    "//skia",
-    "//third_party/pdfium:pdfium",
-    "//third_party/sqlite",
-    "//third_party/zlib/google:zip",
-    "//third_party/zlib",
-    "//third_party/boringssl",
-    "//ui/accessibility",
-    "//ui/base",
-    "//ui/shell_dialogs",
-    "//ui/base/ime/init",
-    "//ui/color",
-    "//ui/compositor",
-    "//ui/display",
-    "//ui/events",
-    "//ui/gfx",
-    "//ui/gfx/codec",
-    "//ui/gl",
-    "//ui/gl/init",
-    "//ui/native_theme",
-    "//ui/views",
-    "//ui/menus",
-    "//url",
-  ]
-  if (media_use_ffmpeg) {
-    deps += [ "//third_party/dav1d", "//third_party/ffmpeg", "//third_party/ffmpeg:ffmpeg_features" ]
+  if (enable_libcr_shared) {
+    sources += [
+      "$root_gen_dir/chrome/app/vector_icons/vector_icons.cc",
+      "$root_gen_dir/chrome/app/vector_icons/vector_icons.h",
+    ]
+    deps = [
+      ":crfiles_buildtime",
+      ":crfiles_strings",
+      ":crfiles_version",
+      "//chrome/app/vector_icons:crfiles_icon_sources",
+      "//libcr:engine",
+    ]
+
+    # Keep application IPC in the EXE. Depend only on generated headers/actions;
+    # the regular mojom implementation targets also pull static engine deps.
+    foreach(name,
+            [
+              "crfiles_archive",
+              "crfiles_search",
+              "crfiles_video_thumbnail",
+            ]) {
+      deps += [ ":${name}_mojom_headers" ]
+      sources += [
+        "$target_gen_dir/${name}.mojom-shared.cc",
+        "$target_gen_dir/${name}.mojom.cc",
+      ]
+    }
+    no_default_deps = true
+    configs += [ "//build/config/gcc:rpath_for_built_shared_libraries" ]
+    ldflags = [
+      "-Wl,-z,defs",
+      "-Wl,--no-allow-shlib-undefined",
+    ]
+  } else {
+    deps = [
+      ":crfiles_archive_mojom",
+      ":crfiles_buildtime",
+      ":crfiles_search_mojom",
+      ":crfiles_strings",
+      ":crfiles_version",
+      ":crfiles_video_thumbnail_mojom",
+      "//base",
+      "//base:i18n",
+      "//base/version_info",
+      "//cc/paint",
+      "//chrome/app/vector_icons",
+      "//components/discardable_memory/service",
+      "//components/vector_icons",
+      "//crypto",
+      "//libcr",
+      "//libcr:viz",
+      "//media",
+      "//mojo/core/embedder",
+      "//mojo/public/cpp/bindings",
+      "//mojo/public/cpp/platform",
+      "//mojo/public/cpp/system",
+      "//net",
+      "//net/traffic_annotation",
+      "//skia",
+      "//third_party/boringssl",
+      "//third_party/lzma_sdk",
+      "//third_party/lzma_sdk:lzma_sdk_xz",
+      "//third_party/lzma_sdk/google:seven_zip_reader",
+      "//third_party/pdfium",
+      "//third_party/sqlite",
+      "//third_party/unrar",
+      "//third_party/zlib",
+      "//third_party/zlib/google:zip",
+      "//ui/accessibility",
+      "//ui/base",
+      "//ui/base/ime/init",
+      "//ui/color",
+      "//ui/compositor",
+      "//ui/display",
+      "//ui/events",
+      "//ui/gfx",
+      "//ui/gfx/codec",
+      "//ui/gl",
+      "//ui/gl/init",
+      "//ui/menus",
+      "//ui/native_theme",
+      "//ui/shell_dialogs",
+      "//ui/views",
+      "//url",
+    ]
+    if (media_use_ffmpeg) {
+      deps += [
+        "//third_party/dav1d",
+        "//third_party/ffmpeg",
+        "//third_party/ffmpeg:ffmpeg_features",
+      ]
+    }
   }
   if (is_mac) {
     deps += [ "//components/remote_cocoa/common:mojo" ]
   }
   if (is_linux) {
     configs += [ ":context_gio" ]
-    deps += [ "//third_party/fontconfig" ]
+    if (!enable_libcr_shared) {
+      deps += [ "//third_party/fontconfig" ]
+    }
   }
   data_deps = [
     ":app_icon",
@@ -330,16 +389,16 @@ executable("crFiles") {
   foreach(locale, crfiles_locales) {
     data_deps += [ ":crfiles_resources_${locale}_pak" ]
   }
-  if (use_aura) {
+  if (use_aura && !enable_libcr_shared) {
     deps += [
       "//ui/aura",
       "//ui/wm",
     ]
   }
-  if (use_ozone) {
+  if (use_ozone && !enable_libcr_shared) {
     deps += [ "//ui/ozone" ]
   }
-  if (is_linux) {
+  if (is_linux && !enable_libcr_shared) {
     deps += [
       "//ui/linux:display_server_utils",
       "//ui/linux:linux_ui_factory",
@@ -348,11 +407,11 @@ executable("crFiles") {
   if (is_win) {
     sources += [
       "crfiles_exe.rc",
-      "crfiles_windows.cc",
       "crfiles_tray_win.cc",
-      "sharing/nearby_files_win.cc",
+      "crfiles_windows.cc",
       "crfiles_windows.h",
       "resources/win/crfiles_resource.h",
+      "sharing/nearby_files_win.cc",
     ]
     inputs = [ "resources/win/crfiles_app_icon.ico" ]
     libs = [
