@@ -4,6 +4,7 @@
 #define CRFILES_WINDOW_H_
 #include <memory>
 #include "base/functional/callback.h"
+namespace base { class FilePath; }
 namespace views { class View; class Widget; }
 namespace crfiles {
 void ShowCrFilesWindow(base::OnceClosure quit);
@@ -16,6 +17,8 @@ void ApplyCrFilesSharingSettings();
 void ApplyCrFilesViewSettings();
 void ApplyCrFilesTraySettings();
 bool IsCrFilesSharingBusy();
+bool IsCrFilesQuickShareBusy();
+void ShowCrFilesReceivedDirectory(const base::FilePath& directory);
 void ShowCrFilesHistory();
 void ShowCrFilesTrustedDevices();
 void ShowCrFilesSharingFolders();

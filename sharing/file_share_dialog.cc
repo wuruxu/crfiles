@@ -39,6 +39,7 @@
 #include "crFiles/crfiles_context_actions.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_window.h"
+#include "libcr/svg_icon.h"
 #if BUILDFLAG(IS_MAC)
 #include "crFiles/crfiles_mac.h"
 #endif
@@ -80,6 +81,52 @@
 namespace crfiles {
 namespace {
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
+std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool quick_share) {
+  using Stage = NearbySharing::Stage;
+  int message = IDS_CRFILES_TRANSFERRING;
+  if (state.status_message_id) message = state.status_message_id;
+  else if (state.stage == Stage::kComplete) message = IDS_CRFILES_COMPLETE;
+  else if (state.stage == Stage::kError) message = IDS_CRFILES_TRANSFER_ERROR;
+  else if (state.stage == Stage::kCanceled || !state.busy) message = IDS_CRFILES_CANCELED;
+  else if (state.stage != Stage::kTransferring) message = IDS_CRFILES_LOADING;
+  auto status = Text(message) + u"\n" +
+      ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
+  if (quick_share && state.current_file_index) {
+    status += u"\n" + Text(IDS_CRFILES_QS_PROGRESS_FILE) + u": " +
+        base::NumberToString16(state.current_file_index) + u" / " + base::NumberToString16(state.files.size()) +
+        u" · " + ui::FormatBytes(base::ByteSize(state.current_file_transferred)) + u" / " +
+        ui::FormatBytes(base::ByteSize(state.current_file_total));
+    status += u"\n" + Text(IDS_CRFILES_QS_PROGRESS_FINISHED) + u": " +
+        base::NumberToString16(state.completed_files) + u" / " + base::NumberToString16(state.files.size());
+    if (state.busy && state.stage == Stage::kTransferring) {
+      status += u"\n" + Text(IDS_CRFILES_QS_PROGRESS_SPEED) + u": " +
+          ui::FormatSpeed(base::ByteSize(state.bytes_per_second));
+      status += u" · " + Text(IDS_CRFILES_QS_PROGRESS_REMAINING) + u": " +
+          (state.remaining_seconds < 0 ? std::u16string(u"—") :
+           base::NumberToString16(state.remaining_seconds / 60) + u":" +
+           (state.remaining_seconds % 60 < 10 ? u"0" : u"") + base::NumberToString16(state.remaining_seconds % 60));
+    }
+  }
+  if (!state.busy && !state.started_at.is_null() && !state.finished_at.is_null()) {
+    const auto seconds = std::max<int64_t>(0, (state.finished_at - state.started_at).InSeconds());
+    status += u"\n" + Text(IDS_CRFILES_TOTAL_TIME) + u": " +
+        l10n_util::GetStringFUTF16(IDS_CRFILES_DURATION_MINUTES_SECONDS,
+            base::NumberToString16(seconds / 60), base::NumberToString16(seconds % 60));
+  }
+  return status;
+}
+ui::ImageModel QuickShareAvatar() {
+  static base::NoDestructor<libcr::SvgIconCache> icon(
+      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(IDR_CRFILES_QUICK_SHARE_ICON),
+      gfx::SizeF(150, 150));
+  return icon->GetImageModel(gfx::Size(64, 64));
+}
+std::u16string QuickShareDeviceType(uint8_t type) {
+  static constexpr std::array ids = {IDS_CRFILES_QS_TYPE_UNKNOWN, IDS_CRFILES_QS_TYPE_PHONE,
+      IDS_CRFILES_QS_TYPE_TABLET, IDS_CRFILES_QS_TYPE_LAPTOP, IDS_CRFILES_QS_TYPE_CAR,
+      IDS_CRFILES_QS_TYPE_FOLDABLE, IDS_CRFILES_QS_TYPE_XR};
+  return Text(ids[type < ids.size() ? type : 0]);
+}
 ui::ImageModel Avatar(int index, int edge = 64) {
   static constexpr std::array ids = {IDR_CRFILES_AVATAR_0, IDR_CRFILES_AVATAR_1, IDR_CRFILES_AVATAR_2,
       IDR_CRFILES_AVATAR_3, IDR_CRFILES_AVATAR_4, IDR_CRFILES_AVATAR_5, IDR_CRFILES_AVATAR_6, IDR_CRFILES_AVATAR_7, IDR_CRFILES_AVATAR_8};
@@ -133,7 +180,7 @@ class ShareSessionBubbleDelegate : public views::BubbleDialogDelegate {
 };
 class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObserver {
  public:
-  ShareSessionToastImpl(views::Widget* owner, std::shared_ptr<NearbySharing> service,
+  ShareSessionToastImpl(views::Widget* owner, std::shared_ptr<ShareService> service,
                         base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor)
       : owner_(owner->GetWeakPtr()), service_(std::move(service)), anchor_(std::move(anchor)) {
     owner_observation_.Observe(owner);
@@ -142,6 +189,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   ~ShareSessionToastImpl() override { owner_observation_.Reset(); timer_.Stop(); Close(); }
  private:
   bool UseParentWindow(const ShareBubbleAnchor& anchor) const {
+    if (!anchor.background && anchor.widget) return true;
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE)
     return owner_ && !anchor.background &&
         !ui::OzonePlatform::GetInstance()->GetPlatformProperties()
@@ -163,15 +211,21 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   void OnWidgetBoundsChanged(views::Widget*, const gfx::Rect&) override {
     if (parented_ && delegate_ && widget_) delegate_->SizeToContents();
   }
-  void OnWidgetDestroying(views::Widget*) override {
+  void OnWidgetDestroying(views::Widget* widget) override {
+    if (widget != owner_.get()) {
+      Close();
+      return;
+    }
     owner_observation_.Reset();
     owner_.reset();
     timer_.Stop();
     Close();
   }
   void Close() {
+    anchor_observation_.Reset();
+    parent_widget_.reset();
     accept_ = nullptr; reject_ = nullptr; trust_ = nullptr;
-    filename_ = nullptr; progress_status_ = nullptr; progress_ = nullptr; cancel_ = nullptr;
+    filename_ = nullptr; progress_status_ = nullptr; progress_ = nullptr; cancel_ = nullptr; open_received_ = nullptr;
     if (widget_) widget_->MakeCloseSynchronous({});
     widget_.reset(); delegate_.reset();
     background_mode_.reset();
@@ -185,7 +239,9 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   void Decide(bool accept) {
     if (decided_ || base::TimeTicks::Now() < ready_) return;
     decided_ = true;
-    if (accept && stage_ == NearbySharing::Stage::kReceivingOffer) accepted_session_ = session_;
+    if (accept && (stage_ == NearbySharing::Stage::kReceivingOffer ||
+        (service_->IsQuickShare() && stage_ == NearbySharing::Stage::kPairing && displayed_state_ && displayed_state_->receiving)))
+      accepted_session_ = session_;
     service_->Decide(session_, stage_, accept, trust_ && trust_->GetChecked(), conflict_id_);
     if (accept_) accept_->SetEnabled(false);
     if (reject_) reject_->SetEnabled(false);
@@ -209,30 +265,24 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     bool resize = filename_->GetText() != filename;
     filename_->SetText(filename);
     filename_->SetTooltipText(filename);
-    int message = IDS_CRFILES_TRANSFERRING;
-    if (state.status_message_id) message = state.status_message_id;
-    else if (state.stage == Stage::kComplete) message = IDS_CRFILES_COMPLETE;
-    else if (state.stage == Stage::kError) message = IDS_CRFILES_TRANSFER_ERROR;
-    else if (state.stage == Stage::kCanceled || !state.busy) message = IDS_CRFILES_CANCELED;
-    else if (state.stage != Stage::kTransferring) message = IDS_CRFILES_LOADING;
-    auto status = Text(message) + u"\n" +
-        ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
-    if (!state.busy && !state.started_at.is_null() && !state.finished_at.is_null()) {
-      const auto seconds = std::max<int64_t>(0, (state.finished_at - state.started_at).InSeconds());
-      status += u"\n" + Text(IDS_CRFILES_TOTAL_TIME) + u": " +
-          l10n_util::GetStringFUTF16(IDS_CRFILES_DURATION_MINUTES_SECONDS,
-              base::NumberToString16(seconds / 60), base::NumberToString16(seconds % 60));
-    }
+    const auto status = TransferProgressText(state, service_->IsQuickShare());
     resize |= progress_status_->GetText() != status;
     progress_status_->SetText(status);
-    const double value = state.total ? std::clamp(static_cast<double>(state.transferred) / state.total, 0.0, 1.0) : 0.0;
+    const bool counted_files = service_->IsQuickShare() && !state.files.empty();
+    const double value = state.total ? std::clamp(static_cast<double>(state.transferred) / state.total, 0.0, 1.0) :
+        counted_files ? static_cast<double>(state.completed_files) / state.files.size() : 0.0;
     progress_->SetValue(state.stage == Stage::kComplete ? 1.0 :
-        state.busy && (state.stage != Stage::kTransferring || !state.total) ? -1.0 : value);
+        state.busy && (state.stage != Stage::kTransferring || (!state.total && !counted_files)) ? -1.0 : value);
     progress_->SetPaused(!state.busy && state.stage != Stage::kComplete);
     const auto action = Text(state.busy ? IDS_CRFILES_CANCEL : IDS_CRFILES_CLOSE);
     resize |= cancel_->GetText() != action;
     cancel_->SetText(action);
     if (!state.busy) cancel_->SetEnabled(true);
+    if (open_received_) {
+      const bool show = state.stage == Stage::kComplete && !state.batch_directory.empty();
+      resize |= open_received_->GetVisible() != show;
+      open_received_->SetVisible(show);
+    }
     if (resize && delegate_ && widget_) delegate_->SizeToContents();
   }
   void Show(const NearbySharing::Snapshot& state, bool transfer = false,
@@ -248,16 +298,21 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     displayed_state_ = state;
     transfer_view_ = transfer;
     ready_ = ready;
+    const bool code_notice = service_->IsQuickShare() && !state.receiving && !transfer;
     auto contents = std::make_unique<views::View>();
     auto* contents_layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 12));
-    contents_layout->set_minimum_cross_axis_size(336);
+    if (!code_notice) contents_layout->set_minimum_cross_axis_size(336);
     auto* identity = contents->AddChildView(std::make_unique<views::View>());
+    identity->SetVisible(!code_notice);
     auto* identity_layout = identity->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 12));
     identity_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* avatar = identity->AddChildView(std::make_unique<views::ImageView>(PeerAvatar(state)));
+    auto* avatar = identity->AddChildView(std::make_unique<views::ImageView>(service_->IsQuickShare() ? QuickShareAvatar() : PeerAvatar(state)));
     avatar->SetImageSize(gfx::Size(64, 64));
-    auto* name = Label(identity, base::UTF8ToUTF16(state.peer_name)); name->SetMaximumWidth(248);
-    Label(contents.get(), Text(state.receiving ? IDS_CRFILES_HISTORY_RECEIVE : IDS_CRFILES_HISTORY_SEND));
+    auto* identity_text = identity->AddChildView(std::make_unique<views::View>());
+    identity_text->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 4));
+    auto* name = Label(identity_text, base::UTF8ToUTF16(state.peer_name)); name->SetMaximumWidth(248);
+    if (service_->IsQuickShare()) Label(identity_text, QuickShareDeviceType(state.peer_device_type));
+    if (!code_notice) Label(contents.get(), Text(state.receiving ? IDS_CRFILES_HISTORY_RECEIVE : IDS_CRFILES_HISTORY_SEND));
     if (transfer) {
       filename_ = Label(contents.get(), std::u16string());
       filename_->SetMultiLine(false); filename_->SetElideBehavior(gfx::ELIDE_MIDDLE);
@@ -270,11 +325,32 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       auto* filename = Label(contents.get(), base::UTF8ToUTF16(state.current_file));
       filename->SetTooltipText(base::UTF8ToUTF16(state.current_file));
       Label(contents.get(), Text(IDS_CRFILES_TRANSFER_CONFLICT_PROMPT));
-    } else if (stage_ == NearbySharing::Stage::kPairing) {
-      auto* code = Label(contents.get(), Text(IDS_CRFILES_COMPARE_CODE) + u"\n" + base::UTF8ToUTF16(state.code));
-      code->SetElideBehavior(gfx::NO_ELIDE);
-      trust_ = contents->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_NEARBY_TRUST_DEVICE)));
-      trust_->SetChecked(trusted);
+    } else if (code_notice || stage_ == NearbySharing::Stage::kPairing) {
+      if (service_->IsQuickShare()) {
+        auto* code_row = contents->AddChildView(std::make_unique<views::View>());
+        auto* code_layout = code_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+        code_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+        auto* prompt = Label(code_row, Text(IDS_CRFILES_QUICK_SHARE_COMPARE_CODE));
+        prompt->SetMultiLine(false);
+        auto* code = Label(code_row, base::UTF8ToUTF16(state.code));
+        code->SetMultiLine(false);
+        code->SetFontList(code->font_list().DeriveWithWeight(gfx::Font::Weight::BOLD));
+        code->SetElideBehavior(gfx::NO_ELIDE);
+      } else {
+        auto* code = Label(contents.get(), Text(IDS_CRFILES_COMPARE_CODE) + u"\n" + base::UTF8ToUTF16(state.code));
+        code->SetElideBehavior(gfx::NO_ELIDE);
+      }
+      if (service_->IsQuickShare() && state.receiving) {
+        Label(contents.get(), Text(IDS_CRFILES_FILES) + u": " + base::NumberToString16(state.files.size()));
+        Label(contents.get(), Text(IDS_CRFILES_TOTAL_SIZE) + u": " + ui::FormatBytes(base::ByteSize(state.total)));
+        Label(contents.get(), Text(IDS_CRFILES_RECEIVE_DIRECTORY) + u": " + state.receive_directory.AsUTF16Unsafe());
+        Label(contents.get(), Text(IDS_CRFILES_RECEIVE_PROMPT));
+      }
+      if (!service_->IsQuickShare()) {
+        trust_ = contents->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_NEARBY_TRUST_DEVICE)));
+        trust_->SetChecked(trusted);
+      }
     } else {
       auto* summary = contents->AddChildView(std::make_unique<views::View>());
       summary->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(12), 6));
@@ -286,13 +362,24 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       Label(contents.get(), Text(IDS_CRFILES_RECEIVE_PROMPT));
     }
     auto* actions = contents->AddChildView(std::make_unique<views::View>());
+    actions->SetVisible(!code_notice);
     auto* layout = actions->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
     layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
     if (transfer) {
       cancel_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
           base::BindRepeating(&ShareSessionToastImpl::CancelOrClose, weak_.GetWeakPtr()), Text(IDS_CRFILES_CANCEL)));
+      if (service_->IsQuickShare() && state.receiving) {
+        open_received_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
+            base::BindRepeating([](base::WeakPtr<ShareSessionToastImpl> view) {
+              if (view && view->displayed_state_ && view->displayed_state_->stage == NearbySharing::Stage::kComplete &&
+                  !view->displayed_state_->batch_directory.empty())
+                base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                    base::BindOnce(&ShowCrFilesReceivedDirectory, view->displayed_state_->batch_directory));
+            }, weak_.GetWeakPtr()), Text(IDS_CRFILES_OPEN)));
+        open_received_->SetTooltipText(Text(IDS_CRFILES_RECEIVED));
+      }
       UpdateProgress(state);
-    } else {
+    } else if (!code_notice) {
       const bool conflict = stage_ == NearbySharing::Stage::kReceivingConflict;
       accept_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), true), Text(conflict ? IDS_CRFILES_REPLACE : IDS_CRFILES_ACCEPT)));
       reject_ = actions->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&ShareSessionToastImpl::Decide, weak_.GetWeakPtr(), false), Text(conflict ? IDS_CRFILES_CANCEL : IDS_CRFILES_REJECT)));
@@ -304,12 +391,14 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     // coordinates. Foreground bubbles need the owner's subsurface coordinates.
     // Background consent UI remains independent of the owner's visibility.
     parented_ = UseParentWindow(anchor);
+    parent_widget_ = parented_ ? (anchor.widget ? anchor.widget : owner_) : base::WeakPtr<views::Widget>();
     delegate_ = std::make_unique<ShareSessionBubbleDelegate>(anchor.arrow,
         parented_ ? owner_ : base::WeakPtr<views::Widget>());
     delegate_->set_has_parent(parented_);
     if (parented_) {
-      delegate_->set_parent_window(owner_->GetNativeView());
-      delegate_->SetAnchorWidget(owner_.get());
+      delegate_->set_parent_window(parent_widget_->GetNativeView());
+      delegate_->SetAnchorWidget(parent_widget_.get());
+      if (parent_widget_.get() != owner_.get()) anchor_observation_.Observe(parent_widget_.get());
     }
     delegate_->SetAnchorRect(anchor.bounds);
     delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
@@ -321,20 +410,22 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
         [](base::WeakPtr<ShareSessionToastImpl> owner, views::Widget::ClosedReason) {
           if (!owner) return;
           owner->accept_ = nullptr; owner->reject_ = nullptr; owner->trust_ = nullptr;
-          owner->filename_ = nullptr; owner->progress_status_ = nullptr; owner->progress_ = nullptr; owner->cancel_ = nullptr;
+          owner->filename_ = nullptr; owner->progress_status_ = nullptr; owner->progress_ = nullptr; owner->cancel_ = nullptr; owner->open_received_ = nullptr;
           owner->widget_.reset();
         }, weak_.GetWeakPtr()));
     auto* frame = delegate_->GetBubbleFrameView(); frame->SetDisplayVisibleArrow(anchor.show_arrow);
     frame->bubble_border()->set_draw_border_stroke(true); frame->bubble_border()->set_md_shadow_elevation(6);
     Position(anchor);
     delegate_->SizeToContents();
-    if (transfer) widget_->ShowInactive();
+    if (transfer || code_notice) widget_->ShowInactive();
     else widget_->Show();
     Position(anchor);
   }
   void Position(const ShareBubbleAnchor& anchor) {
     if (!widget_ || !delegate_) return;
-    if (parented_ != UseParentWindow(anchor) && displayed_state_) {
+    const auto desired_parent = UseParentWindow(anchor) ? (anchor.widget ? anchor.widget : owner_) :
+        base::WeakPtr<views::Widget>();
+    if ((parented_ != UseParentWindow(anchor) || parent_widget_.get() != desired_parent.get()) && displayed_state_) {
       const auto state = *displayed_state_;
       Show(state, transfer_view_, anchor);
       return;
@@ -369,14 +460,36 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (dismiss_) { dismiss_ = false; Close(); }
     const auto state = service_->GetSnapshot();
     using Stage = NearbySharing::Stage;
-    const bool terminal = state.stage == Stage::kComplete || state.stage == Stage::kCanceled || state.stage == Stage::kError;
+    if (service_->IsQuickShare() && !state.receiving &&
+        (state.stage == Stage::kCanceled || state.status_message_id == IDS_CRFILES_QUICK_SHARE_REJECTED)) {
+      dismissed_session_ = state.session;
+      Close();
+      return;
+    }
+    const bool terminal = state.stage == Stage::kComplete || state.stage == Stage::kSent || state.stage == Stage::kCanceled || state.stage == Stage::kError;
     const bool conflict = state.busy && state.stage == Stage::kReceivingConflict;
     const bool transfer = !conflict && state.session && state.session != dismissed_session_ &&
         (state.receiving ? (accepted_session_ == state.session || state.stage == Stage::kTransferring ||
-         (terminal && (!state.current_file.empty() || state.stage == Stage::kComplete))) :
+         (terminal && (!state.current_file.empty() || state.stage == Stage::kComplete ||
+          (service_->IsQuickShare() && state.stage == Stage::kError)))) :
          ((state.busy && state.stage != Stage::kPairing) || terminal));
     const bool prompt = state.busy &&
         (state.stage == NearbySharing::Stage::kPairing || state.stage == NearbySharing::Stage::kReceivingOffer || conflict);
+    if (service_->IsQuickShare() && state.busy && !state.receiving) {
+      if (!state.code.empty() && state.stage != Stage::kTransferring) {
+        // Local confirmation immediately advances to waiting for the peer.
+        // Keep the same informational bubble across that stage transition.
+        if (!widget_ || transfer_view_ || session_ != state.session ||
+            !displayed_state_ || displayed_state_->code != state.code) Show(state);
+        else { stage_ = state.stage; displayed_state_ = state; }
+        Position(anchor_.Run(state));
+        if (state.stage == Stage::kPairing && auto_confirmed_session_ != state.session) {
+          auto_confirmed_session_ = state.session;
+          service_->Decide(state.session, state.stage, true, false, state.conflict_id);
+        }
+      } else Close();
+      return;
+    }
     if (transfer) {
       if (!widget_ || !transfer_view_ || session_ != state.session) Show(state, true);
       UpdateProgress(state);
@@ -401,9 +514,12 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       if (reject_) reject_->SetEnabled(true);
     }
   }
+  raw_ptr<views::MdTextButton> open_received_ = nullptr;
   base::WeakPtr<views::Widget> owner_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> owner_observation_{this};
-  std::shared_ptr<NearbySharing> service_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> anchor_observation_{this};
+  base::WeakPtr<views::Widget> parent_widget_;
+  std::shared_ptr<ShareService> service_;
   base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor_;
   std::unique_ptr<views::BubbleDialogDelegate> delegate_;
   std::unique_ptr<views::Widget> widget_;
@@ -416,6 +532,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   uint64_t session_ = 0;
   uint64_t conflict_id_ = 0;
   uint64_t accepted_session_ = 0, dismissed_session_ = 0;
+  uint64_t auto_confirmed_session_ = 0;
   NearbySharing::Stage stage_ = NearbySharing::Stage::kOff;
   bool decided_ = false;
   bool transfer_view_ = false, dismiss_ = false;
@@ -447,13 +564,24 @@ class DeviceButton : public views::Button {
         gfx::kGoogleGreen600, label_->font_list().GetHeight()));
     trust_icon_->SetVisible(false);
     label_->SetCanProcessEventsWithinSubtree(false); SetIdentity(std::move(avatar), std::move(name));
+    type_label_ = AddChildView(std::make_unique<views::Label>());
+    type_label_->SetMaximumWidthSingleLine(112);
+    type_label_->SetCanProcessEventsWithinSubtree(false); type_label_->SetVisible(false);
+  }
+  void SetDeviceType(const std::u16string& type) {
+    type_label_->SetText(type); type_label_->SetVisible(!type.empty());
+    SetAccessibleName(std::u16string(label_->GetText()) + (type.empty() ? std::u16string() : u" · " + type));
   }
   void SetIdentity(ui::ImageModel avatar, std::u16string name) {
     avatar_ = std::move(avatar); UpdateAvatar();
-    label_->SetText(name); SetAccessibleName(name); SetTooltipText(name);
+    label_->SetText(name); SetAccessibleName(name); SetDeviceTooltip(std::move(name));
+  }
+  void SetDeviceTooltip(std::u16string tooltip) {
+    device_tooltip_ = std::move(tooltip);
+    SetTooltipText(transfer_ ? transfer_tooltip_ : device_tooltip_);
   }
   void SetTransfer(bool active, bool indeterminate, double progress,
-                   base::RepeatingClosure cancel = {}) {
+                   base::RepeatingClosure cancel = {}, std::u16string detail = {}) {
     transfer_ = active; indeterminate_ = indeterminate; UpdateAvatar();
     progress_ = std::clamp(progress, 0.0, 1.0); cancel_ = std::move(cancel);
     if (active && indeterminate && !spinner_.IsRunning()) {
@@ -462,7 +590,9 @@ class DeviceButton : public views::Button {
           base::BindRepeating(&DeviceButton::SchedulePaint, base::Unretained(this)));
     } else if (!active || !indeterminate) spinner_.Stop();
     SetAccessibleName(active ? Text(IDS_CRFILES_CANCEL) : std::u16string(label_->GetText()));
-    SetTooltipText(active ? Text(IDS_CRFILES_CANCEL) : std::u16string(label_->GetText()));
+    transfer_tooltip_ = detail.empty() ? Text(IDS_CRFILES_CANCEL) :
+        device_tooltip_ + u"\n" + detail + u"\n" + Text(IDS_CRFILES_CANCEL);
+    SetTooltipText(active ? transfer_tooltip_ : device_tooltip_);
     SchedulePaint();
   }
   void NotifyClick(const ui::Event& event) override {
@@ -508,9 +638,11 @@ class DeviceButton : public views::Button {
     image_->SetImage(transfer_ && (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) ?
         ui::ImageModel() : avatar_);
   }
+  std::u16string device_tooltip_;
+  std::u16string transfer_tooltip_;
   ui::ImageModel avatar_;
   raw_ptr<views::ImageView> image_ = nullptr, trust_icon_ = nullptr;
-  raw_ptr<views::Label> label_ = nullptr;
+  raw_ptr<views::Label> label_ = nullptr, type_label_ = nullptr;
   bool transfer_ = false, indeterminate_ = false;
   double progress_ = 0;
   base::RepeatingClosure cancel_;
@@ -604,7 +736,7 @@ class TrustedDevicesView : public views::View {
   METADATA_HEADER(TrustedDevicesView, views::View)
 
  public:
-  explicit TrustedDevicesView(std::shared_ptr<NearbySharing> service)
+  explicit TrustedDevicesView(std::shared_ptr<ShareService> service)
       : service_(std::move(service)) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 12));
@@ -661,7 +793,7 @@ class TrustedDevicesView : public views::View {
         second->SetHorizontalAlignment(gfx::ALIGN_LEFT);
         auto forget = views::CreateVectorImageButtonWithNativeTheme(
             base::BindRepeating(
-                [](std::shared_ptr<NearbySharing> service, std::string fingerprint) {
+                [](std::shared_ptr<ShareService> service, std::string fingerprint) {
                   service->ForgetTrustedDevice(std::move(fingerprint));
                 }, service_, device.fingerprint),
             kDeleteIcon, 20, ui::kColorSysError, ui::kColorIconDisabled,
@@ -674,7 +806,7 @@ class TrustedDevicesView : public views::View {
       }
     }
   }
-  std::shared_ptr<NearbySharing> service_;
+  std::shared_ptr<ShareService> service_;
   raw_ptr<views::View> trusted_list_;
   raw_ptr<views::Label> empty_trust_;
   raw_ptr<views::Label> trust_error_;
@@ -690,13 +822,14 @@ Summary Summarize(const std::vector<base::FilePath>& paths) {
   for (const auto& path : paths) {
     if (base::DirectoryExists(path)) ++result.folders; else ++result.files;
   }
-  result.bytes = FileSelectionSize(paths); return result;
+  result.bytes = FileSelectionSize(paths);
+  return result;
 }
 class FileShareView : public views::View, public ui::EventObserver {
   METADATA_HEADER(FileShareView, views::View)
  public:
   using views::View::OnEvent;
-  FileShareView(std::shared_ptr<NearbySharing> service, std::vector<base::FilePath> paths)
+  FileShareView(std::shared_ptr<ShareService> service, std::vector<base::FilePath> paths)
       : service_(std::move(service)), paths_(std::move(paths)) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
         gfx::Insets::TLBR(12, 16, 16, 16), 10));
@@ -706,8 +839,16 @@ class FileShareView : public views::View, public ui::EventObserver {
     summary->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant, 12));
     count_ = Label(summary, base::NumberToString16(paths_.size()) + u" " + Text(IDS_CRFILES_ITEMS));
     size_ = Label(summary, Text(IDS_CRFILES_TOTAL_SIZE) + u": —");
-    status_ = Label(this, std::u16string());
+    status_row_ = AddChildView(std::make_unique<views::View>());
+    auto* status_layout = status_row_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 12));
+    status_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+    status_ = Label(status_row_, std::u16string());
+    status_detail_ = Label(status_row_, std::u16string());
+    status_row_->SetVisible(false);
     status_->SetVisible(false);
+    discovery_status_ = Label(this, std::u16string());
+    discovery_status_->SetMultiLine(true); discovery_status_->SetVisible(false);
     enable_ = AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&FileShareView::Enable, weak_.GetWeakPtr()), Text(IDS_CRFILES_ENABLE)));
     auto* devices = AddChildView(std::make_unique<views::View>());
     auto* layout = devices->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
@@ -716,10 +857,13 @@ class FileShareView : public views::View, public ui::EventObserver {
         ui::ImageModel::FromVectorIcon(vector_icons::kAdd2Icon, ui::kColorSysPrimary, 48), Text(IDS_CRFILES_MANUAL_CONNECTION)));
     auto* separator = devices->AddChildView(std::make_unique<views::Separator>());
     separator->SetOrientation(views::Separator::Orientation::kVertical); separator->SetPreferredLength(96);
+    manual_->SetVisible(!service_->IsQuickShare());
+    separator->SetVisible(!service_->IsQuickShare());
+    service_->SetDiscoveryActive(true);
     peers_ = devices->AddChildView(std::make_unique<views::View>());
     peers_->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 6));
     layout->SetFlexForView(peers_, 1);
-    session_device_ = devices->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), Avatar(0), Text(IDS_CRFILES_TRANSFERRING)));
+    session_device_ = devices->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareAvatar() : Avatar(0), Text(IDS_CRFILES_TRANSFERRING)));
     session_device_->SetVisible(false);
     if (service_->GetSnapshot().busy) {
       if (!paths_.empty()) base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -729,11 +873,13 @@ class FileShareView : public views::View, public ui::EventObserver {
   }
   // A transfer belongs to the service, so dismissing its UI must not cancel it.
   // The explicit Cancel action and application shutdown still cancel sessions.
-  ~FileShareView() override { timer_.Stop(); CloseToast(); }
+  ~FileShareView() override { timer_.Stop(); CloseToast(); service_->SetDiscoveryActive(false); }
   void SetSelection(std::vector<base::FilePath> paths) {
     if (service_->GetSnapshot().busy) return;
     CloseToast(); active_device_ = nullptr; selected_.reset(); paths_ = std::move(paths);
+    selection_ready_ = false; send_error_ = false;
     const auto state = service_->GetSnapshot(); shown_session_ = state.session; shown_stage_ = state.stage;
+    selection_session_ = state.session;
     count_->SetText(base::NumberToString16(paths_.size()) + u" " + Text(IDS_CRFILES_ITEMS));
     size_->SetText(Text(IDS_CRFILES_TOTAL_SIZE) + u": —");
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -742,7 +888,9 @@ class FileShareView : public views::View, public ui::EventObserver {
   std::optional<gfx::Rect> SessionBounds() {
     if (!GetWidget() || !GetWidget()->IsVisible()) return std::nullopt;
     auto* device = session_device_->GetVisible() ? session_device_.get() : active_device_.get();
-    return device ? std::optional(device->IconAnchor()->GetBoundsInScreen()) : std::nullopt;
+    // Place session bubbles below the entire device tile so the name and type
+    // remain visible beneath the avatar while the verification code is shown.
+    return device ? std::optional(device->GetBoundsInScreen()) : std::nullopt;
   }
  private:
   views::Label* Label(views::View* owner, std::u16string text) {
@@ -751,6 +899,7 @@ class FileShareView : public views::View, public ui::EventObserver {
   }
   void SummaryReady(uint64_t generation, Summary summary) {
     if (generation != summary_generation_) return;
+    selection_ready_ = true;
     const auto state = service_->GetSnapshot(); if (state.receiving && state.busy) return;
     count_->SetText(Text(IDS_CRFILES_FILES) + u": " + base::NumberToString16(summary.files) + u"   ·   " +
         Text(IDS_CRFILES_FOLDERS) + u": " + base::NumberToString16(summary.folders));
@@ -759,7 +908,7 @@ class FileShareView : public views::View, public ui::EventObserver {
   void Enable() {
     auto prefs = GetNearbySharingPreferences(); prefs.discovery_enabled = true;
     if (SetNearbySharingPreferences(prefs)) ApplyCrFilesSharingSettings();
-    else { status_->SetText(Text(IDS_CRFILES_CONFIG_ERROR)); status_->SetVisible(true); }
+    else { status_->SetText(Text(IDS_CRFILES_CONFIG_ERROR)); status_->SetVisible(true); status_row_->SetVisible(true); }
   }
   void CloseToast() {
     compose_monitor_.reset();
@@ -814,7 +963,7 @@ class FileShareView : public views::View, public ui::EventObserver {
     const auto latest = std::ranges::find_if(state.peers, [&](const auto& item) {
       return item.id == peer.id && item.address == peer.address && item.phone.has_value() == peer.phone.has_value();
     });
-    if (latest == state.peers.end()) return;
+    if (latest == state.peers.end() || latest->ble_only) return;
     selected_ = *latest; Compose(anchor);
   }
   void Compose(DeviceButton* anchor) {
@@ -835,27 +984,31 @@ class FileShareView : public views::View, public ui::EventObserver {
     CloseToast(); composing_ = true; active_device_ = anchor;
     auto contents = std::make_unique<views::View>();
     auto* layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 12));
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), service_->IsQuickShare() ? 8 : 12));
     layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     if (!selected_) {
       address_ = contents->AddChildView(std::make_unique<views::Textfield>());
       address_->SetPreferredSize(gfx::Size(240, 36));
       address_->SetAccessibleName(Text(IDS_CRFILES_DEVICE_ADDRESS)); address_->SetPlaceholderText(u"192.168.1.2:59487"); address_->RemoveHoverEffect();
-    } else {
+    } else if (!service_->IsQuickShare()) {
       std::vector<ui::SimpleComboboxModel::Item> items; items.emplace_back(Text(IDS_CRFILES_RECEIVED));
       for (const auto& target : selected_->targets) items.emplace_back(base::UTF8ToUTF16(target.name));
       targets_ = contents->AddChildView(std::make_unique<views::Combobox>(std::make_unique<ui::SimpleComboboxModel>(std::move(items))));
       targets_->SetPreferredSize(gfx::Size(240, 36));
       targets_->SetAccessibleName(Text(IDS_CRFILES_HISTORY_DESTINATION)); targets_->SetSelectedIndex(0);
+    } else {
+      Label(contents.get(), Text(IDS_CRFILES_QUICK_SHARE_TO_DEVICE));
     }
     contents->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&FileShareView::Send, weak_.GetWeakPtr()), Text(IDS_CRFILES_HISTORY_SEND)));
     PresentToast(anchor->IconAnchor(), std::move(contents), false);
   }
   void Send() {
-    const auto state = service_->GetSnapshot(); if (state.busy || !composing_) return;
+    const auto state = service_->GetSnapshot(); if (state.busy || !composing_ ||
+        (service_->IsQuickShare() && !selection_ready_)) return;
     std::string target;
     const size_t index = targets_ ? targets_->GetSelectedIndex().value_or(0) : 0;
     if (selected_ && index > 0 && index <= selected_->targets.size()) target = selected_->targets[index - 1].id;
+    if (selected_ && selected_->ble_only) return;
     const bool sent = service_->Send(selected_ ? selected_->address : base::UTF16ToUTF8(address_->GetText()), paths_, {},
         selected_ ? selected_->phone : std::nullopt, target);
     send_error_ = !sent;
@@ -867,13 +1020,15 @@ class FileShareView : public views::View, public ui::EventObserver {
     const auto state = service_->GetSnapshot();
     if (dismiss_compose_) { dismiss_compose_ = false; CloseToast(); }
     using Stage = NearbySharing::Stage;
-    summary_container_->SetVisible(state.stage != Stage::kPairing);
+    // Keep the avatar anchor stationary while Quick Share auto-confirms.
+    summary_container_->SetVisible(service_->IsQuickShare() || state.stage != Stage::kPairing);
     if (state.receiving && (state.busy || paths_.empty())) {
       count_->SetText(Text(IDS_CRFILES_FILES) + u": " + (state.files.empty() ? std::u16string(u"—") : base::NumberToString16(state.files.size())));
       size_->SetText(Text(IDS_CRFILES_TOTAL_SIZE) + u": " + (state.files.empty() ? std::u16string(u"—") : ui::FormatBytes(base::ByteSize(state.total))));
     }
+    const bool transport_ready = service_->IsQuickShare() ? state.discovery_ready : state.port != 0;
     int message = !state.enabled ? IDS_CRFILES_NEARBY_OFF :
-        !state.port ? IDS_CRFILES_LOADING :
+        !transport_ready ? IDS_CRFILES_LOADING :
         !state.discovery_ready ? IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE :
         IDS_CRFILES_NEARBY_READY;
     if (state.status_message_id) message = state.status_message_id;
@@ -883,12 +1038,26 @@ class FileShareView : public views::View, public ui::EventObserver {
     else if (state.busy) message = IDS_CRFILES_TRANSFERRING;
     status_->SetText(Text(send_error_ && !state.busy ? IDS_CRFILES_SEND_ERROR : message));
     status_->SetVisible(message != IDS_CRFILES_NEARBY_READY || (send_error_ && !state.busy));
-    enable_->SetVisible(!state.enabled);
-    const bool can_send = state.enabled && state.port && !state.busy && !paths_.empty();
+    status_row_->SetVisible(status_->GetVisible());
+    std::u16string status_detail;
+    if (service_->IsQuickShare() && state.busy) {
+      status_detail = !state.receiving && state.stage != Stage::kTransferring ?
+          Text(IDS_CRFILES_QUICK_SHARE_WAIT_FOR_RECEIVER) :
+          ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
+    }
+    status_detail_->SetText(status_detail);
+    status_detail_->SetTooltipText(status_detail);
+    status_detail_->SetVisible(!status_detail.empty());
+    discovery_status_->SetVisible(state.discovery_message_id != 0 &&
+        (!service_->IsQuickShare() || state.discovery_message_id != IDS_CRFILES_QUICK_SHARE_BLE_HINT));
+    if (state.discovery_message_id) discovery_status_->SetText(Text(state.discovery_message_id));
+    enable_->SetVisible(!state.enabled && !service_->IsQuickShare());
+    const bool can_send = state.enabled && transport_ready && !state.busy && !paths_.empty() &&
+        (!service_->IsQuickShare() || selection_ready_);
     manual_->SetEnabled(can_send || (state.busy && active_device_ == manual_));
     const bool same_devices = std::ranges::equal(known_peers_, state.peers, [](const auto& left, const auto& right) {
       return left.id == right.id && left.address == right.address && left.name == right.name &&
-          left.avatar == right.avatar && left.phone.has_value() == right.phone.has_value();
+          left.avatar == right.avatar && left.device_type == right.device_type && left.bluetooth_address == right.bluetooth_address && left.ble_only == right.ble_only && left.phone.has_value() == right.phone.has_value();
     });
     if (!state.busy && !toast_widget_ && !same_devices) {
       active_device_ = nullptr;
@@ -899,9 +1068,26 @@ class FileShareView : public views::View, public ui::EventObserver {
           row = peers_->AddChildView(std::make_unique<views::View>());
           row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
         }
-        auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
+        auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareAvatar() : Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
+        if (service_->IsQuickShare()) button->SetDeviceType(QuickShareDeviceType(peer.device_type));
         button->SetTrusted(peer.trusted);
+        if (peer.ble_only) {
+          auto* hint = button->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_QUICK_SHARE_BLE_ONLY)));
+          hint->SetMaximumWidthSingleLine(112);
+
+          button->GetViewAccessibility().SetName(base::UTF8ToUTF16(peer.name) + u" · " +
+              QuickShareDeviceType(peer.device_type) + u" · " + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT));
+        }
+        auto tooltip = base::UTF8ToUTF16(peer.name);
+        if (service_->IsQuickShare()) tooltip += u"\n" + QuickShareDeviceType(peer.device_type);
+        if (!peer.bluetooth_address.empty()) tooltip += u"\n" + base::UTF8ToUTF16(peer.bluetooth_address);
+        if (peer.ble_only) tooltip += u"\n" + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT);
+        button->SetDeviceTooltip(std::move(tooltip));
         button->SetCallback(base::BindRepeating(&FileShareView::SelectPeer, weak_.GetWeakPtr(), base::Unretained(button), peer));
+        // Discovery is withdrawn during a transfer and returns with refreshed
+        // metadata. Rebind the result anchor to the live, clickable avatar.
+        if (service_->IsQuickShare() && selected_ && peer.id == selected_->id &&
+            peer.address == selected_->address && !peer.ble_only) active_device_ = button;
       }
     }
     // Refresh trust badges even while a toast pins the discovery buttons.
@@ -914,20 +1100,27 @@ class FileShareView : public views::View, public ui::EventObserver {
             peer.phone.has_value() == displayed.phone.has_value();
       });
       auto* button = static_cast<DeviceButton*>(child.get());
-      button->SetEnabled(can_send || (state.busy && button == active_device_));
+      button->SetEnabled((can_send && latest != state.peers.end() && !latest->ble_only) || (state.busy && button == active_device_));
       button->SetTrusted(state.busy && button == active_device_ && !state.code.empty() ? state.peer_trusted :
           latest != state.peers.end() && latest->trusted);
     }
 
-    const bool session = state.busy || (!composing_ && (state.stage == Stage::kComplete || state.stage == Stage::kError || state.stage == Stage::kCanceled));
+    const bool session = state.busy || (!composing_ &&
+        (!service_->IsQuickShare() || state.session != selection_session_) &&
+        (state.stage == Stage::kComplete || state.stage == Stage::kSent || state.stage == Stage::kError || state.stage == Stage::kCanceled));
     // A fallback session avatar replaces the discovery list; otherwise the
     // connected device can appear once in each of the two views.
     const bool fallback = session && (state.receiving || !active_device_) &&
-        (state.busy || toast_widget_ || shown_session_ != state.session || shown_stage_ != state.stage);
+        (service_->IsQuickShare() ? (state.busy || known_peers_.empty()) :
+         (state.busy || toast_widget_ || shown_session_ != state.session || shown_stage_ != state.stage));
     session_device_->SetVisible(fallback);
+    session_device_->SetEnabled(state.busy);
     peers_->SetVisible(!fallback);
     session_device_->SetTrusted(state.peer_trusted);
-    if (session) session_device_->SetIdentity(PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
+    if (session) {
+      session_device_->SetIdentity(service_->IsQuickShare() ? QuickShareAvatar() : PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
+      if (service_->IsQuickShare()) session_device_->SetDeviceType(QuickShareDeviceType(state.peer_device_type));
+    }
     // The direction is retained with completed/canceled/failed sessions.
     // An old receive result must not dismiss a newly composed outgoing offer.
     if (state.receiving && state.busy && toast_widget_) CloseToast();
@@ -935,20 +1128,30 @@ class FileShareView : public views::View, public ui::EventObserver {
     auto* transfer_target = fallback ? session_device_.get() : active_device_.get();
     if (active_device_ && active_device_ != transfer_target) active_device_->SetTransfer(false, false, 0);
     if (session_device_ != transfer_target) session_device_->SetTransfer(false, false, 0);
+    std::u16string transfer_detail;
+    if (service_->IsQuickShare() && state.busy && !state.receiving) {
+      const auto filename = base::UTF8ToUTF16(state.current_file.empty() ?
+          (state.files.empty() ? std::string() : state.files.front()) : state.current_file);
+      transfer_detail = filename.empty() ? std::u16string() : filename + u"\n";
+      transfer_detail += TransferProgressText(state, true);
+    }
     if (transfer_target) transfer_target->SetTransfer(state.busy,
         state.stage != Stage::kTransferring || state.total == 0,
         state.total ? static_cast<double>(state.transferred) / state.total : 0,
-        base::BindRepeating(&FileShareView::Cancel, weak_.GetWeakPtr(), state.session));
+        base::BindRepeating(&FileShareView::Cancel, weak_.GetWeakPtr(), state.session), std::move(transfer_detail));
   }
 
-  std::shared_ptr<NearbySharing> service_;
+  std::shared_ptr<ShareService> service_;
   std::vector<base::FilePath> paths_;
   std::vector<NearbySharing::Peer> known_peers_;
   std::optional<NearbySharing::Peer> selected_;
+  bool selection_ready_ = false;
   bool send_error_ = false;
   bool dismiss_compose_ = false;
   raw_ptr<views::View> peers_ = nullptr, summary_container_ = nullptr;
-  raw_ptr<views::Label> count_ = nullptr, size_ = nullptr, status_ = nullptr;
+  raw_ptr<views::Label> count_ = nullptr, size_ = nullptr, status_ = nullptr, discovery_status_ = nullptr;
+  raw_ptr<views::View> status_row_ = nullptr;
+  raw_ptr<views::Label> status_detail_ = nullptr;
   raw_ptr<views::Textfield> address_ = nullptr;
   raw_ptr<views::Combobox> targets_ = nullptr;
   raw_ptr<views::MdTextButton> enable_ = nullptr;
@@ -958,6 +1161,7 @@ class FileShareView : public views::View, public ui::EventObserver {
   std::unique_ptr<views::EventMonitor> compose_monitor_;
   uint64_t summary_generation_ = 0;
   uint64_t shown_session_ = 0;
+  uint64_t selection_session_ = 0;
   uint64_t compose_request_ = 0;
   NearbySharing::Stage shown_stage_ = NearbySharing::Stage::kOff;
   bool toast_prompt_ = false, composing_ = false;
@@ -968,7 +1172,7 @@ BEGIN_METADATA(FileShareView)
 END_METADATA
 }
 std::unique_ptr<ShareSessionToast> CreateShareSessionToast(views::Widget* owner,
-    std::shared_ptr<NearbySharing> service,
+    std::shared_ptr<ShareService> service,
     base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor) {
   return std::make_unique<ShareSessionToastImpl>(owner, std::move(service), std::move(anchor));
 }
@@ -976,7 +1180,7 @@ std::optional<gfx::Rect> FileShareSessionBounds(views::View* view) {
   return view ? static_cast<FileShareView*>(view)->SessionBounds() : std::nullopt;
 }
 views::View* ShowTrustedDevicesDialog(views::Widget* parent,
-                                      std::shared_ptr<NearbySharing> service) {
+                                      std::shared_ptr<ShareService> service) {
   if (!parent) return nullptr;
   auto contents = std::make_unique<TrustedDevicesView>(std::move(service));
   auto* result = contents.get();
@@ -1023,14 +1227,15 @@ views::View* ShowSharingFoldersDialog(views::Widget* parent,
 void SetFileShareSelection(views::View* view, std::vector<base::FilePath> paths) {
   static_cast<FileShareView*>(view)->SetSelection(std::move(paths));
 }
-views::View* ShowFileShareDialog(views::Widget* parent, std::shared_ptr<NearbySharing> service, std::vector<base::FilePath> paths) {
+views::View* ShowFileShareDialog(views::Widget* parent, std::shared_ptr<ShareService> service, std::vector<base::FilePath> paths) {
   if (!parent || !service) return nullptr;
   auto scroll = std::make_unique<views::ScrollView>();
   scroll->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
   scroll->SetUseContentsPreferredSize(true); scroll->ClipHeightTo(300, 600);
+  const bool quick_share = service->IsQuickShare();
   auto* contents = scroll->SetContents(std::make_unique<FileShareView>(std::move(service), std::move(paths)));
   auto dialog = std::make_unique<views::DialogDelegate>();
-  dialog->set_fixed_width(580); dialog->SetTitle(Text(IDS_CRFILES_SHARE_TO));
+  dialog->set_fixed_width(580); dialog->SetTitle(Text(quick_share ? IDS_CRFILES_QUICK_SHARE : IDS_CRFILES_SHARE_TO));
   dialog->SetModalType(ui::mojom::ModalType::kWindow);
   dialog->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone)); dialog->SetShowCloseButton(true);
   dialog->SetContentsView(std::move(scroll));

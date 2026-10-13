@@ -29,6 +29,7 @@
 #include <memory>
 #include <string_view>
 #include <vector>
+#include <utility>
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/process/kill.h"
@@ -519,7 +520,11 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     navigation->SetBackground(views::CreateSolidBackground(ui::kColorSysSurface2));
     navigation->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(18, 14), 6));
-    constexpr std::array titles = {IDS_CRFILES_GENERAL, IDS_CRFILES_INTERFACE, IDS_CRFILES_NEARBY_SETTINGS, IDS_CRFILES_HISTORY, IDS_CRFILES_ABOUT};
+    constexpr std::array titles = {IDS_CRFILES_GENERAL, IDS_CRFILES_INTERFACE, IDS_CRFILES_NEARBY_SETTINGS,
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+        IDS_CRFILES_QUICK_SHARE,
+#endif
+        IDS_CRFILES_HISTORY, IDS_CRFILES_ABOUT};
     for (size_t i = 0; i < titles.size(); ++i)
       navigation_[i] = navigation->AddChildView(std::make_unique<NavigationButton>(
           base::BindRepeating(&Settings::SelectPage, base::Unretained(this), i), Text(titles[i])));
@@ -537,9 +542,12 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     pages_[0] = host->AddChildView(GeneralPage());
     pages_[1] = host->AddChildView(InterfacePage());
     pages_[2] = host->AddChildView(NearbyPage());
-    pages_[3] = host->AddChildView(HistoryPage());
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    pages_[3] = host->AddChildView(QuickSharePage());
+#endif
+    pages_[pages_.size() - 2] = host->AddChildView(HistoryPage());
     auto about = Page(IDS_CRFILES_ABOUT); about->AddChildView(AboutBody(false));
-    pages_[4] = host->AddChildView(std::move(about));
+    pages_[pages_.size() - 1] = host->AddChildView(std::move(about));
     scroll->SetContents(std::move(host));
     auto* footer = right->AddChildView(std::make_unique<views::View>());
     footer->SetPreferredSize(gfx::Size(0, 52));
@@ -581,6 +589,10 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     apply_ = nullptr;
     avatar_button_ = nullptr;
     folder_ = nullptr;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    quick_name_ = nullptr; quick_directory_ = nullptr; quick_enabled_ = nullptr;
+    quick_apply_ = nullptr; quick_folder_ = nullptr;
+#endif
     views::DialogDelegate::WindowClosing();
   }
   void OnViewIsDeleting(views::View*) override {
@@ -751,7 +763,46 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     auto_accept_->SetMultiLine(true);
     return page;
   }
-  views::Textfield* SharingField(views::View* page, int id, std::u16string value) {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  std::unique_ptr<views::View> QuickSharePage() {
+    auto apply = std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&Settings::ApplyQuickShare, base::Unretained(this)), Text(IDS_CRFILES_APPLY));
+    quick_apply_ = apply.get();
+    auto page = Page(IDS_CRFILES_QUICK_SHARE, std::move(apply));
+    const auto prefs = GetQuickSharePreferences();
+    quick_enabled_ = page->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_QUICK_SHARE_ENABLE)));
+    quick_enabled_->SetChecked(prefs.enabled);
+    Label(page.get(), Text(IDS_CRFILES_QUICK_SHARE_RECEIVE_HINT));
+    quick_name_ = SharingField(page.get(), IDS_CRFILES_DEVICE_NAME, base::UTF8ToUTF16(prefs.name));
+    quick_directory_ = SharingField(page.get(), IDS_CRFILES_RECEIVE_DIRECTORY,
+        prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory().AsUTF16Unsafe() : base::UTF8ToUTF16(prefs.directory), true);
+    return page;
+  }
+  void BrowseQuickFolder() {
+    if (closing_ || folder_dialog_ || IsCrFilesQuickShareBusy()) return;
+    choosing_quick_folder_ = true; choosing_avatar_ = false;
+    folder_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+    folder_dialog_->SelectFile(ui::SelectFileDialog::SELECT_FOLDER, Text(IDS_CRFILES_RECEIVE_DIRECTORY),
+        base::FilePath::FromUTF16Unsafe(quick_directory_->GetText()), nullptr, 0, {}, GetWidget()->GetNativeWindow(), nullptr);
+  }
+  void ApplyQuickShare() {
+    if (closing_ || IsCrFilesQuickShareBusy()) return;
+    QuickSharePreferences prefs;
+    prefs.enabled = quick_enabled_->GetChecked();
+    prefs.name = base::UTF16ToUTF8(quick_name_->GetText());
+    prefs.directory = base::UTF16ToUTF8(quick_directory_->GetText());
+    const auto directory = base::FilePath::FromUTF8Unsafe(prefs.directory);
+    if (!NearbySharing::IsValidConfiguration(prefs.name, directory)) { error_->SetVisible(true); return; }
+    EnsureDirectoryAccess(GetWidget(), directory, true, base::BindOnce(
+        [](base::WeakPtr<Settings> view, QuickSharePreferences preferences, bool allowed) {
+          if (!view || view->closing_) return;
+          const bool valid = allowed && !IsCrFilesQuickShareBusy() && SetQuickSharePreferences(preferences);
+          view->error_->SetVisible(!valid);
+          if (valid) view->RefreshSharing();
+        }, weak_.GetWeakPtr(), std::move(prefs)));
+  }
+#endif
+  views::Textfield* SharingField(views::View* page, int id, std::u16string value, [[maybe_unused]] bool quick_share = false) {
     auto* row = page->AddChildView(std::make_unique<views::View>());
     auto* layout = row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 12));
     layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
@@ -769,7 +820,16 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
       input->SetBorder(views::CreateRoundedRectBorder(1, 8, ui::kColorSysNeutralOutline));
       input->SetBackground(views::CreateRoundedRectBackground(ui::kColorTextfieldBackground, 8));
       field->SetBorder(views::CreateEmptyBorder(gfx::Insets(8))); field->SetBackgroundEnabled(false);
-      folder_ = input->AddChildView(views::ImageButton::CreateIconButton(base::BindRepeating(&Settings::BrowseFolder, base::Unretained(this)), vector_icons::kFolderFilledIcon, Text(IDS_CRFILES_RECEIVE_DIRECTORY)));
+      auto browse = base::BindRepeating(&Settings::BrowseFolder, base::Unretained(this));
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+      if (quick_share) browse = base::BindRepeating(&Settings::BrowseQuickFolder, base::Unretained(this));
+#endif
+      auto* button = input->AddChildView(views::ImageButton::CreateIconButton(std::move(browse), vector_icons::kFolderFilledIcon, Text(IDS_CRFILES_RECEIVE_DIRECTORY)));
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+      if (quick_share) quick_folder_ = button;
+      else
+#endif
+        folder_ = button;
     }
     return field;
   }
@@ -889,7 +949,14 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   void FileSelected(const ui::SelectedFileInfo& file, int) override {
     RememberFileAccess(file.path());
     folder_dialog_.reset();
-    if (closing_ || IsCrFilesSharingBusy()) return;
+    if (closing_) return;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    if (std::exchange(choosing_quick_folder_, false)) {
+      if (IsCrFilesQuickShareBusy()) return;
+      quick_directory_->SetText(file.path().AsUTF16Unsafe()); error_->SetVisible(false); RefreshSharing(); return;
+    }
+#endif
+    if (IsCrFilesSharingBusy()) return;
     if (choosing_avatar_) {
       choosing_avatar_ = false; CancelAvatarDecode();
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
@@ -899,7 +966,12 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     }
     directory_->SetText(file.path().AsUTF16Unsafe()); error_->SetVisible(false); RefreshSharing();
   }
-  void FileSelectionCanceled() override { folder_dialog_.reset(); choosing_avatar_ = false; }
+  void FileSelectionCanceled() override {
+    folder_dialog_.reset(); choosing_avatar_ = false;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    choosing_quick_folder_ = false;
+#endif
+  }
   void AvatarDecoded(uint64_t generation, gfx::ImageSkia image) {
     if (closing_ || generation != avatar_decode_generation_ || IsCrFilesSharingBusy()) return;
     if (!image.isNull()) {
@@ -915,6 +987,16 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   }
   void RefreshSharing() {
     if (closing_ || !contents_observation_.IsObserving()) return;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    const bool quick_idle = !IsCrFilesQuickShareBusy();
+    quick_enabled_->SetEnabled(quick_idle);
+    quick_name_->SetEnabled(quick_idle); quick_directory_->SetEnabled(quick_idle);
+    quick_folder_->SetEnabled(quick_idle && !folder_dialog_);
+    const auto quick = GetQuickSharePreferences();
+    const auto quick_directory = quick.directory.empty() ? NearbySharing::DefaultReceiveDirectory().AsUTF8Unsafe() : quick.directory;
+    quick_apply_->SetEnabled(quick_idle && (quick.enabled != quick_enabled_->GetChecked() ||
+        quick.name != base::UTF16ToUTF8(quick_name_->GetText()) || quick_directory != base::UTF16ToUTF8(quick_directory_->GetText())));
+#endif
     const bool enabled = !IsCrFilesSharingBusy();
     if (!enabled && avatar_widget_ && avatar_widget_->IsVisible()) avatar_widget_->Close();
     for (auto* field : {name_.get(), directory_.get()}) field->SetEnabled(enabled);
@@ -990,8 +1072,18 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     for (size_t i = 0; i < pages_.size(); ++i) { pages_[i]->SetVisible(i == page); navigation_[i]->Select(i == page); }
   }
   void Close() { StopSharingUpdates(); CloseAvatars(); GetWidget()->Close(); }
-  std::array<raw_ptr<views::View>, 5> pages_ = {};
-  std::array<raw_ptr<NavigationButton>, 5> navigation_ = {};
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  static constexpr size_t kPageCount = 6;
+  raw_ptr<views::Textfield> quick_name_ = nullptr, quick_directory_ = nullptr;
+  raw_ptr<views::Checkbox> quick_enabled_ = nullptr;
+  raw_ptr<views::MdTextButton> quick_apply_ = nullptr;
+  raw_ptr<views::ImageButton> quick_folder_ = nullptr;
+  bool choosing_quick_folder_ = false;
+#else
+  static constexpr size_t kPageCount = 5;
+#endif
+  std::array<raw_ptr<views::View>, kPageCount> pages_ = {};
+  std::array<raw_ptr<NavigationButton>, kPageCount> navigation_ = {};
   std::array<raw_ptr<views::RadioButton>, 3> navigation_styles_ = {};
   std::array<raw_ptr<views::Checkbox>, 6> checks_ = {};
   std::vector<raw_ptr<libcr::ThemeToggleButton>> themes_;

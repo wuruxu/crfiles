@@ -17,6 +17,14 @@ struct NearbySharingPreferences {
   bool discovery_enabled = true;
   std::string custom_avatar;
 };
+struct QuickSharePreferences {
+  bool enabled = true;
+  std::string name = "crFiles";
+  std::string directory;
+  bool operator==(const QuickSharePreferences&) const = default;
+};
+QuickSharePreferences GetQuickSharePreferences();
+bool SetQuickSharePreferences(const QuickSharePreferences& preferences);
 inline constexpr std::array<const char*, 6> kHistoryActions = {"move", "trash", "access", "open_file", "send", "receive"};
 inline constexpr std::array<int, 4> kHistoryRetentionDays = {7, 30, 90, 365};
 // Value 1 replaces the former capsule style, preserving saved selections.

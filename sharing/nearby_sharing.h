@@ -17,95 +17,18 @@
 #include "base/time/time.h"
 #include "crFiles/sharing/connect_discovery.h"
 #include "ui/gfx/image/image_skia.h"
+#include "crFiles/sharing/share_service.h"
 
 namespace crfiles {
 
 // No network activity until Enable(). The worker never calls Views directly.
 // Discovery is only an untrusted address hint, never an authorization decision.
-class NearbySharing {
+class NearbySharing : public ShareService {
  public:
-  static constexpr int kAvatarCount = 9;
-  // Blocking interface enumeration; call on a worker. Matches Connect's policy.
-  enum class InterfaceType { kOther, kWifi, kEthernet };
-  struct LocalAddress {
-    std::string address;
-    InterfaceType type = InterfaceType::kOther;
-  };
   static std::vector<LocalAddress> GetLocalIPv4Addresses();
-  enum class Stage {
-    kOff, kStarting, kReady, kConnecting, kPairing, kWaiting,
-    kReceivingOffer, kTransferring, kComplete, kCanceled, kError,
-    kReceivingConflict,
-  };
-  struct SharedTarget {
-    std::string id;
-    std::string name;
-    base::FilePath directory;  // Local only; never sent to another device.
-    bool operator==(const SharedTarget&) const = default;
-  };
-  struct Peer {
-    std::string id;
-    std::string name;
-    std::string address;
-    int avatar = 0;
-    uint16_t identity_port = 0;
-    std::string verified_fingerprint = {};
-    base::TimeTicks identity_expires;
-    bool trusted = false;
-    // Present only on display snapshots. Route explicitly to HTTPS; never use
-    // this address with the desktop framed TLS protocol.
-    std::optional<ConnectPeer> phone = {};
-    bool folder_transfer = false;
-    std::vector<SharedTarget> targets = {};
-    bool operator==(const Peer&) const = default;
-  };
-  struct TrustedDevice {
-    std::string fingerprint;
-    std::string name;
-    int avatar = 0;
-    base::Time trusted_at;
-    base::Time last_active;
-    uint64_t sent_bytes = 0;
-    uint64_t received_bytes = 0;
-    bool operator==(const TrustedDevice&) const = default;
-  };
-  struct Snapshot {
-    bool enabled = false;
-    bool discovery_ready = false;
-    bool busy = false;
-    bool receiving = false;
-    bool trust_error = false;
-    Stage stage = Stage::kOff;
-    int status_message_id = 0;
-    uint64_t session = 0;
-    uint64_t conflict_id = 0;
-    base::TimeTicks started_at;
-    base::TimeTicks finished_at;
-    std::string code;
-    std::string device_name;
-    int avatar = 0;
-    std::string receive_target;
-    std::string receive_target_name;
-    std::string peer_name;
-    int peer_avatar = 0;
-    bool peer_trusted = false;
-    std::string peer_custom_avatar;
-    size_t skipped_files = 0;
-    std::vector<std::string> files;
-    std::string current_file;  // Last transfer entry, retained with the result.
-    std::map<base::FilePath, gfx::ImageSkia> previews;
-    uint64_t transferred = 0;
-    uint64_t total = 0;
-    base::FilePath receive_directory;
-    base::FilePath batch_directory;
-    std::vector<Peer> peers;
-    // Raw HTTPS discovery records for Connect sync and the combined device UI.
-    std::vector<ConnectPeer> connect_peers;
-    uint16_t port = 0;
-  };
 
   NearbySharing();
-  ~NearbySharing();
+  ~NearbySharing() override;
   NearbySharing(const NearbySharing&) = delete;
   NearbySharing& operator=(const NearbySharing&) = delete;
 
@@ -116,21 +39,21 @@ class NearbySharing {
               int avatar = 0);
   void Disable();
   void SetSharedTargets(std::vector<SharedTarget> targets);
-  Snapshot GetSnapshot() const;
-  std::vector<TrustedDevice> GetTrustedDevices() const;
-  void ForgetTrustedDevice(std::string fingerprint);
+  Snapshot GetSnapshot() const override;
+  std::vector<TrustedDevice> GetTrustedDevices() const override;
+  void ForgetTrustedDevice(std::string fingerprint) override;
   bool Send(std::string address, std::vector<base::FilePath> paths,
             std::map<base::FilePath, gfx::ImageSkia> previews = {},
             std::optional<ConnectPeer> phone = std::nullopt,
-            std::string target_id = {});
+            std::string target_id = {}) override;
   // Decisions are scoped to a prompt and session, so stale buttons cannot
   // approve a subsequent connection or a different consent step. Replacement
   // prompts also require the matching conflict_id for that particular entry.
   void Decide(uint64_t session, Stage prompt, bool accept, bool trust = false,
-              uint64_t conflict_id = 0);
+              uint64_t conflict_id = 0) override;
   void Cancel();
   // Ignore cancellation from a UI displaying a different transfer.
-  void CancelSession(uint64_t session);
+  void CancelSession(uint64_t session) override;
 
   struct State;
   struct TrustStore;

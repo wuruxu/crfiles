@@ -39,6 +39,10 @@
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_LINUX)
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/bluetooth/dbus/dbus_bluez_manager_wrapper_linux.h"
+#endif
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_search.h"
@@ -270,6 +274,13 @@ int RunApplication() {
   base::ScopedClosureRunner thread_pool_shutdown(base::BindOnce([] {
     base::ThreadPoolInstance::Get()->Shutdown();
   }));
+#if BUILDFLAG(IS_LINUX)
+  bluez::DBusBluezManagerWrapperLinux::Initialize();
+  base::ScopedClosureRunner bluetooth_shutdown(base::BindOnce([] {
+    device::BluetoothAdapterFactory::Shutdown();
+    bluez::DBusBluezManagerWrapperLinux::Shutdown();
+  }));
+#endif
   auto discardable_memory_manager =
       std::make_unique<discardable_memory::DiscardableSharedMemoryManager>();
   base::DiscardableMemoryAllocator::SetInstance(

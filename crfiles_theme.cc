@@ -168,6 +168,23 @@ bool SetNearbySharingPreferences(const NearbySharingPreferences& p) {
   if (Save()) return true;
   Settings() = std::move(previous); return false;
 }
+QuickSharePreferences GetQuickSharePreferences() {
+  base::AutoLock lock(SettingsLock());
+  QuickSharePreferences p;
+  p.enabled = Settings().FindBool("quick_share_enabled").value_or(true);
+  if (const auto* name = Settings().FindString("quick_share_name")) p.name = *name;
+  if (const auto* directory = Settings().FindString("quick_share_directory")) p.directory = *directory;
+  return p;
+}
+bool SetQuickSharePreferences(const QuickSharePreferences& p) {
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().Clone();
+  Settings().Set("quick_share_enabled", p.enabled);
+  Settings().Set("quick_share_name", p.name);
+  Settings().Set("quick_share_directory", p.directory);
+  if (Save()) return true;
+  Settings() = std::move(previous); return false;
+}
 NavigationStyle GetNavigationStyle() {
   base::AutoLock lock(SettingsLock());
   const int style = Settings().FindInt("navigation_style").value_or(0);

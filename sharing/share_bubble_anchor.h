@@ -5,15 +5,18 @@
 
 #include <optional>
 
+#include "base/memory/weak_ptr.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/bubble/bubble_border.h"
 
+namespace views { class Widget; }
 namespace crfiles {
 struct ShareBubbleAnchor {
   gfx::Rect bounds;
   views::BubbleBorder::Arrow arrow = views::BubbleBorder::BOTTOM_RIGHT;
   bool background = false;
   bool show_arrow = true;
+  base::WeakPtr<views::Widget> widget = {};
 };
 // All rectangles use Chromium screen DIPs, including negative display origins.
 // When the icon is unavailable, use the work-area edge without a false arrow.

@@ -288,6 +288,84 @@ controls, menu, SVG renderer, themes and Viz compositor.
 | F11 | Toggle fullscreen |
 | A–Z in a focused folder view | Select the next file or folder starting with that letter; press again to continue, wrapping at the end |
 
+## Android Quick Share (Linux, Windows and macOS)
+
+Right-click selected files and choose **Quick Share**, directly below **Share to**.
+The dialog reuses crFiles' device list, code comparison, progress and cancellation
+UI, with a separate service backed by `//crQuickShare:protocol`. It does not launch
+the standalone crQuickShare application. The existing Share to transport remains
+available independently.
+
+Use the same LAN as the Android device. On Linux, opening this dialog requests BLE Fast
+Initiation advertising to wake compatible receivers; Bluetooth being unavailable
+does not prevent LAN discovery. If a device does not appear, open its Quick Share
+receive screen. The dialog also scans BLE independently of LAN availability.
+BLE-only devices remain hidden until LAN discovery supplies a usable address. Unnamed advertisements
+use the same BLE address's BlueZ name as a display fallback, then a localized generic name.
+Advertising and scanning stop during transfers and when the dialog is destroyed.
+Windows and macOS use LAN discovery and transport only; BLE remains Linux-only.
+Their backends are implemented but compilation and device interoperability are
+not yet verified. Windows currently requires local disk paths without reparse
+points; UNC paths are unsupported. The standalone crQuickShare app remains Linux-only.
+
+BLE discovery currently supports FEF3 medium V1/V2 fast advertisements and complete
+regular advertisements carried directly in service data, containing a V1 point-to-point
+connection advertisement and a valid sharing endpoint. Regular advertisements must
+match the NearbySharing service hash at both layers. FE2C wakeup advertisements,
+UUID-only records and DCT are not listed as receivers. V2 GATT headers (raw or
+base64url) matching the NearbySharing bloom filter trigger serial FEF3 advertisement
+slot reads. Only validated service hashes and endpoint metadata become device entries.
+Each resolution has a 15-second deadline, up to 15 slots, a one-second global cooldown
+and 30/60-second per-device failure/success retry intervals. Closing discovery releases
+our GATT reference; stale callbacks are discarded. Anonymous fast advertisements
+without a GATT header do not trigger speculative connections. BLE discovery still
+does not provide cross-network file transport or guarantee a public device name.
+Records expire after 120 seconds without an update; at most 128 Bluetooth addresses
+are retained. Address changes are deduplicated only with matching endpoint IDs and
+salt and metadata-key hash, ignoring only the public-name flag in the header. LAN matching uses the same fields, never just names;
+this association is a display hint, not authorization. Scanning never powers on the
+adapter or requests pairing. GATT access only reads advertisement slots. Association diagnostics include Bluetooth addresses and endpoint IDs,
+but not names, key material or raw advertisement contents.
+Compare the full code on both devices before confirming; no Google login or trusted
+device bypass is used. Closing the dialog preserves an active transfer; use Cancel
+in the session bubble to stop it. Confirmation and cancellation are session-scoped.
+
+This integration sends files and recursively selected folders using Quick Share's
+`parent_folder` fields, with a local limit of 100 files after traversal. Empty
+folders are omitted; an empty-only selection is rejected. No ZIP conversion is
+used. Receiving restores validated relative paths inside an isolated batch,
+rejects file/directory conflicts and symbolic links, and renames duplicate files
+within the same folder. Android chooses its own receiving directory and may
+handle folder structure differently; Pixel and LineageOS interoperability needs
+device validation. Unacknowledged delivery is shown separately from confirmed
+completion. Wi-Fi Direct and Windows/macOS integration are not included. Linux links both protocol and BLE source targets;
+other platforms do not link those targets or display the menu entry.
+
+**Settings → Quick Share** provides an independent enable switch (on by default),
+device name and an integrated receive-directory field with a folder picker. Changes
+are saved with Apply. The default directory is `~/Downloads/crFiles Received` on Linux.
+Reception starts with the main window, without opening the sender dialog, and remains
+available while crFiles is running. The standalone application's ten-minute receive
+mode is unchanged. Disabling Quick Share shuts down its service and discovery.
+
+Incoming files use the existing confirmation and progress bubbles. Each transfer
+requires comparing the code and accepting; the prompt includes file count, size and
+save directory. Files are committed into a unique `Transfer-*` subdirectory without
+overwriting existing files. The completed bubble's Open action opens that directory
+in crFiles, and visible panes showing the destination refresh. URLs and other non-file
+attachments remain unsupported. Settings are locked during transfers; backend replacement
+waits for idle admission to close, and old session callbacks cannot approve a new session.
+
+Manual reception checks: start crFiles without opening Share, send files from Android,
+accept/reject/cancel, verify contents and Open, then change the name and directory.
+Disable Quick Share, restart crFiles, verify it stays off, then re-enable it. Check
+that configuration remains disabled during transfers and original Share to still works.
+
+Manual verification after building: send a single file and multiple files to
+Android; compare codes and verify content; decline or cancel, then send again;
+close and reopen the dialog during a transfer; select a folder; and repeat discovery
+with Bluetooth unavailable. These checks require a real Android receiver.
+
 ## Nearby sharing
 
 Open Nearby devices and enable nearby sharing, or configure it in Settings.
@@ -1143,3 +1221,5 @@ rebuild and can also rebuild tools sharing those implementation targets.
 Subsequent edits to business sources or VERSION do not themselves rebuild the
 engine. Actual compilation, linking and runtime validation are still required;
 GN checks only verify the declared build graph.
+
+Quick Share progress uses the current payload filename and introduction index, per-file and total bytes, and completed payload count (including empty files). Transfer speed and remaining time use a recent sampling window that excludes pairing and confirmation. Sent bytes are transport writes, not delivery receipts; received payload completion does not replace the final batch commit.

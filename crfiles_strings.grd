@@ -44,6 +44,7 @@
       <include name="IDR_CRFILES_AVATAR_6" file="../chrome/app/theme/default_200_percent/common/profile_avatar_soccer.png" type="BINDATA" />
       <include name="IDR_CRFILES_AVATAR_7" file="../chrome/app/theme/default_200_percent/common/profile_avatar_ninja.png" type="BINDATA" />
       <include name="IDR_CRFILES_AVATAR_8" file="../chrome/app/theme/default_200_percent/common/profile_avatar_sun_cloud.png" type="BINDATA" />
+      <include name="IDR_CRFILES_QUICK_SHARE_ICON" file="resources/quick_share.svg" type="BINDATA" />
     </includes>
     <messages first_id="31000" fallback_to_english="true">
       <message name="IDS_CRFILES_ABOUT" desc="crFiles file manager interface.">About</message>
@@ -332,6 +333,41 @@
       <message name="IDS_CRFILES_DISPLAY_SCALE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Scale factor</message>
       <message name="IDS_CRFILES_DISPLAY_WINDOW_SIZE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">About window size</message>
       <message name="IDS_CRFILES_DISPLAY_REFRESH_RATE" desc="Display diagnostics for the window containing About. Sizes show their units, and refresh rates are reported values, not measured FPS.">Display-reported refresh rate</message>
-    </messages>
+      <message name="IDS_CRFILES_QUICK_SHARE" desc="Quick Share file sending.">Quick Share</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_HINT" desc="Quick Share file sending.">Use the same network and open Quick Share reception on your Android device if it does not appear.</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_UNCONFIRMED" desc="Quick Share file sending.">Files sent. The device did not confirm delivery; check the received files on the device.</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_REJECTED" desc="Quick Share file sending.">Transfer declined.</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_TIMEOUT" desc="Quick Share file sending.">Transfer timed out. Check the connection and try again.</message>
+    <message name="IDS_CRFILES_QUICK_SHARE_BLE_DEVICE" desc="Bluetooth discovery status; discovery does not authorize transfers.">Nearby Quick Share device</message>
+<message name="IDS_CRFILES_QUICK_SHARE_BLE_ONLY" desc="Bluetooth discovery status; discovery does not authorize transfers.">Bluetooth only</message>
+<message name="IDS_CRFILES_QUICK_SHARE_BLE_HINT" desc="Bluetooth discovery status; discovery does not authorize transfers.">Discovered via Bluetooth. Join the same network to send files.</message>
+<message name="IDS_CRFILES_QUICK_SHARE_BLE_SCANNING" desc="Bluetooth discovery status; discovery does not authorize transfers.">Scanning for nearby Quick Share devices via Bluetooth.</message>
+<message name="IDS_CRFILES_QUICK_SHARE_BLE_UNAVAILABLE" desc="Bluetooth discovery status; discovery does not authorize transfers.">Bluetooth discovery is unavailable. LAN discovery remains available when connected to a network.</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_ENABLE" desc="Quick Share reception settings.">Enable Quick Share</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_RECEIVE_HINT" desc="Quick Share reception settings.">Receive files from nearby devices on the same network while crFiles is running. Confirm the code before accepting each transfer.</message>
+      <message name="IDS_CRFILES_QUICK_SHARE_OFF" desc="Quick Share reception settings.">Quick Share is off. Enable it in Settings.</message>
+      <message name="IDS_CRFILES_QS_TYPE_UNKNOWN" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Unknown device</message>
+      <message name="IDS_CRFILES_QS_TYPE_PHONE" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Phone</message>
+      <message name="IDS_CRFILES_QS_TYPE_TABLET" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Tablet</message>
+      <message name="IDS_CRFILES_QS_TYPE_LAPTOP" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Laptop</message>
+      <message name="IDS_CRFILES_QS_TYPE_CAR" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Car</message>
+      <message name="IDS_CRFILES_QS_TYPE_FOLDABLE" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Foldable device</message>
+      <message name="IDS_CRFILES_QS_TYPE_XR" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">XR device</message>
+      <message name="IDS_CRFILES_QS_ERROR_CONNECTION" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">Could not connect to the device.</message>
+      <message name="IDS_CRFILES_QS_ERROR_NETWORK" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">The connection was interrupted.</message>
+      <message name="IDS_CRFILES_QS_ERROR_STORAGE" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">Storage is unavailable or full.</message>
+      <message name="IDS_CRFILES_QS_ERROR_SOURCE" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">The source file could not be read.</message>
+      <message name="IDS_CRFILES_QS_ERROR_UNSUPPORTED" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">This sharing request is not supported.</message>
+      <message name="IDS_CRFILES_QS_ERROR_PROTOCOL" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">The devices could not complete the sharing protocol.</message>
+      <message name="IDS_CRFILES_QS_COPY_DIAGNOSTIC" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">Copy diagnostics</message>
+    <message name="IDS_CRFILES_QS_PROGRESS_FILE" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">File</message>
+<message name="IDS_CRFILES_QS_PROGRESS_FINISHED" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">Files transferred</message>
+<message name="IDS_CRFILES_QS_PROGRESS_SPEED" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">Transfer speed</message>
+<message name="IDS_CRFILES_QS_PROGRESS_REMAINING" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">Time remaining (min:sec)</message>
+<message name="IDS_CRFILES_QUICK_SHARE_FOLDER_HINT" desc="Quick Share directory selection and protocol limitations.">Send files with their folder structure. Empty folders are skipped. Up to 100 files per transfer, including files inside folders. The receiver may handle folders differently.</message>
+<message name="IDS_CRFILES_QUICK_SHARE_TO_DEVICE" desc="Label to the left of the Send button in the Quick Share device popover.">Share to this device</message>
+<message name="IDS_CRFILES_QUICK_SHARE_COMPARE_CODE" desc="Quick Share label immediately followed by the verification code in bold.">Compare the code</message>
+<message name="IDS_CRFILES_QUICK_SHARE_WAIT_FOR_RECEIVER" desc="Status next to Transfer progress while waiting for the other device to accept Quick Share files.">Waiting for the other device to accept</message>
+</messages>
   </release>
 </grit>

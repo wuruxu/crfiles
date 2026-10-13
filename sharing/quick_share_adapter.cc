@@ -1,0 +1,217 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license.
+#include "crFiles/sharing/quick_share_adapter.h"
+#include <algorithm>
+#include <utility>
+#include "base/strings/string_number_conversions.h"
+#include "base/timer/timer.h"
+#include "crFiles/crfiles_theme.h"
+#include "crFiles/sharing/nearby_sharing.h"
+#include "crFiles/grit/crfiles_strings.h"
+#include "build/build_config.h"
+#if BUILDFLAG(IS_LINUX)
+#include "crQuickShare/ble_wakeup.h"
+#include "crQuickShare/ble_discovery.h"
+#endif
+#include "ui/base/l10n/l10n_util.h"
+#include "crQuickShare/quick_share_service.h"
+namespace crfiles {
+namespace {
+std::string PeerKey(const crquickshare::Peer& peer) {
+  if (peer.ble_only) return "ble:" + base::HexEncode(peer.id) + ":" + base::HexEncode(peer.endpoint_info);
+  return peer.id + "@" + peer.address + ":" + base::NumberToString(peer.port);
+}
+class QuickShareAdapter final : public ShareService {
+ public:
+  QuickShareAdapter() {
+    UpdateWakeup();
+    timer_.Start(FROM_HERE, base::Milliseconds(250), this, &QuickShareAdapter::UpdateWakeup);
+  }
+  ~QuickShareAdapter() override {
+    timer_.Stop();
+#if BUILDFLAG(IS_LINUX)
+    discovery_.Update(false); wakeup_.Update(false);
+#endif
+  }
+  bool IsQuickShare() const override { return true; }
+  void SetDiscoveryActive(bool active) override {
+    discovery_active_ = active;
+    if (active && service_) service_->RefreshDiscovery();
+    UpdateWakeup();
+  }
+  Snapshot GetSnapshot() const override {
+    Snapshot result;
+    result.device_name = preferences_.name;
+    result.receive_directory = ReceiveDirectory();
+    if (!service_) {
+      result.status_message_id = IDS_CRFILES_QUICK_SHARE_OFF;
+      return result;
+    }
+    const auto source = service_->GetSnapshot();
+    result.peer_device_type = source.peer_device_type;
+    result.diagnostic = source.diagnostic;
+    result.enabled = preferences_.enabled;
+    result.receiving = source.incoming;
+    result.batch_directory = source.received_directory;
+    result.discovery_ready = source.available;
+    result.busy = source.busy;
+    result.session = source.session ? session_base_ + source.session : 0;
+    if (result.session && observed_session_ != result.session) {
+      observed_session_ = result.session;
+      started_at_ = base::TimeTicks::Now(); finished_at_ = {};
+    }
+    result.peer_name = source.peer_name;
+    result.code = source.code;
+    result.files = source.incoming ? source.files : source.files.empty() ? files_ : source.files;
+    result.current_file = source.current_file;
+    result.current_file_index = source.current_file_index;
+    result.current_file_transferred = source.current_file_transferred;
+    result.current_file_total = source.current_file_total;
+    result.completed_files = source.completed_files;
+    result.bytes_per_second = source.bytes_per_second;
+    result.remaining_seconds = source.remaining_seconds;
+    result.transferred = source.transferred;
+    result.total = source.total;
+    result.started_at = started_at_;
+    if (!source.busy && source.session && finished_at_.is_null()) finished_at_ = base::TimeTicks::Now();
+    result.finished_at = finished_at_;
+    using Phase = crquickshare::Phase;
+    switch (source.phase) {
+      case Phase::kIdle:
+        result.stage = Stage::kReady;
+        result.status_message_id = IDS_CRFILES_QUICK_SHARE_HINT;
+        break;
+      case Phase::kConnecting: result.stage = Stage::kConnecting; break;
+      case Phase::kConfirm: result.stage = Stage::kPairing; break;
+      case Phase::kWaiting: result.stage = Stage::kWaiting; break;
+      case Phase::kTransferring: result.stage = Stage::kTransferring; break;
+      case Phase::kComplete: result.stage = Stage::kComplete; break;
+      case Phase::kSent:
+        result.stage = Stage::kSent;
+        result.status_message_id = IDS_CRFILES_QUICK_SHARE_UNCONFIRMED;
+        break;
+      case Phase::kCancelled: result.stage = Stage::kCanceled; break;
+      case Phase::kRejected:
+        result.stage = Stage::kError;
+        result.status_message_id = IDS_CRFILES_QUICK_SHARE_REJECTED;
+        break;
+      case Phase::kTimedOut:
+        result.stage = Stage::kError;
+        result.status_message_id = IDS_CRFILES_QUICK_SHARE_TIMEOUT;
+        break;
+      case Phase::kError:
+        result.stage = Stage::kError;
+        switch (source.failure) {
+          case crquickshare::Failure::kConnection: result.status_message_id = IDS_CRFILES_QS_ERROR_CONNECTION; break;
+          case crquickshare::Failure::kNetwork: result.status_message_id = IDS_CRFILES_QS_ERROR_NETWORK; break;
+          case crquickshare::Failure::kStorage: result.status_message_id = IDS_CRFILES_QS_ERROR_STORAGE; break;
+          case crquickshare::Failure::kSourceFile: result.status_message_id = IDS_CRFILES_QS_ERROR_SOURCE; break;
+          case crquickshare::Failure::kUnsupported: result.status_message_id = IDS_CRFILES_QS_ERROR_UNSUPPORTED; break;
+          case crquickshare::Failure::kProtocol: result.status_message_id = IDS_CRFILES_QS_ERROR_PROTOCOL; break;
+          case crquickshare::Failure::kNone: break;
+        }
+        break;
+    }
+    if (!source.available && !source.busy && !source.session) result.status_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
+    if (!source.available) result.discovery_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
+    auto peers = source.peers;
+#if BUILDFLAG(IS_LINUX)
+    if (source.available && discovery_active_ && !source.busy) {
+      result.discovery_message_id = discovery_.state() == crquickshare::BleDiscovery::State::kUnavailable ?
+          IDS_CRFILES_QUICK_SHARE_BLE_UNAVAILABLE : IDS_CRFILES_QUICK_SHARE_BLE_SCANNING;
+    }
+    peers = discovery_.MergeWithLan(source.peers);
+#else
+    if (source.available && discovery_active_ && !source.busy)
+      result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_HINT;
+#endif
+    for (const auto& peer : peers) {
+      if (peer.ble_only) {
+        if (source.available && discovery_active_ && !source.busy)
+          result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_BLE_HINT;
+        continue;
+      }
+      Peer item;
+      item.id = peer.id;
+      item.name = peer.name.empty() ? l10n_util::GetStringUTF8(IDS_CRFILES_QUICK_SHARE_BLE_DEVICE) : peer.name;
+      item.ble_only = peer.ble_only;
+      item.device_type = peer.endpoint_info.empty() ? 0 : (static_cast<uint8_t>(peer.endpoint_info[0]) >> 1) & 7;
+      item.bluetooth_address = peer.bluetooth_address;
+      item.address = PeerKey(peer);
+      result.peers.push_back(std::move(item));
+    }
+    return result;
+  }
+  bool Send(std::string address, std::vector<base::FilePath> paths,
+            std::map<base::FilePath, gfx::ImageSkia>,
+            std::optional<ConnectPeer> phone, std::string target_id) override {
+    if (!service_ || !GetQuickSharePreferences().enabled || phone || !target_id.empty()) return false;
+    const auto source = service_->GetSnapshot();
+    const auto peer = std::ranges::find_if(source.peers, [&](const auto& item) {
+      return PeerKey(item) == address;
+    });
+    if (peer == source.peers.end()) return false;
+    std::vector<std::string> names;
+    for (const auto& path : paths) names.push_back(path.BaseName().AsUTF8Unsafe());
+    if (!service_->Send(*peer, std::move(paths))) return false;
+    files_ = std::move(names);
+    started_at_ = base::TimeTicks::Now();
+    finished_at_ = base::TimeTicks();
+    UpdateWakeup();
+    return true;
+  }
+  void Decide(uint64_t session, Stage prompt, bool accept, bool trust,
+              uint64_t conflict_id) override {
+    if (service_ && session > session_base_ && prompt == Stage::kPairing && !trust && !conflict_id)
+      service_->Confirm(session - session_base_, accept);
+  }
+  void CancelSession(uint64_t session) override {
+    if (service_ && session > session_base_) service_->Cancel(session - session_base_);
+  }
+  std::vector<TrustedDevice> GetTrustedDevices() const override { return {}; }
+  void ForgetTrustedDevice(std::string) override {}
+ private:
+  base::FilePath ReceiveDirectory() const {
+    return preferences_.directory.empty() ? NearbySharing::DefaultReceiveDirectory() :
+        base::FilePath::FromUTF8Unsafe(preferences_.directory);
+  }
+  void UpdateWakeup() {
+    const auto desired = GetQuickSharePreferences();
+    if (!configured_ || preferences_ != desired) {
+      // Do not replace a backend while its worker owns a transfer. The core
+      // atomically closes incoming admission before the idle backend is reset.
+      if (service_ && !service_->StopReceivingIfIdle()) return;
+      if (service_) session_base_ += service_->GetSnapshot().session + 1;
+      service_.reset();
+      preferences_ = desired; configured_ = true;
+      files_.clear(); started_at_ = {}; finished_at_ = {};
+      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory());
+    }
+    const auto state = service_ ? service_->GetSnapshot() : crquickshare::Snapshot();
+    if (service_ && state.available && !state.receiving) service_->SetReceiving(true, true);
+#if BUILDFLAG(IS_LINUX)
+    const bool active = service_ && discovery_active_ && !state.busy;
+    discovery_.Update(active);
+    wakeup_.Update(active);
+#endif
+  }
+  QuickSharePreferences preferences_;
+  bool configured_ = false;
+  uint64_t session_base_ = 0;
+  mutable uint64_t observed_session_ = 0;
+  std::unique_ptr<crquickshare::QuickShareService> service_;
+#if BUILDFLAG(IS_LINUX)
+  crquickshare::BleWakeup wakeup_;
+  crquickshare::BleDiscovery discovery_;
+#endif
+  base::RepeatingTimer timer_;
+  bool discovery_active_ = false;
+  std::vector<std::string> files_;
+  mutable base::TimeTicks started_at_;
+  mutable base::TimeTicks finished_at_;
+};
+}  // namespace
+std::shared_ptr<ShareService> CreateQuickShareService() {
+  return std::make_shared<QuickShareAdapter>();
+}
+}  // namespace crfiles

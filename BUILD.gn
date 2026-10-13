@@ -204,6 +204,8 @@ crfiles_sources = [
   "sharing/nearby_files_win.h",
   "sharing/nearby_sharing.cc",
   "sharing/nearby_sharing.h",
+  "sharing/share_service.cc",
+  "sharing/share_service.h",
   "sharing/nearby_socket.h",
   "sharing/phone_sender.cc",
   "sharing/phone_sender.h",
@@ -374,7 +376,15 @@ executable("crFiles") {
   if (is_mac) {
     deps += [ "//components/remote_cocoa/common:mojo" ]
   }
+  if (is_linux || is_win || is_mac) {
+    sources += [ "sharing/quick_share_adapter.cc", "sharing/quick_share_adapter.h" ]
+    deps += [ "//crQuickShare:protocol" ]
+  }
   if (is_linux) {
+    deps += [ "//crQuickShare:ble" ]
+    if (!enable_libcr_shared) {
+      deps += [ "//device/bluetooth" ]
+    }
     configs += [ ":context_gio" ]
     if (!enable_libcr_shared) {
       deps += [ "//third_party/fontconfig" ]

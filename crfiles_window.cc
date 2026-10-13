@@ -119,6 +119,9 @@
 #include "ui/views/controls/menu/menu_runner.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "crFiles/sharing/nearby_sharing.h"
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#include "crFiles/sharing/quick_share_adapter.h"
+#endif
 #include "crFiles/sharing/file_share_dialog.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -236,6 +239,29 @@ class FooterBackground : public views::Background {
 constexpr int kFullscreenExitSize = 44;
 constexpr int kFullscreenExitTop = 68;
 constexpr int kFullscreenExitSlide = kFullscreenExitTop + kFullscreenExitSize + 10;
+// Android head, drawn in the same theme color as other menu icons.
+constexpr gfx::PathElement kQuickShareAndroidIconPath[] = {
+    gfx::CANVAS_DIMENSIONS, 24,
+    gfx::MOVE_TO, 2, 19,
+    gfx::CUBIC_TO, 2, 13.48f, 6.48f, 9, 12, 9,
+    gfx::CUBIC_TO, 17.52f, 9, 22, 13.48f, 22, 19,
+    gfx::CLOSE,
+    gfx::CIRCLE, 7.5f, 15.5f, 1,
+    gfx::CIRCLE, 16.5f, 15.5f, 1,
+    gfx::NEW_PATH,
+    gfx::MOVE_TO, 7, 10.5f,
+    gfx::LINE_TO, 4.5f, 6,
+    gfx::LINE_TO, 5.8f, 5.3f,
+    gfx::LINE_TO, 8.3f, 9.8f,
+    gfx::CLOSE,
+    gfx::MOVE_TO, 17, 10.5f,
+    gfx::LINE_TO, 19.5f, 6,
+    gfx::LINE_TO, 18.2f, 5.3f,
+    gfx::LINE_TO, 15.7f, 9.8f,
+    gfx::CLOSE,
+};
+const gfx::VectorIconRep kQuickShareAndroidIconReps[] = {{kQuickShareAndroidIconPath}};
+const gfx::VectorIcon kQuickShareAndroidIcon = {kQuickShareAndroidIconReps, 1, "quick_share_android"};
 // A zipped document, drawn in the same theme color as other menu icons.
 constexpr gfx::PathElement kCompressIconPath[] = {
     gfx::CANVAS_DIMENSIONS, 20,
@@ -3745,7 +3771,7 @@ enum ContextCommand {
   kContextOpen = 10000, kContextCut, kContextCopy, kContextMoveTo, kContextCopyTo,
   kContextRename, kContextCompress, kContextTrash, kContextTerminal, kContextPath,
   kContextProperties, kContextNewTab, kContextSplit, kContextOpenWith, kContextPaste,
-  kContextSplitLeft, kContextSplitRight, kContextSplitTop, kContextSplitBottom, kContextShare,
+  kContextSplitLeft, kContextSplitRight, kContextSplitTop, kContextSplitBottom, kContextShare, kContextQuickShare,
   kContextExtractHere, kContextExtractFolder, kContextExtractTo,
   kContextShowPackageContents, kContextNewFolder, kContextSortBy, kContextSelectAll,
   kContextSortFirst = 10050,
@@ -4361,6 +4387,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     CloseViewOptions();
     history_search_timer_.Stop();
     session_toast_.reset();
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    if (quick_sharing_dialog_.view() && quick_sharing_dialog_.view()->GetWidget()) quick_sharing_dialog_.view()->GetWidget()->Close();
+    quick_session_toast_.reset();
+    if (quick_sharing_) quick_sharing_->CancelSession(quick_sharing_->GetSnapshot().session);
+    quick_sharing_.reset();
+#endif
     timer_.Stop(); weak_.InvalidateWeakPtrs();
     active_tab_ = nullptr; tabs_view_ = nullptr; if (sharing_) sharing_->Disable();
   }
@@ -4399,6 +4431,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
       add->SetImageModel(state, ui::ImageModel::FromVectorIcon(vector_icons::kAdd2Icon, ui::kColorSysPrimary, 14));
     RenderTabs();
     return container;
+  }
+  bool QuickShareBusy() const {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    return quick_sharing_ && quick_sharing_->GetSnapshot().busy;
+#else
+    return false;
+#endif
   }
   bool SharingBusy() const { return sharing_ && sharing_->GetSnapshot().busy; }
   void ApplySharing() {
@@ -4898,6 +4937,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
       add(kContextMoveTo, IDS_CRFILES_MOVE_TO, &kMoveGroupIcon); add(kContextCopyTo, IDS_CRFILES_COPY_TO, &vector_icons::kContentCopyIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextShare, IDS_CRFILES_SHARE_TO, &vector_icons::kScreenShareIcon);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+      add(kContextQuickShare, IDS_CRFILES_QUICK_SHARE, &kQuickShareAndroidIcon);
+#endif
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextRename, IDS_CRFILES_RENAME, &kEditIcon); add(kContextCompress, IDS_CRFILES_COMPRESS, &kCompressIcon); add(kContextTrash, IDS_CRFILES_MOVE_TRASH, &kDeleteIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
@@ -5009,6 +5051,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
         GetWidget()->GetNativeWindow(), nullptr);
   }
   void ShowReceivedFiles() { Received(); }
+  void ShowReceivedDirectory(const base::FilePath& directory) {
+    if (directory.empty() || !directory.IsAbsolute()) return;
+    if (auto* pane = ActivePane()) pane->Navigate(directory);
+  }
   void ChooseDestination(bool move) {
     if (destination_dialog_) return;
     destination_sources_ = context_paths_; destination_move_ = move;
@@ -5134,6 +5180,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
       case kContextExtractHere: StartExtraction(path, path.DirName(), false); break;
       case kContextExtractFolder: StartExtraction(path, path.DirName(), true); break;
       case kContextExtractTo: ChooseExtractionDestination(); break;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+      case kContextQuickShare:
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+            base::BindOnce(&FilesView::ShowQuickSharing,
+                (root_ ? root_.get() : this)->weak_.GetWeakPtr(), context_paths_));
+        break;
+#endif
       case kContextShare:
         // Finish native context-menu dispatch before opening a modal window.
         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
@@ -8349,6 +8402,33 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (view && !ok) view->status_->SetText(Text(IDS_CRFILES_OPEN_ERROR));
     }, weak_.GetWeakPtr()));
   }
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  void EnsureQuickSharing() {
+    if (!quick_sharing_) quick_sharing_ = CreateQuickShareService();
+    if (!quick_session_toast_) quick_session_toast_ = CreateShareSessionToast(GetWidget(), quick_sharing_,
+        base::BindRepeating([](base::WeakPtr<FilesView> owner, const ShareService::Snapshot& state) {
+          if (!owner) return ShareBubbleAnchor();
+          if (auto* widget = owner->GetWidget(); widget && widget->IsVisible() && !widget->IsMinimized()) {
+            if (auto bounds = FileShareSessionBounds(owner->quick_sharing_dialog_.view()))
+              return ShareBubbleAnchor{*bounds, views::BubbleBorder::TOP_CENTER, false, true,
+                  owner->quick_sharing_dialog_.view()->GetWidget()->GetWeakPtr()};
+          }
+          // Quick Share has its own configurable receive directory. Do not
+          // anchor it to the desktop protocol's Received files shortcut.
+          auto fallback = state; fallback.receiving = false;
+          return owner->SessionBubbleAnchor(fallback, false);
+        }, weak_.GetWeakPtr()));
+  }
+  void ShowQuickSharing(std::vector<base::FilePath> paths) {
+    EnsureQuickSharing();
+    if (auto* view = quick_sharing_dialog_.view(); view && view->GetWidget() && !view->GetWidget()->IsClosed()) {
+      if (!paths.empty()) SetFileShareSelection(view, std::move(paths));
+      if (view->GetWidget()->IsMinimized()) view->GetWidget()->Restore();
+      view->GetWidget()->Show(); view->GetWidget()->Activate(); return;
+    }
+    quick_sharing_dialog_.SetView(ShowFileShareDialog(GetWidget(), quick_sharing_, std::move(paths)));
+  }
+#endif
   void ShowSharing(std::vector<base::FilePath> paths) {
     if (auto* view = sharing_dialog_.view(); view && view->GetWidget() && !view->GetWidget()->IsClosed()) {
       if (!paths.empty()) SetFileShareSelection(view, std::move(paths));
@@ -8369,7 +8449,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, shared->directory, &area));
     return area;
   }
-  ShareBubbleAnchor SessionBubbleAnchor(const NearbySharing::Snapshot& state) {
+  ShareBubbleAnchor SessionBubbleAnchor(const NearbySharing::Snapshot& state, bool use_share_dialog = true) {
     RevealReceivedTarget(state);
     auto* widget = GetWidget();
     bool foreground = widget && widget->IsVisible() && !widget->IsMinimized();
@@ -8378,7 +8458,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
     if (foreground) {
       if (!state.receiving) {
-        if (auto bounds = FileShareSessionBounds(sharing_dialog_.view()))
+        if (auto bounds = use_share_dialog ? FileShareSessionBounds(sharing_dialog_.view()) : std::nullopt)
           return {*bounds, views::BubbleBorder::TOP_CENTER, false, true};
       } else if (state.receive_target.empty()) {
         auto* received = sidebar_buttons_.at(IDS_CRFILES_RECEIVED).get();
@@ -8457,6 +8537,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // to a Widget. Initial directory checks run once the main window is shown.
     auto* widget = GetWidget();
     if (!widget || widget->IsClosed()) return;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+    EnsureQuickSharing();
+    const auto quick_state = quick_sharing_->GetSnapshot();
+    if (quick_state.receiving && quick_state.stage == ShareService::Stage::kComplete &&
+        quick_state.session != last_quick_received_session_) {
+      last_quick_received_session_ = quick_state.session;
+      for (auto& tab : tabs_) VisitPanes(tab.pane_host, base::BindRepeating([](const base::FilePath& batch, FilesView* pane) {
+        if (!batch.empty() && (pane->Current().path == batch || pane->Current().path == batch.DirName())) pane->Refresh();
+      }, quick_state.batch_directory));
+    }
+#endif
     SyncLiveDirectories();
     const bool visible = widget->IsVisible()
 #if BUILDFLAG(IS_MAC)
@@ -8504,6 +8595,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::vector<base::WeakPtr<views::View>> dragging_rows_;
   std::unique_ptr<ShareSessionToast> session_toast_;
   views::ViewTracker sharing_dialog_, trusted_dialog_, sharing_folders_dialog_;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  std::shared_ptr<ShareService> quick_sharing_;
+  std::unique_ptr<ShareSessionToast> quick_session_toast_;
+  views::ViewTracker quick_sharing_dialog_;
+  uint64_t last_quick_received_session_ = 0;
+#endif
   uint64_t last_received_session_ = 0;
   uint64_t shared_targets_generation_ = 0;
   std::vector<NearbySharing::SharedTarget> published_targets_;
@@ -8719,7 +8816,12 @@ class FilesDelegate : public views::WidgetDelegate {
 std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget*) { return g_contents ? g_contents->CreateTabs() : nullptr; }
 void ShowCrFilesTrustedDevices() { if (g_contents) g_contents->ShowTrustedDevices(); }
 void ShowCrFilesSharingFolders() { if (g_contents) g_contents->ShowSharingFolders(); }
+void ShowCrFilesReceivedDirectory(const base::FilePath& directory) {
+  RestoreCrFilesWindow();
+  if (g_contents) g_contents->ShowReceivedDirectory(directory);
+}
 void ShowCrFilesHistory() { if (g_contents) g_contents->ShowHistoryTab(); }
+bool IsCrFilesQuickShareBusy() { return g_contents && g_contents->QuickShareBusy(); }
 bool IsCrFilesSharingBusy() { return g_contents && g_contents->SharingBusy(); }
 void ApplyCrFilesViewSettings() { if (g_contents) g_contents->ApplyViewSettings(); }
 void ApplyCrFilesSharingSettings() { if (g_contents) g_contents->ApplySharing(); }
