@@ -88,6 +88,7 @@ class ShareService {
     std::string peer_custom_avatar;
     size_t skipped_files = 0;
     std::vector<std::string> files;
+    uint32_t text_count = 0;  // Quick Share text/URL attachments destined for the clipboard.
     std::string current_file;  // Last transfer entry, retained with the result.
     std::map<base::FilePath, gfx::ImageSkia> previews;
     uint64_t current_file_index = 0;  // One-based introduction order; zero before transfer.

@@ -317,8 +317,11 @@
   <translation id="6810075817102686774">已傳輸檔案</translation>
   <translation id="7962960561507616835">傳輸速度</translation>
   <translation id="4816292591240970283">剩餘時間（分:秒）</translation>
-<translation id="3181950488593258710">資料夾會保留目錄結構，空資料夾將略過。每次最多傳輸 100 個檔案，包括資料夾內的檔案。 接收端可能採用不同的目錄處理方式。</translation>
+<translation id="1431933172646212969">資料夾會保留目錄結構，空資料夾將略過。每次最多傳輸 1024 個檔案，包括資料夾內的檔案。 接收端可能採用不同的目錄處理方式。</translation>
   <translation id="1722875882298721247">分享至此裝置</translation>
   <translation id="6677927904722923469">核對驗證碼</translation>
   <translation id="5978566236534048645">等待對方裝置確認接收</translation>
+  <translation id="6964235745882631674">文字或連結</translation>
+  <translation id="8551928890709982721">接受後，收到的文字或連結會複製到剪貼簿。</translation>
+  <translation id="2214850006092753179">已複製到剪貼簿</translation>
 </translationbundle>

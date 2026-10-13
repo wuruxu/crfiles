@@ -317,8 +317,11 @@
   <translation id="6810075817102686774">已传输文件</translation>
   <translation id="7962960561507616835">传输速度</translation>
   <translation id="4816292591240970283">剩余时间（分:秒）</translation>
-<translation id="3181950488593258710">文件夹保留目录结构，空文件夹将跳过。每次最多传输 100 个文件，包括文件夹内的文件。 接收端可能采用不同的目录处理方式。</translation>
+<translation id="1431933172646212969">文件夹保留目录结构，空文件夹将跳过。每次最多传输 1024 个文件，包括文件夹内的文件。 接收端可能采用不同的目录处理方式。</translation>
   <translation id="1722875882298721247">分享到此设备</translation>
   <translation id="6677927904722923469">核对验证码</translation>
   <translation id="5978566236534048645">等待对端设备确认接收</translation>
+  <translation id="6964235745882631674">文本或链接</translation>
+  <translation id="8551928890709982721">接受后，收到的文本或链接将复制到剪贴板。</translation>
+  <translation id="2214850006092753179">已复制到剪贴板</translation>
 </translationbundle>

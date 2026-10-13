@@ -317,8 +317,11 @@
   <translation id="6810075817102686774">転送済みファイル</translation>
   <translation id="7962960561507616835">転送速度</translation>
   <translation id="4816292591240970283">残り時間（分:秒）</translation>
-<translation id="3181950488593258710">フォルダ構造は保持されます。空のフォルダはスキップされます。フォルダ内のファイルを含め、1 回につき最大 100 ファイルを転送できます。 受信側のフォルダの扱いは異なる場合があります。</translation>
+<translation id="1431933172646212969">フォルダ構造は保持されます。空のフォルダはスキップされます。フォルダ内のファイルを含め、1 回につき最大 1024 ファイルを転送できます。 受信側のフォルダの扱いは異なる場合があります。</translation>
   <translation id="1722875882298721247">このデバイスに共有</translation>
   <translation id="6677927904722923469">コードを比較</translation>
   <translation id="5978566236534048645">相手のデバイスの承認を待っています</translation>
+  <translation id="6964235745882631674">テキストまたはリンク</translation>
+  <translation id="8551928890709982721">受信したテキストまたはリンクをクリップボードにコピーするには、承認してください。</translation>
+  <translation id="2214850006092753179">クリップボードにコピーしました</translation>
 </translationbundle>

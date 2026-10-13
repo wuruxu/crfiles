@@ -317,8 +317,11 @@
   <translation id="6810075817102686774">Archivos transferidos</translation>
   <translation id="7962960561507616835">Velocidad de transferencia</translation>
   <translation id="4816292591240970283">Tiempo restante (min:s)</translation>
-<translation id="3181950488593258710">Se conserva la estructura de las carpetas. Se omiten las carpetas vacías. Hasta 100 archivos por transferencia, incluidos los de las carpetas. El receptor puede gestionar las carpetas de otra manera.</translation>
+<translation id="1431933172646212969">Se conserva la estructura de las carpetas. Se omiten las carpetas vacías. Hasta 1024 archivos por transferencia, incluidos los de las carpetas. El receptor puede gestionar las carpetas de otra manera.</translation>
   <translation id="1722875882298721247">Compartir con este dispositivo</translation>
   <translation id="6677927904722923469">Compara el código</translation>
   <translation id="5978566236534048645">Esperando a que el otro dispositivo acepte</translation>
+  <translation id="6964235745882631674">Texto o enlaces</translation>
+  <translation id="8551928890709982721">Acepta para copiar el texto o los enlaces recibidos al portapapeles.</translation>
+  <translation id="2214850006092753179">Copiado al portapapeles</translation>
 </translationbundle>

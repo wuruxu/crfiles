@@ -342,10 +342,11 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
         code->SetElideBehavior(gfx::NO_ELIDE);
       }
       if (service_->IsQuickShare() && state.receiving) {
-        Label(contents.get(), Text(IDS_CRFILES_FILES) + u": " + base::NumberToString16(state.files.size()));
+        Label(contents.get(), Text(state.text_count ? IDS_CRFILES_QS_TEXT_CONTENT : IDS_CRFILES_FILES) + u": " +
+            base::NumberToString16(state.text_count ? state.text_count : state.files.size()));
         Label(contents.get(), Text(IDS_CRFILES_TOTAL_SIZE) + u": " + ui::FormatBytes(base::ByteSize(state.total)));
-        Label(contents.get(), Text(IDS_CRFILES_RECEIVE_DIRECTORY) + u": " + state.receive_directory.AsUTF16Unsafe());
-        Label(contents.get(), Text(IDS_CRFILES_RECEIVE_PROMPT));
+        if (!state.text_count) Label(contents.get(), Text(IDS_CRFILES_RECEIVE_DIRECTORY) + u": " + state.receive_directory.AsUTF16Unsafe());
+        Label(contents.get(), Text(state.text_count ? IDS_CRFILES_QS_TEXT_RECEIVE_PROMPT : IDS_CRFILES_RECEIVE_PROMPT));
       }
       if (!service_->IsQuickShare()) {
         trust_ = contents->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_NEARBY_TRUST_DEVICE)));
@@ -1023,8 +1024,9 @@ class FileShareView : public views::View, public ui::EventObserver {
     // Keep the avatar anchor stationary while Quick Share auto-confirms.
     summary_container_->SetVisible(service_->IsQuickShare() || state.stage != Stage::kPairing);
     if (state.receiving && (state.busy || paths_.empty())) {
-      count_->SetText(Text(IDS_CRFILES_FILES) + u": " + (state.files.empty() ? std::u16string(u"—") : base::NumberToString16(state.files.size())));
-      size_->SetText(Text(IDS_CRFILES_TOTAL_SIZE) + u": " + (state.files.empty() ? std::u16string(u"—") : ui::FormatBytes(base::ByteSize(state.total))));
+      count_->SetText(Text(state.text_count ? IDS_CRFILES_QS_TEXT_CONTENT : IDS_CRFILES_FILES) + u": " +
+          (state.text_count ? base::NumberToString16(state.text_count) : state.files.empty() ? std::u16string(u"—") : base::NumberToString16(state.files.size())));
+      size_->SetText(Text(IDS_CRFILES_TOTAL_SIZE) + u": " + (state.files.empty() && !state.text_count ? std::u16string(u"—") : ui::FormatBytes(base::ByteSize(state.total))));
     }
     const bool transport_ready = service_->IsQuickShare() ? state.discovery_ready : state.port != 0;
     int message = !state.enabled ? IDS_CRFILES_NEARBY_OFF :

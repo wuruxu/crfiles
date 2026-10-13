@@ -317,8 +317,11 @@
   <translation id="6810075817102686774">Fichiers transférés</translation>
   <translation id="7962960561507616835">Vitesse de transfert</translation>
   <translation id="4816292591240970283">Temps restant (min:s)</translation>
-<translation id="3181950488593258710">La structure des dossiers est conservée. Les dossiers vides sont ignorés. Jusqu’à 100 fichiers par transfert, y compris ceux des dossiers. Le destinataire peut traiter les dossiers différemment.</translation>
+<translation id="1431933172646212969">La structure des dossiers est conservée. Les dossiers vides sont ignorés. Jusqu’à 1024 fichiers par transfert, y compris ceux des dossiers. Le destinataire peut traiter les dossiers différemment.</translation>
   <translation id="1722875882298721247">Partager avec cet appareil</translation>
   <translation id="6677927904722923469">Comparez le code</translation>
   <translation id="5978566236534048645">En attente de l’acceptation de l’autre appareil</translation>
+  <translation id="6964235745882631674">Texte ou liens</translation>
+  <translation id="8551928890709982721">Acceptez pour copier le texte ou les liens reçus dans le presse-papiers.</translation>
+  <translation id="2214850006092753179">Copié dans le presse-papiers</translation>
 </translationbundle>

@@ -364,10 +364,13 @@
 <message name="IDS_CRFILES_QS_PROGRESS_FINISHED" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">Files transferred</message>
 <message name="IDS_CRFILES_QS_PROGRESS_SPEED" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">Transfer speed</message>
 <message name="IDS_CRFILES_QS_PROGRESS_REMAINING" meaning="Quick Share transfer progress" desc="Transfer progress label; finished counts payload completion, not remote delivery confirmation.">Time remaining (min:sec)</message>
-<message name="IDS_CRFILES_QUICK_SHARE_FOLDER_HINT" desc="Quick Share directory selection and protocol limitations.">Send files with their folder structure. Empty folders are skipped. Up to 100 files per transfer, including files inside folders. The receiver may handle folders differently.</message>
+<message name="IDS_CRFILES_QUICK_SHARE_FOLDER_HINT" desc="Quick Share directory selection and protocol limitations.">Send files with their folder structure. Empty folders are skipped. Up to 1024 files per transfer, including files inside folders. The receiver may handle folders differently.</message>
 <message name="IDS_CRFILES_QUICK_SHARE_TO_DEVICE" desc="Label to the left of the Send button in the Quick Share device popover.">Share to this device</message>
 <message name="IDS_CRFILES_QUICK_SHARE_COMPARE_CODE" desc="Quick Share label immediately followed by the verification code in bold.">Compare the code</message>
 <message name="IDS_CRFILES_QUICK_SHARE_WAIT_FOR_RECEIVER" desc="Status next to Transfer progress while waiting for the other device to accept Quick Share files.">Waiting for the other device to accept</message>
+<message name="IDS_CRFILES_QS_TEXT_CONTENT" meaning="Quick Share clipboard reception" desc="Quick Share text and URL reception UI.">Text or links</message>
+<message name="IDS_CRFILES_QS_TEXT_RECEIVE_PROMPT" meaning="Quick Share clipboard reception" desc="Quick Share text and URL reception UI.">Accept to copy the received text or links to your clipboard.</message>
+<message name="IDS_CRFILES_QS_TEXT_COPIED" meaning="Quick Share clipboard reception" desc="Quick Share text and URL reception UI.">Copied to clipboard</message>
 </messages>
   </release>
 </grit>

@@ -317,8 +317,11 @@
   <translation id="6810075817102686774">Arquivos transferidos</translation>
   <translation id="7962960561507616835">Velocidade de transferência</translation>
   <translation id="4816292591240970283">Tempo restante (min:s)</translation>
-<translation id="3181950488593258710">A estrutura das pastas é preservada. Pastas vazias são ignoradas. Até 100 arquivos por transferência, incluindo os arquivos nas pastas. O destinatário pode tratar as pastas de outra forma.</translation>
+<translation id="1431933172646212969">A estrutura das pastas é preservada. Pastas vazias são ignoradas. Até 1024 arquivos por transferência, incluindo os arquivos nas pastas. O destinatário pode tratar as pastas de outra forma.</translation>
   <translation id="1722875882298721247">Compartilhar com este dispositivo</translation>
   <translation id="6677927904722923469">Compare o código</translation>
   <translation id="5978566236534048645">Aguardando o outro dispositivo aceitar</translation>
+  <translation id="6964235745882631674">Texto ou links</translation>
+  <translation id="8551928890709982721">Aceite para copiar o texto ou os links recebidos para a área de transferência.</translation>
+  <translation id="2214850006092753179">Copiado para a área de transferência</translation>
 </translationbundle>

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <utility>
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/timer/timer.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/sharing/nearby_sharing.h"
@@ -14,6 +15,7 @@
 #include "crQuickShare/ble_discovery.h"
 #endif
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "crQuickShare/quick_share_service.h"
 namespace crfiles {
 namespace {
@@ -64,6 +66,8 @@ class QuickShareAdapter final : public ShareService {
     result.code = source.code;
     result.files = source.incoming ? source.files : source.files.empty() ? files_ : source.files;
     result.current_file = source.current_file;
+    result.text_count = source.text_count;
+    if (source.text_count) result.current_file = l10n_util::GetStringUTF8(IDS_CRFILES_QS_TEXT_CONTENT);
     result.current_file_index = source.current_file_index;
     result.current_file_transferred = source.current_file_transferred;
     result.current_file_total = source.current_file_total;
@@ -85,7 +89,11 @@ class QuickShareAdapter final : public ShareService {
       case Phase::kConfirm: result.stage = Stage::kPairing; break;
       case Phase::kWaiting: result.stage = Stage::kWaiting; break;
       case Phase::kTransferring: result.stage = Stage::kTransferring; break;
-      case Phase::kComplete: result.stage = Stage::kComplete; break;
+      case Phase::kComplete:
+        result.stage = Stage::kComplete;
+        if (source.text_count && copied_text_session_ == result.session)
+          result.status_message_id = IDS_CRFILES_QS_TEXT_COPIED;
+        break;
       case Phase::kSent:
         result.stage = Stage::kSent;
         result.status_message_id = IDS_CRFILES_QUICK_SHARE_UNCONFIRMED;
@@ -131,6 +139,7 @@ class QuickShareAdapter final : public ShareService {
           result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_BLE_HINT;
         continue;
       }
+      if (peer.name.empty()) continue;
       Peer item;
       item.id = peer.id;
       item.name = peer.name.empty() ? l10n_util::GetStringUTF8(IDS_CRFILES_QUICK_SHARE_BLE_DEVICE) : peer.name;
@@ -147,10 +156,14 @@ class QuickShareAdapter final : public ShareService {
             std::optional<ConnectPeer> phone, std::string target_id) override {
     if (!service_ || !GetQuickSharePreferences().enabled || phone || !target_id.empty()) return false;
     const auto source = service_->GetSnapshot();
-    const auto peer = std::ranges::find_if(source.peers, [&](const auto& item) {
-      return PeerKey(item) == address;
+    auto peers = source.peers;
+#if BUILDFLAG(IS_LINUX)
+    peers = discovery_.MergeWithLan(std::move(peers));
+#endif
+    const auto peer = std::ranges::find_if(peers, [&](const auto& item) {
+      return !item.ble_only && !item.name.empty() && PeerKey(item) == address;
     });
-    if (peer == source.peers.end()) return false;
+    if (peer == peers.end()) return false;
     std::vector<std::string> names;
     for (const auto& path : paths) names.push_back(path.BaseName().AsUTF8Unsafe());
     if (!service_->Send(*peer, std::move(paths))) return false;
@@ -175,17 +188,30 @@ class QuickShareAdapter final : public ShareService {
     return preferences_.directory.empty() ? NearbySharing::DefaultReceiveDirectory() :
         base::FilePath::FromUTF8Unsafe(preferences_.directory);
   }
+  void CopyReceivedTexts() {
+    // Runs on the UI sequence even when the sharing dialog is closed. Consume
+    // the core's completion queue before a preferences change replaces it.
+    if (service_) for (auto& received : service_->TakeReceivedTexts()) {
+      {
+        ui::ScopedClipboardWriter clipboard(ui::ClipboardBuffer::kCopyPaste);
+        clipboard.WriteText(base::UTF8ToUTF16(received.text));
+      }
+      copied_text_session_ = session_base_ + received.session;
+    }
+  }
   void UpdateWakeup() {
+    CopyReceivedTexts();
     const auto desired = GetQuickSharePreferences();
     if (!configured_ || preferences_ != desired) {
       // Do not replace a backend while its worker owns a transfer. The core
       // atomically closes incoming admission before the idle backend is reset.
       if (service_ && !service_->StopReceivingIfIdle()) return;
+      CopyReceivedTexts();
       if (service_) session_base_ += service_->GetSnapshot().session + 1;
       service_.reset();
       preferences_ = desired; configured_ = true;
       files_.clear(); started_at_ = {}; finished_at_ = {};
-      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory());
+      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory(), true);
     }
     const auto state = service_ ? service_->GetSnapshot() : crquickshare::Snapshot();
     if (service_ && state.available && !state.receiving) service_->SetReceiving(true, true);
@@ -198,6 +224,7 @@ class QuickShareAdapter final : public ShareService {
   QuickSharePreferences preferences_;
   bool configured_ = false;
   uint64_t session_base_ = 0;
+  uint64_t copied_text_session_ = 0;
   mutable uint64_t observed_session_ = 0;
   std::unique_ptr<crquickshare::QuickShareService> service_;
 #if BUILDFLAG(IS_LINUX)
