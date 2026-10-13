@@ -8886,10 +8886,12 @@ void ShowCrFilesWindow(base::OnceClosure quit) {
   params.remove_standard_frame = GetWindowsTitlebarStyleEnabled();
 #endif
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
-  params.rounded_corners = gfx::RoundedCornersF(12, 12, 0, 0);
 #if BUILDFLAG(IS_MAC)
+  // NativeWidgetMac requires the same corner radius on all four corners.
+  params.rounded_corners = gfx::RoundedCornersF(12);
   params.shadow_type = views::Widget::InitParams::ShadowType::kDefault;
 #else
+  params.rounded_corners = gfx::RoundedCornersF(12, 12, 0, 0);
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
 #endif
 #if BUILDFLAG(IS_LINUX)
