@@ -324,4 +324,7 @@
   <translation id="6964235745882631674">文本或链接</translation>
   <translation id="8551928890709982721">接受后，收到的文本或链接将复制到剪贴板。</translation>
   <translation id="2214850006092753179">已复制到剪贴板</translation>
+  <translation id="5125731858634756748">正在恢复网络连接…</translation>
+  <translation id="3851611281675392532">网络清理未完成。请检查 Wi-Fi 连接。</translation>
+  <translation id="6873287799323878567">Wi-Fi 不可用。请选择更少或更小的文件，通过蓝牙发送。</translation>
 </translationbundle>

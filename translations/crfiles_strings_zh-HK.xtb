@@ -324,4 +324,7 @@
   <translation id="6964235745882631674">文字或連結</translation>
   <translation id="8551928890709982721">接受後，收到的文字或連結會複製到剪貼簿。</translation>
   <translation id="2214850006092753179">已複製到剪貼簿</translation>
+  <translation id="5125731858634756748">正在恢復網絡連線…</translation>
+  <translation id="3851611281675392532">網絡清理未完成。請檢查 Wi-Fi 連線。</translation>
+  <translation id="6873287799323878567">Wi-Fi 無法使用。請選擇較少或較小的檔案，透過藍牙傳送。</translation>
 </translationbundle>

@@ -48,6 +48,7 @@ class ShareService {
     bool folder_transfer = false;
     std::string bluetooth_address = {};  // Display only, not a connection target.
     bool ble_only = false;
+    bool bluetooth_connectable = false;  // BLE discovery with an implemented send route.
     uint8_t device_type = 0;  // Quick Share's advertised type; 0 means unknown.
     std::vector<SharedTarget> targets = {};
     bool operator==(const Peer&) const = default;
@@ -70,6 +71,7 @@ class ShareService {
     bool trust_error = false;
     Stage stage = Stage::kOff;
     int status_message_id = 0;
+    int warning_message_id = 0;
     std::string diagnostic;
     int discovery_message_id = 0;
     uint64_t session = 0;

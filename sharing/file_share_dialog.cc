@@ -113,6 +113,7 @@ std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool q
         l10n_util::GetStringFUTF16(IDS_CRFILES_DURATION_MINUTES_SECONDS,
             base::NumberToString16(seconds / 60), base::NumberToString16(seconds % 60));
   }
+  if (state.warning_message_id) status += u"\n" + Text(state.warning_message_id);
   return status;
 }
 ui::ImageModel QuickShareAvatar() {
@@ -278,6 +279,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     resize |= cancel_->GetText() != action;
     cancel_->SetText(action);
     if (!state.busy) cancel_->SetEnabled(true);
+    else if (state.status_message_id == IDS_CRFILES_QS_RESTORING_NETWORK) cancel_->SetEnabled(false);
     if (open_received_) {
       const bool show = state.stage == Stage::kComplete && !state.batch_directory.empty();
       resize |= open_received_->GetVisible() != show;
@@ -964,7 +966,7 @@ class FileShareView : public views::View, public ui::EventObserver {
     const auto latest = std::ranges::find_if(state.peers, [&](const auto& item) {
       return item.id == peer.id && item.address == peer.address && item.phone.has_value() == peer.phone.has_value();
     });
-    if (latest == state.peers.end() || latest->ble_only) return;
+    if (latest == state.peers.end() || (latest->ble_only && !latest->bluetooth_connectable)) return;
     selected_ = *latest; Compose(anchor);
   }
   void Compose(DeviceButton* anchor) {
@@ -982,6 +984,7 @@ class FileShareView : public views::View, public ui::EventObserver {
             }, weak_.GetWeakPtr(), std::make_unique<views::ViewTracker>(anchor), request));
   }
   void ShowCompose(DeviceButton* anchor) {
+    if (service_->IsQuickShare() && !SelectedPeerAvailable(service_->GetSnapshot())) return;
     CloseToast(); composing_ = true; active_device_ = anchor;
     auto contents = std::make_unique<views::View>();
     auto* layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -1003,13 +1006,27 @@ class FileShareView : public views::View, public ui::EventObserver {
     contents->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&FileShareView::Send, weak_.GetWeakPtr()), Text(IDS_CRFILES_HISTORY_SEND)));
     PresentToast(anchor->IconAnchor(), std::move(contents), false);
   }
+  bool SelectedPeerAvailable(const ShareService::Snapshot& state) const {
+    return selected_ && std::ranges::any_of(state.peers, [&](const auto& peer) {
+      return peer.id == selected_->id && peer.address == selected_->address &&
+          peer.phone.has_value() == selected_->phone.has_value() &&
+          !peer.name.empty() && (!peer.ble_only || peer.bluetooth_connectable);
+    });
+  }
   void Send() {
     const auto state = service_->GetSnapshot(); if (state.busy || !composing_ ||
         (service_->IsQuickShare() && !selection_ready_)) return;
+    if (service_->IsQuickShare() && !SelectedPeerAvailable(state)) {
+      // Defer bubble destruction until the Send button's event has unwound.
+      dismiss_compose_ = true;
+      selected_.reset(); active_device_ = nullptr; send_error_ = false;
+      ++compose_request_;
+      return;
+    }
     std::string target;
     const size_t index = targets_ ? targets_->GetSelectedIndex().value_or(0) : 0;
     if (selected_ && index > 0 && index <= selected_->targets.size()) target = selected_->targets[index - 1].id;
-    if (selected_ && selected_->ble_only) return;
+    if (selected_ && selected_->ble_only && !selected_->bluetooth_connectable) return;
     const bool sent = service_->Send(selected_ ? selected_->address : base::UTF16ToUTF8(address_->GetText()), paths_, {},
         selected_ ? selected_->phone : std::nullopt, target);
     send_error_ = !sent;
@@ -1020,6 +1037,12 @@ class FileShareView : public views::View, public ui::EventObserver {
   void Refresh() {
     const auto state = service_->GetSnapshot();
     if (dismiss_compose_) { dismiss_compose_ = false; CloseToast(); }
+    if (service_->IsQuickShare() && !state.busy && composing_ &&
+        !SelectedPeerAvailable(state)) {
+      CloseToast();
+      selected_.reset(); active_device_ = nullptr; send_error_ = false;
+      ++compose_request_;
+    }
     using Stage = NearbySharing::Stage;
     // Keep the avatar anchor stationary while Quick Share auto-confirms.
     summary_container_->SetVisible(service_->IsQuickShare() || state.stage != Stage::kPairing);
@@ -1042,11 +1065,12 @@ class FileShareView : public views::View, public ui::EventObserver {
     status_->SetVisible(message != IDS_CRFILES_NEARBY_READY || (send_error_ && !state.busy));
     status_row_->SetVisible(status_->GetVisible());
     std::u16string status_detail;
-    if (service_->IsQuickShare() && state.busy) {
+    if (service_->IsQuickShare() && state.busy && state.status_message_id != IDS_CRFILES_QS_RESTORING_NETWORK) {
       status_detail = !state.receiving && state.stage != Stage::kTransferring ?
           Text(IDS_CRFILES_QUICK_SHARE_WAIT_FOR_RECEIVER) :
           ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
     }
+    if (state.warning_message_id) status_detail += (status_detail.empty() ? u"" : u"\n") + Text(state.warning_message_id);
     status_detail_->SetText(status_detail);
     status_detail_->SetTooltipText(status_detail);
     status_detail_->SetVisible(!status_detail.empty());
@@ -1059,7 +1083,7 @@ class FileShareView : public views::View, public ui::EventObserver {
     manual_->SetEnabled(can_send || (state.busy && active_device_ == manual_));
     const bool same_devices = std::ranges::equal(known_peers_, state.peers, [](const auto& left, const auto& right) {
       return left.id == right.id && left.address == right.address && left.name == right.name &&
-          left.avatar == right.avatar && left.device_type == right.device_type && left.bluetooth_address == right.bluetooth_address && left.ble_only == right.ble_only && left.phone.has_value() == right.phone.has_value();
+          left.avatar == right.avatar && left.device_type == right.device_type && left.bluetooth_address == right.bluetooth_address && left.ble_only == right.ble_only && left.bluetooth_connectable == right.bluetooth_connectable && left.phone.has_value() == right.phone.has_value();
     });
     if (!state.busy && !toast_widget_ && !same_devices) {
       active_device_ = nullptr;
@@ -1073,7 +1097,7 @@ class FileShareView : public views::View, public ui::EventObserver {
         auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareAvatar() : Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
         if (service_->IsQuickShare()) button->SetDeviceType(QuickShareDeviceType(peer.device_type));
         button->SetTrusted(peer.trusted);
-        if (peer.ble_only) {
+        if (peer.ble_only && !peer.bluetooth_connectable) {
           auto* hint = button->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_QUICK_SHARE_BLE_ONLY)));
           hint->SetMaximumWidthSingleLine(112);
 
@@ -1083,13 +1107,13 @@ class FileShareView : public views::View, public ui::EventObserver {
         auto tooltip = base::UTF8ToUTF16(peer.name);
         if (service_->IsQuickShare()) tooltip += u"\n" + QuickShareDeviceType(peer.device_type);
         if (!peer.bluetooth_address.empty()) tooltip += u"\n" + base::UTF8ToUTF16(peer.bluetooth_address);
-        if (peer.ble_only) tooltip += u"\n" + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT);
+        if (peer.ble_only && !peer.bluetooth_connectable) tooltip += u"\n" + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT);
         button->SetDeviceTooltip(std::move(tooltip));
         button->SetCallback(base::BindRepeating(&FileShareView::SelectPeer, weak_.GetWeakPtr(), base::Unretained(button), peer));
         // Discovery is withdrawn during a transfer and returns with refreshed
         // metadata. Rebind the result anchor to the live, clickable avatar.
         if (service_->IsQuickShare() && selected_ && peer.id == selected_->id &&
-            peer.address == selected_->address && !peer.ble_only) active_device_ = button;
+            peer.address == selected_->address && (!peer.ble_only || peer.bluetooth_connectable)) active_device_ = button;
       }
     }
     // Refresh trust badges even while a toast pins the discovery buttons.
@@ -1102,7 +1126,10 @@ class FileShareView : public views::View, public ui::EventObserver {
             peer.phone.has_value() == displayed.phone.has_value();
       });
       auto* button = static_cast<DeviceButton*>(child.get());
-      button->SetEnabled((can_send && latest != state.peers.end() && !latest->ble_only) || (state.busy && button == active_device_));
+      // A composing bubble pins the list, but must not keep lost peers visible.
+      // Active transfers own their avatar independently of discovery broadcasts.
+      if (service_->IsQuickShare()) button->SetVisible(state.busy || latest != state.peers.end());
+      button->SetEnabled((can_send && latest != state.peers.end() && (!latest->ble_only || latest->bluetooth_connectable)) || (state.busy && button == active_device_));
       button->SetTrusted(state.busy && button == active_device_ && !state.code.empty() ? state.peer_trusted :
           latest != state.peers.end() && latest->trusted);
     }

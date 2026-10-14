@@ -4,15 +4,21 @@
 #include <algorithm>
 #include <utility>
 #include "base/strings/string_number_conversions.h"
+#include "base/command_line.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/timer.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "build/build_config.h"
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #include "crQuickShare/ble_wakeup.h"
 #include "crQuickShare/ble_discovery.h"
+#include "crQuickShare/bootstrap_probe.h"
+#include "crQuickShare/bluetooth_receiver.h"
+#include "crQuickShare/lan_discovery.h"
+#include "device/bluetooth/bluetooth_adapter.h"
 #endif
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -20,6 +26,11 @@
 namespace crfiles {
 namespace {
 std::string PeerKey(const crquickshare::Peer& peer) {
+  // Match discovery's SameBluetoothRoute: rotating advertisement metadata
+  // must not invalidate a displayed send target. This is a routing key only;
+  // the connection still performs its normal handshake and confirmation.
+  if (peer.ble_only && !peer.classic_bluetooth_address.empty())
+    return "ble-route:" + base::HexEncode(peer.id) + ":" + base::HexEncode(peer.classic_bluetooth_address);
   if (peer.ble_only) return "ble:" + base::HexEncode(peer.id) + ":" + base::HexEncode(peer.endpoint_info);
   return peer.id + "@" + peer.address + ":" + base::NumberToString(peer.port);
 }
@@ -31,8 +42,8 @@ class QuickShareAdapter final : public ShareService {
   }
   ~QuickShareAdapter() override {
     timer_.Stop();
-#if BUILDFLAG(IS_LINUX)
-    discovery_.Update(false); wakeup_.Update(false);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+    receiver_.Update(nullptr); sender_.Cancel(); discovery_.Update(false); wakeup_.Update(false);
 #endif
   }
   bool IsQuickShare() const override { return true; }
@@ -52,6 +63,7 @@ class QuickShareAdapter final : public ShareService {
     const auto source = service_->GetSnapshot();
     result.peer_device_type = source.peer_device_type;
     result.diagnostic = source.diagnostic;
+    if (source.network_cleanup_failed) result.warning_message_id = IDS_CRFILES_QS_NETWORK_CLEANUP_FAILED;
     result.enabled = preferences_.enabled;
     result.receiving = source.incoming;
     result.batch_directory = source.received_directory;
@@ -87,6 +99,10 @@ class QuickShareAdapter final : public ShareService {
         break;
       case Phase::kConnecting: result.stage = Stage::kConnecting; break;
       case Phase::kConfirm: result.stage = Stage::kPairing; break;
+      case Phase::kRestoringNetwork:
+        result.stage = Stage::kWaiting;
+        result.status_message_id = IDS_CRFILES_QS_RESTORING_NETWORK;
+        break;
       case Phase::kWaiting: result.stage = Stage::kWaiting; break;
       case Phase::kTransferring: result.stage = Stage::kTransferring; break;
       case Phase::kComplete:
@@ -116,6 +132,7 @@ class QuickShareAdapter final : public ShareService {
           case crquickshare::Failure::kSourceFile: result.status_message_id = IDS_CRFILES_QS_ERROR_SOURCE; break;
           case crquickshare::Failure::kUnsupported: result.status_message_id = IDS_CRFILES_QS_ERROR_UNSUPPORTED; break;
           case crquickshare::Failure::kProtocol: result.status_message_id = IDS_CRFILES_QS_ERROR_PROTOCOL; break;
+          case crquickshare::Failure::kHotspotUnavailable: result.status_message_id = IDS_CRFILES_QS_HOTSPOT_REQUIRED; break;
           case crquickshare::Failure::kNone: break;
         }
         break;
@@ -123,7 +140,7 @@ class QuickShareAdapter final : public ShareService {
     if (!source.available && !source.busy && !source.session) result.status_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
     if (!source.available) result.discovery_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
     auto peers = source.peers;
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     if (source.available && discovery_active_ && !source.busy) {
       result.discovery_message_id = discovery_.state() == crquickshare::BleDiscovery::State::kUnavailable ?
           IDS_CRFILES_QUICK_SHARE_BLE_UNAVAILABLE : IDS_CRFILES_QUICK_SHARE_BLE_SCANNING;
@@ -134,7 +151,12 @@ class QuickShareAdapter final : public ShareService {
       result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_HINT;
 #endif
     for (const auto& peer : peers) {
-      if (peer.ble_only) {
+      bool bluetooth_connectable = false;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+      bluetooth_connectable = peer.ble_only && !crquickshare::EndpointName(peer.endpoint_info).empty() && !peer.classic_bluetooth_address.empty() &&
+          !discovery_.bootstrap_active();
+#endif
+      if (peer.ble_only && !bluetooth_connectable) {
         if (source.available && discovery_active_ && !source.busy)
           result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_BLE_HINT;
         continue;
@@ -144,6 +166,7 @@ class QuickShareAdapter final : public ShareService {
       item.id = peer.id;
       item.name = peer.name.empty() ? l10n_util::GetStringUTF8(IDS_CRFILES_QUICK_SHARE_BLE_DEVICE) : peer.name;
       item.ble_only = peer.ble_only;
+      item.bluetooth_connectable = bluetooth_connectable;
       item.device_type = peer.endpoint_info.empty() ? 0 : (static_cast<uint8_t>(peer.endpoint_info[0]) >> 1) & 7;
       item.bluetooth_address = peer.bluetooth_address;
       item.address = PeerKey(peer);
@@ -154,19 +177,41 @@ class QuickShareAdapter final : public ShareService {
   bool Send(std::string address, std::vector<base::FilePath> paths,
             std::map<base::FilePath, gfx::ImageSkia>,
             std::optional<ConnectPeer> phone, std::string target_id) override {
-    if (!service_ || !GetQuickSharePreferences().enabled || phone || !target_id.empty()) return false;
+    const auto reject = [](const char* reason) {
+      LOG(WARNING) << "crQuickShare: Send rejected before session; component=adapter; reason=" << reason;
+      return false;
+    };
+    if (!service_) return reject("service_missing");
+    if (!GetQuickSharePreferences().enabled) return reject("sharing_disabled");
+    if (phone || !target_id.empty()) return reject("unsupported_target");
+    if (paths.empty()) return reject("empty_selection");
     const auto source = service_->GetSnapshot();
     auto peers = source.peers;
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     peers = discovery_.MergeWithLan(std::move(peers));
 #endif
     const auto peer = std::ranges::find_if(peers, [&](const auto& item) {
-      return !item.ble_only && !item.name.empty() && PeerKey(item) == address;
+      return !item.name.empty() && PeerKey(item) == address;
     });
-    if (peer == peers.end()) return false;
+    if (peer == peers.end()) return reject("peer_not_found_or_unnamed");
     std::vector<std::string> names;
     for (const auto& path : paths) names.push_back(path.BaseName().AsUTF8Unsafe());
-    if (!service_->Send(*peer, std::move(paths))) return false;
+    if (peer->ble_only) {
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+      if (peer->classic_bluetooth_address.empty()) return reject("bluetooth_route_missing");
+      if (crquickshare::EndpointName(peer->endpoint_info).empty()) return reject("public_name_missing");
+      if (discovery_.bootstrap_active()) return reject("discovery_bootstrap_busy");
+      const auto selected = *peer;
+      auto adapter = discovery_.adapter();
+      discovery_.Update(false, true); wakeup_.Update(false);
+      if (!sender_.Send(std::move(adapter), selected, *service_, std::move(paths), hotspot_,
+                        [this](base::OnceClosure ready) { discovery_.WhenConnectionReady(std::move(ready)); })) {
+        UpdateWakeup(); return reject("bluetooth_sender_rejected");
+      }
+#else
+      return reject("bluetooth_unsupported");
+#endif
+    } else if (!service_->Send(*peer, std::move(paths))) return reject("lan_service_rejected");
     files_ = std::move(names);
     started_at_ = base::TimeTicks::Now();
     finished_at_ = base::TimeTicks();
@@ -208,6 +253,10 @@ class QuickShareAdapter final : public ShareService {
       if (service_ && !service_->StopReceivingIfIdle()) return;
       CopyReceivedTexts();
       if (service_) session_base_ += service_->GetSnapshot().session + 1;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+      receiver_.Update(nullptr);
+      sender_.Cancel();
+#endif
       service_.reset();
       preferences_ = desired; configured_ = true;
       files_.clear(); started_at_ = {}; finished_at_ = {};
@@ -215,10 +264,18 @@ class QuickShareAdapter final : public ShareService {
     }
     const auto state = service_ ? service_->GetSnapshot() : crquickshare::Snapshot();
     if (service_ && state.available && !state.receiving) service_->SetReceiving(true, true);
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     const bool active = service_ && discovery_active_ && !state.busy;
-    discovery_.Update(active);
+    if (!state.busy) {
+      sender_.Cancel();
+#if BUILDFLAG(IS_LINUX)
+      hotspot_ = crquickshare::MakeLinuxHotspotConnector(
+          base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("quick-share-upgrade-interface"));
+#endif
+    }
+    discovery_.Update(active, service_ && discovery_active_ && state.busy);
     wakeup_.Update(active);
+    receiver_.Update(service_.get(), hotspot_);
 #endif
   }
   QuickSharePreferences preferences_;
@@ -227,9 +284,12 @@ class QuickShareAdapter final : public ShareService {
   uint64_t copied_text_session_ = 0;
   mutable uint64_t observed_session_ = 0;
   std::unique_ptr<crquickshare::QuickShareService> service_;
-#if BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   crquickshare::BleWakeup wakeup_;
   crquickshare::BleDiscovery discovery_;
+  crquickshare::BootstrapProbe sender_{false};
+  crquickshare::BluetoothReceiver receiver_;
+  crquickshare::HotspotConnector hotspot_;
 #endif
   base::RepeatingTimer timer_;
   bool discovery_active_ = false;

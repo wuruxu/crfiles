@@ -39,6 +39,9 @@
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_WIN)
+#include <roapi.h>
+#endif
 #if BUILDFLAG(IS_LINUX)
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/dbus/dbus_bluez_manager_wrapper_linux.h"
@@ -251,6 +254,12 @@ int RunApplication() {
 #endif
 #if BUILDFLAG(IS_WIN)
   ui::ScopedOleInitializer ole_initializer;
+  // BLE/GATT WinRT calls share the existing STA UI apartment.
+  const HRESULT winrt_result = RoInitialize(RO_INIT_SINGLETHREADED);
+  base::ScopedClosureRunner winrt_cleanup(base::BindOnce([](HRESULT result) {
+    if (SUCCEEDED(result)) RoUninitialize();
+  }, winrt_result));
+  if (FAILED(winrt_result)) LOG(WARNING) << "Windows Runtime initialization failed; hr=" << winrt_result;
 #endif
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   base::debug::EnableInProcessStackDumping();

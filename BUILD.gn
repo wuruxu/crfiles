@@ -380,7 +380,7 @@ executable("crFiles") {
     sources += [ "sharing/quick_share_adapter.cc", "sharing/quick_share_adapter.h" ]
     deps += [ "//crQuickShare:protocol" ]
   }
-  if (is_linux) {
+  if (is_linux || is_win) {
     deps += [ "//crQuickShare:ble" ]
     if (!enable_libcr_shared) {
       deps += [ "//device/bluetooth" ]

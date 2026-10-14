@@ -371,6 +371,9 @@
 <message name="IDS_CRFILES_QS_TEXT_CONTENT" meaning="Quick Share clipboard reception" desc="Quick Share text and URL reception UI.">Text or links</message>
 <message name="IDS_CRFILES_QS_TEXT_RECEIVE_PROMPT" meaning="Quick Share clipboard reception" desc="Quick Share text and URL reception UI.">Accept to copy the received text or links to your clipboard.</message>
 <message name="IDS_CRFILES_QS_TEXT_COPIED" meaning="Quick Share clipboard reception" desc="Quick Share text and URL reception UI.">Copied to clipboard</message>
+<message name="IDS_CRFILES_QS_RESTORING_NETWORK" desc="Quick Share network restoration or availability status.">Restoring network connection…</message>
+<message name="IDS_CRFILES_QS_NETWORK_CLEANUP_FAILED" desc="Quick Share network restoration or availability status.">Network cleanup was incomplete. Check your Wi-Fi connection.</message>
+<message name="IDS_CRFILES_QS_HOTSPOT_REQUIRED" desc="Quick Share network restoration or availability status.">Wi-Fi is unavailable. Select fewer or smaller files to send over Bluetooth.</message>
 </messages>
   </release>
 </grit>

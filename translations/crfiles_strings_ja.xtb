@@ -324,4 +324,7 @@
   <translation id="6964235745882631674">テキストまたはリンク</translation>
   <translation id="8551928890709982721">受信したテキストまたはリンクをクリップボードにコピーするには、承認してください。</translation>
   <translation id="2214850006092753179">クリップボードにコピーしました</translation>
+  <translation id="5125731858634756748">ネットワーク接続を復元しています…</translation>
+  <translation id="3851611281675392532">ネットワークの後処理が完了しませんでした。Wi-Fi 接続を確認してください。</translation>
+  <translation id="6873287799323878567">Wi-Fi を利用できません。Bluetooth で送信するには、ファイルの数を減らすか、小さいファイルを選択してください。</translation>
 </translationbundle>
