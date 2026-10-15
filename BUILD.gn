@@ -385,6 +385,8 @@ executable("crFiles") {
     if (!enable_libcr_shared) {
       deps += [ "//device/bluetooth" ]
     }
+  }
+  if (is_linux) {
     configs += [ ":context_gio" ]
     if (!enable_libcr_shared) {
       deps += [ "//third_party/fontconfig" ]

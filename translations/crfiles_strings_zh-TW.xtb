@@ -327,4 +327,14 @@
   <translation id="5125731858634756748">正在恢復網路連線…</translation>
   <translation id="3851611281675392532">網路清理未完成。請檢查 Wi-Fi 連線。</translation>
   <translation id="6873287799323878567">Wi-Fi 無法使用。請選擇較少或較小的檔案，透過藍牙傳送。</translation>
+  <translation id="1974060860693918893">進階</translation>
+  <translation id="593016400173783655">啟用 Wi-Fi Direct</translation>
+  <translation id="7160542542766167615">Wi-Fi Direct 網路卡</translation>
+  <translation id="604124094241169006">自動選擇</translation>
+  <translation id="777703557475678071">使用可用無線網路卡進行 Direct 傳輸。為保留現有連線，不使用正在提供熱點的網路卡。仍可透過目前網路傳輸。</translation>
+  <translation id="1898440255434610465">此次執行中，命令列選項優先於對應設定。</translation>
+  <translation id="6013061833211324565">熱點已開啟 — Direct 無法使用</translation>
+  <translation id="4989542687859782284">無法使用</translation>
+  <translation id="8688672835843460752">可用</translation>
+  <translation id="795506937432030833">已連線 Wi-Fi</translation>
 </translationbundle>

@@ -327,4 +327,14 @@
   <translation id="5125731858634756748">Восстановление сетевого подключения…</translation>
   <translation id="3851611281675392532">Очистка сетевых настроек не завершена. Проверьте подключение Wi-Fi.</translation>
   <translation id="6873287799323878567">Wi-Fi недоступен. Выберите меньше файлов или файлы меньшего размера для отправки по Bluetooth.</translation>
+  <translation id="1974060860693918893">Дополнительно</translation>
+  <translation id="593016400173783655">Включить Wi-Fi Direct</translation>
+  <translation id="7160542542766167615">Адаптер Wi-Fi Direct</translation>
+  <translation id="604124094241169006">Автоматически</translation>
+  <translation id="777703557475678071">Использовать доступный адаптер Wi-Fi для передачи Direct. Адаптеры в режиме точки доступа исключаются для сохранения текущих подключений. Передача по текущей сети остаётся доступной.</translation>
+  <translation id="1898440255434610465">Параметры командной строки имеют приоритет над соответствующими настройками в этом сеансе.</translation>
+  <translation id="6013061833211324565">Точка доступа активна — Direct недоступен</translation>
+  <translation id="4989542687859782284">Недоступен</translation>
+  <translation id="8688672835843460752">Доступен</translation>
+  <translation id="795506937432030833">Wi-Fi подключён</translation>
 </translationbundle>

@@ -18,6 +18,8 @@ struct NearbySharingPreferences {
   std::string custom_avatar;
 };
 struct QuickSharePreferences {
+  bool direct_enabled = false;
+  std::string upgrade_interface;  // Empty selects an available wireless interface.
   bool enabled = true;
   std::string name = "crFiles";
   std::string directory;

@@ -374,6 +374,16 @@
 <message name="IDS_CRFILES_QS_RESTORING_NETWORK" desc="Quick Share network restoration or availability status.">Restoring network connection…</message>
 <message name="IDS_CRFILES_QS_NETWORK_CLEANUP_FAILED" desc="Quick Share network restoration or availability status.">Network cleanup was incomplete. Check your Wi-Fi connection.</message>
 <message name="IDS_CRFILES_QS_HOTSPOT_REQUIRED" desc="Quick Share network restoration or availability status.">Wi-Fi is unavailable. Select fewer or smaller files to send over Bluetooth.</message>
+      <message name="IDS_CRFILES_QS_ADVANCED" desc="Quick Share advanced wireless adapter setting.">Advanced</message>
+      <message name="IDS_CRFILES_QS_DIRECT_ENABLE" desc="Quick Share advanced wireless adapter setting.">Enable Wi-Fi Direct</message>
+      <message name="IDS_CRFILES_QS_INTERFACE" desc="Quick Share advanced wireless adapter setting.">Wi-Fi Direct adapter</message>
+      <message name="IDS_CRFILES_QS_AUTO_INTERFACE" desc="Quick Share advanced wireless adapter setting.">Automatic</message>
+      <message name="IDS_CRFILES_QS_INTERFACE_HINT" desc="Quick Share advanced wireless adapter setting.">Use an available Wi-Fi adapter for Direct transfers. Hotspot adapters are excluded to preserve existing connections. Transfers over the current network remain available.</message>
+      <message name="IDS_CRFILES_QS_INTERFACE_OVERRIDE" desc="Quick Share advanced wireless adapter setting.">Command-line options override the corresponding settings for this run.</message>
+      <message name="IDS_CRFILES_QS_INTERFACE_AP" desc="Quick Share advanced wireless adapter setting.">Hotspot active — Direct unavailable</message>
+      <message name="IDS_CRFILES_QS_INTERFACE_UNAVAILABLE" desc="Quick Share advanced wireless adapter setting.">Unavailable</message>
+      <message name="IDS_CRFILES_QS_INTERFACE_AVAILABLE" desc="Quick Share advanced wireless adapter setting.">Available</message>
+<message name="IDS_CRFILES_QS_INTERFACE_CONNECTED" desc="Quick Share wireless adapter is connected to Wi-Fi.">Wi-Fi connected</message>
 </messages>
   </release>
 </grit>

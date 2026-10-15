@@ -327,4 +327,14 @@
   <translation id="5125731858634756748">Restaurando a conexão de rede…</translation>
   <translation id="3851611281675392532">A limpeza da rede não foi concluída. Verifique sua conexão Wi-Fi.</translation>
   <translation id="6873287799323878567">O Wi-Fi está indisponível. Selecione menos arquivos ou arquivos menores para enviar por Bluetooth.</translation>
+  <translation id="1974060860693918893">Avançado</translation>
+  <translation id="593016400173783655">Ativar Wi-Fi Direct</translation>
+  <translation id="7160542542766167615">Adaptador Wi-Fi Direct</translation>
+  <translation id="604124094241169006">Automático</translation>
+  <translation id="777703557475678071">Use um adaptador Wi-Fi disponível para transferências Direct. Adaptadores usados como ponto de acesso são excluídos para preservar as conexões existentes. As transferências pela rede atual continuam disponíveis.</translation>
+  <translation id="1898440255434610465">As opções da linha de comando substituem as configurações correspondentes nesta execução.</translation>
+  <translation id="6013061833211324565">Ponto de acesso ativo — Direct indisponível</translation>
+  <translation id="4989542687859782284">Indisponível</translation>
+  <translation id="8688672835843460752">Disponível</translation>
+  <translation id="795506937432030833">Wi-Fi conectado</translation>
 </translationbundle>

@@ -327,4 +327,14 @@
   <translation id="5125731858634756748">正在恢复网络连接…</translation>
   <translation id="3851611281675392532">网络清理未完成。请检查 Wi-Fi 连接。</translation>
   <translation id="6873287799323878567">Wi-Fi 不可用。请选择更少或更小的文件，通过蓝牙发送。</translation>
+  <translation id="1974060860693918893">高级</translation>
+  <translation id="593016400173783655">启用 Wi-Fi Direct</translation>
+  <translation id="7160542542766167615">Wi-Fi Direct 网卡</translation>
+  <translation id="604124094241169006">自动选择</translation>
+  <translation id="777703557475678071">使用可用无线网卡进行 Direct 传输。为保留现有连接，不使用正在提供热点的网卡。仍可通过当前网络传输。</translation>
+  <translation id="1898440255434610465">本次运行中，命令行选项优先于对应设置。</translation>
+  <translation id="6013061833211324565">热点已开启 — Direct 不可用</translation>
+  <translation id="4989542687859782284">不可用</translation>
+  <translation id="8688672835843460752">可用</translation>
+  <translation id="795506937432030833">已连接 Wi-Fi</translation>
 </translationbundle>

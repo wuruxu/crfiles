@@ -72,6 +72,7 @@
 #include "ui/events/event.h"
 #include "ui/events/event_observer.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/client_view.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -101,7 +102,7 @@ std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool q
     if (state.busy && state.stage == Stage::kTransferring) {
       status += u"\n" + Text(IDS_CRFILES_QS_PROGRESS_SPEED) + u": " +
           ui::FormatSpeed(base::ByteSize(state.bytes_per_second));
-      status += u" · " + Text(IDS_CRFILES_QS_PROGRESS_REMAINING) + u": " +
+      status += u"\n" + Text(IDS_CRFILES_QS_PROGRESS_REMAINING) + u": " +
           (state.remaining_seconds < 0 ? std::u16string(u"—") :
            base::NumberToString16(state.remaining_seconds / 60) + u":" +
            (state.remaining_seconds % 60 < 10 ? u"0" : u"") + base::NumberToString16(state.remaining_seconds % 60));
@@ -463,6 +464,12 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (dismiss_) { dismiss_ = false; Close(); }
     const auto state = service_->GetSnapshot();
     using Stage = NearbySharing::Stage;
+    if (!state.discovery_resume_at.is_null() &&
+        base::TimeTicks::Now() >= state.discovery_resume_at) {
+      dismissed_session_ = state.session;
+      Close();
+      return;
+    }
     if (service_->IsQuickShare() && !state.receiving &&
         (state.stage == Stage::kCanceled || state.status_message_id == IDS_CRFILES_QUICK_SHARE_REJECTED)) {
       dismissed_session_ = state.session;
@@ -890,10 +897,33 @@ class FileShareView : public views::View, public ui::EventObserver {
   }
   std::optional<gfx::Rect> SessionBounds() {
     if (!GetWidget() || !GetWidget()->IsVisible()) return std::nullopt;
+    const auto state = service_->GetSnapshot();
+    if (anchor_session_ != state.session) {
+      anchor_session_ = state.session;
+      session_anchor_bounds_.reset();
+    }
     auto* device = session_device_->GetVisible() ? session_device_.get() : active_device_.get();
     // Place session bubbles below the entire device tile so the name and type
     // remain visible beneath the avatar while the verification code is shown.
-    return device ? std::optional(device->GetBoundsInScreen()) : std::nullopt;
+    if (device && device->IsDrawn()) {
+      auto bounds = device->GetBoundsInScreen();
+      auto origin = bounds.origin();
+      views::View::ConvertPointFromScreen(this, &origin);
+      session_anchor_bounds_ = gfx::Rect(origin, bounds.size());
+      return bounds;
+    }
+    // Discovery can temporarily withdraw or replace the completed session's
+    // device. Keep its last anchor in this view instead of reparenting the
+    // result bubble to the main window. Local coordinates also follow moves.
+    if (service_->IsQuickShare() && session_anchor_bounds_ &&
+        state.session != selection_session_) {
+      auto bounds = *session_anchor_bounds_;
+      auto origin = bounds.origin();
+      views::View::ConvertPointToScreen(this, &origin);
+      bounds.set_origin(origin);
+      return bounds;
+    }
+    return std::nullopt;
   }
  private:
   views::Label* Label(views::View* owner, std::u16string text) {
@@ -1074,18 +1104,28 @@ class FileShareView : public views::View, public ui::EventObserver {
     status_detail_->SetText(status_detail);
     status_detail_->SetTooltipText(status_detail);
     status_detail_->SetVisible(!status_detail.empty());
-    discovery_status_->SetVisible(state.discovery_message_id != 0 &&
-        (!service_->IsQuickShare() || state.discovery_message_id != IDS_CRFILES_QUICK_SHARE_BLE_HINT));
-    if (state.discovery_message_id) discovery_status_->SetText(Text(state.discovery_message_id));
+    const bool show_discovery_status = state.discovery_message_id != 0 &&
+        (!service_->IsQuickShare() || state.discovery_message_id != IDS_CRFILES_QUICK_SHARE_BLE_HINT);
+    discovery_status_->SetVisible(!service_->IsQuickShare() && show_discovery_status);
+    if (service_->IsQuickShare()) {
+      if (auto* widget = GetWidget()) {
+        const auto title = Text(show_discovery_status ? state.discovery_message_id : IDS_CRFILES_QUICK_SHARE);
+        auto* delegate = widget->widget_delegate();
+        if (delegate->GetWindowTitle() != title) delegate->SetTitle(title);
+      }
+    } else if (state.discovery_message_id) {
+      discovery_status_->SetText(Text(state.discovery_message_id));
+    }
     enable_->SetVisible(!state.enabled && !service_->IsQuickShare());
-    const bool can_send = state.enabled && transport_ready && !state.busy && !paths_.empty() &&
+    const bool discovery_paused = base::TimeTicks::Now() < state.discovery_resume_at;
+    const bool can_send = state.enabled && transport_ready && !state.busy && !discovery_paused && !paths_.empty() &&
         (!service_->IsQuickShare() || selection_ready_);
     manual_->SetEnabled(can_send || (state.busy && active_device_ == manual_));
     const bool same_devices = std::ranges::equal(known_peers_, state.peers, [](const auto& left, const auto& right) {
       return left.id == right.id && left.address == right.address && left.name == right.name &&
           left.avatar == right.avatar && left.device_type == right.device_type && left.bluetooth_address == right.bluetooth_address && left.ble_only == right.ble_only && left.bluetooth_connectable == right.bluetooth_connectable && left.phone.has_value() == right.phone.has_value();
     });
-    if (!state.busy && !toast_widget_ && !same_devices) {
+    if (!state.busy && !discovery_paused && !toast_widget_ && !same_devices) {
       active_device_ = nullptr;
       known_peers_ = state.peers; peers_->RemoveAllChildViews();
       views::View* row = nullptr; size_t index = 0;
@@ -1128,7 +1168,7 @@ class FileShareView : public views::View, public ui::EventObserver {
       auto* button = static_cast<DeviceButton*>(child.get());
       // A composing bubble pins the list, but must not keep lost peers visible.
       // Active transfers own their avatar independently of discovery broadcasts.
-      if (service_->IsQuickShare()) button->SetVisible(state.busy || latest != state.peers.end());
+      if (service_->IsQuickShare() && !discovery_paused) button->SetVisible(state.busy || latest != state.peers.end());
       button->SetEnabled((can_send && latest != state.peers.end() && (!latest->ble_only || latest->bluetooth_connectable)) || (state.busy && button == active_device_));
       button->SetTrusted(state.busy && button == active_device_ && !state.code.empty() ? state.peer_trusted :
           latest != state.peers.end() && latest->trusted);
@@ -1139,7 +1179,7 @@ class FileShareView : public views::View, public ui::EventObserver {
         (state.stage == Stage::kComplete || state.stage == Stage::kSent || state.stage == Stage::kError || state.stage == Stage::kCanceled));
     // A fallback session avatar replaces the discovery list; otherwise the
     // connected device can appear once in each of the two views.
-    const bool fallback = session && (state.receiving || !active_device_) &&
+    const bool fallback = discovery_paused ? session_device_->GetVisible() : session && (state.receiving || !active_device_) &&
         (service_->IsQuickShare() ? (state.busy || known_peers_.empty()) :
          (state.busy || toast_widget_ || shown_session_ != state.session || shown_stage_ != state.stage));
     session_device_->SetVisible(fallback);
@@ -1173,6 +1213,8 @@ class FileShareView : public views::View, public ui::EventObserver {
   std::shared_ptr<ShareService> service_;
   std::vector<base::FilePath> paths_;
   std::vector<NearbySharing::Peer> known_peers_;
+  uint64_t anchor_session_ = 0;
+  std::optional<gfx::Rect> session_anchor_bounds_;
   std::optional<NearbySharing::Peer> selected_;
   bool selection_ready_ = false;
   bool send_error_ = false;

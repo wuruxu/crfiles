@@ -9,6 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/timer.h"
 #include "crFiles/crfiles_theme.h"
+#include "crFiles/crfiles_history.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "build/build_config.h"
@@ -25,6 +26,29 @@
 #include "crQuickShare/quick_share_service.h"
 namespace crfiles {
 namespace {
+class QuickShareJournal final : public crquickshare::TransferJournal {
+ public:
+  QuickShareJournal(bool incoming, const std::string& peer,
+                    const base::FilePath& local, const std::string& remote)
+      : log_(incoming ? "receive" : "send", incoming ? "remote" : "menu",
+             incoming ? "Quick Share/" + peer + "/" + remote : local.AsUTF8Unsafe(),
+             incoming ? local.AsUTF8Unsafe() : "Quick Share/" + peer + "/" + remote) {}
+  bool valid() const { return log_.valid(); }
+  void Finish(bool success, bool cancelled, const base::FilePath& saved_path) override {
+    if (!saved_path.empty()) log_.SetDestination(saved_path.AsUTF8Unsafe());
+    if (success) log_.Succeed();
+    else if (cancelled) log_.Cancel();
+  }
+ private:
+  FileOperationLog log_;
+};
+std::unique_ptr<crquickshare::TransferJournal> CreateQuickShareJournal(
+    bool incoming, const std::string& peer, const base::FilePath& local,
+    const std::string& remote) {
+  auto journal = std::make_unique<QuickShareJournal>(incoming, peer, local, remote);
+  if (!journal->valid()) return nullptr;
+  return journal;
+}
 std::string PeerKey(const crquickshare::Peer& peer) {
   // Match discovery's SameBluetoothRoute: rotating advertisement metadata
   // must not invalidate a displayed send target. This is a routing key only;
@@ -139,15 +163,19 @@ class QuickShareAdapter final : public ShareService {
     }
     if (!source.available && !source.busy && !source.session) result.status_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
     if (!source.available) result.discovery_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
+    if (!result.busy && !result.receiving && !result.finished_at.is_null() &&
+        (result.stage == Stage::kComplete || result.stage == Stage::kSent))
+      result.discovery_resume_at = result.finished_at + base::Seconds(8);
+    const bool discovery_paused = base::TimeTicks::Now() < result.discovery_resume_at;
     auto peers = source.peers;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-    if (source.available && discovery_active_ && !source.busy) {
+    if (source.available && discovery_active_ && !source.busy && !discovery_paused) {
       result.discovery_message_id = discovery_.state() == crquickshare::BleDiscovery::State::kUnavailable ?
           IDS_CRFILES_QUICK_SHARE_BLE_UNAVAILABLE : IDS_CRFILES_QUICK_SHARE_BLE_SCANNING;
     }
     peers = discovery_.MergeWithLan(source.peers);
 #else
-    if (source.available && discovery_active_ && !source.busy)
+    if (source.available && discovery_active_ && !source.busy && !discovery_paused)
       result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_HINT;
 #endif
     for (const auto& peer : peers) {
@@ -157,7 +185,7 @@ class QuickShareAdapter final : public ShareService {
           !discovery_.bootstrap_active();
 #endif
       if (peer.ble_only && !bluetooth_connectable) {
-        if (source.available && discovery_active_ && !source.busy)
+        if (source.available && discovery_active_ && !source.busy && !discovery_paused)
           result.discovery_message_id = IDS_CRFILES_QUICK_SHARE_BLE_HINT;
         continue;
       }
@@ -260,20 +288,40 @@ class QuickShareAdapter final : public ShareService {
       service_.reset();
       preferences_ = desired; configured_ = true;
       files_.clear(); started_at_ = {}; finished_at_ = {};
-      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory(), true);
+      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory(), true, CreateQuickShareJournal);
     }
     const auto state = service_ ? service_->GetSnapshot() : crquickshare::Snapshot();
     if (service_ && state.available && !state.receiving) service_->SetReceiving(true, true);
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-    const bool active = service_ && discovery_active_ && !state.busy;
+    const auto snapshot = GetSnapshot();
+    const bool discovery_paused = base::TimeTicks::Now() < snapshot.discovery_resume_at;
+    const bool active = service_ && discovery_active_ && !state.busy && !discovery_paused;
     if (!state.busy) {
       sender_.Cancel();
 #if BUILDFLAG(IS_LINUX)
-      hotspot_ = crquickshare::MakeLinuxHotspotConnector(
-          base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("quick-share-upgrade-interface"));
+      const auto* command = base::CommandLine::ForCurrentProcess();
+      const auto interface = command->HasSwitch("quick-share-upgrade-interface") ?
+          command->GetSwitchValueASCII("quick-share-upgrade-interface") : preferences_.upgrade_interface;
+      const bool direct_go = command->HasSwitch("quick-share-direct-go") || preferences_.direct_enabled;
+      // Direct opt-in uses an independent GO/client interface and preserves STA.
+      // Never fall back to joining the phone's hotspot on this same radio.
+      hotspot_ = direct_go ? crquickshare::HotspotConnector() : crquickshare::MakeLinuxHotspotConnector(interface);
+      if (service_) service_->SetPreferHotspotUpgrade(
+          !direct_go && command->HasSwitch("quick-share-prefer-hotspot"));
+      if (service_) service_->SetWifiDirectClientConnector(direct_go ?
+          crquickshare::MakeLinuxWifiDirectClientConnector(interface) : crquickshare::WifiDirectClientConnector());
+      if (service_) service_->SetWifiDirectGoFactory(direct_go ?
+          crquickshare::MakeLinuxWifiDirectGoFactory(interface) : crquickshare::WifiDirectGoFactory(),
+          command->HasSwitch("quick-share-prefer-direct-go"));
+#elif BUILDFLAG(IS_WIN)
+      const auto* command = base::CommandLine::ForCurrentProcess();
+      const auto requested_interface = command->HasSwitch("quick-share-upgrade-interface") ?
+          base::WideToUTF8(command->GetSwitchValueNative("quick-share-upgrade-interface")) : preferences_.upgrade_interface;
+      hotspot_ = crquickshare::MakeWindowsHotspotConnector(requested_interface);
+      if (service_) service_->SetPreferHotspotUpgrade(command->HasSwitch("quick-share-prefer-hotspot"));
 #endif
     }
-    discovery_.Update(active, service_ && discovery_active_ && state.busy);
+    discovery_.Update(active, service_ && discovery_active_ && (state.busy || discovery_paused));
     wakeup_.Update(active);
     receiver_.Update(service_.get(), hotspot_);
 #endif

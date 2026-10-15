@@ -171,6 +171,8 @@ bool SetNearbySharingPreferences(const NearbySharingPreferences& p) {
 QuickSharePreferences GetQuickSharePreferences() {
   base::AutoLock lock(SettingsLock());
   QuickSharePreferences p;
+  if (const auto* adapter_name = Settings().FindString("quick_share_upgrade_interface")) p.upgrade_interface = *adapter_name;
+  p.direct_enabled = Settings().FindBool("quick_share_direct_enabled").value_or(false);
   p.enabled = Settings().FindBool("quick_share_enabled").value_or(true);
   if (const auto* name = Settings().FindString("quick_share_name")) p.name = *name;
   if (const auto* directory = Settings().FindString("quick_share_directory")) p.directory = *directory;
@@ -179,6 +181,8 @@ QuickSharePreferences GetQuickSharePreferences() {
 bool SetQuickSharePreferences(const QuickSharePreferences& p) {
   base::AutoLock lock(SettingsLock());
   auto previous = Settings().Clone();
+  Settings().Set("quick_share_direct_enabled", p.direct_enabled);
+  Settings().Set("quick_share_upgrade_interface", p.upgrade_interface);
   Settings().Set("quick_share_enabled", p.enabled);
   Settings().Set("quick_share_name", p.name);
   Settings().Set("quick_share_directory", p.directory);

@@ -78,6 +78,8 @@ class ShareService {
     uint64_t conflict_id = 0;
     base::TimeTicks started_at;
     base::TimeTicks finished_at;
+    // Quick Share outgoing results remain visible until discovery resumes.
+    base::TimeTicks discovery_resume_at;
     std::string code;
     std::string device_name;
     int avatar = 0;
