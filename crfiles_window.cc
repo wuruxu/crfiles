@@ -11,6 +11,7 @@
 #include "ui/views/context_menu_controller.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/cursor/cursor.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
@@ -72,6 +73,7 @@
 #endif
 #endif
 #include "cc/paint/paint_flags.h"
+#include "cc/paint/paint_shader.h"
 #include "third_party/skia/include/core/SkPathBuilder.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -187,6 +189,11 @@
 namespace crfiles {
 namespace {
 
+// Keep navigation chrome (toolbar, sidebar and active tab) on one surface.
+// A lightly tinted content surface separates files without hard dividers and
+// gives pale document icons more definition in light mode.
+constexpr ui::ColorId kFolderSurfaceColor = ui::kColorSysSurface1;
+
 // Share the navigation surface with the active tab, including theme changes.
 ui::ColorId NavigationColor(const views::View* view) {
   const auto* widget = view->GetWidget();
@@ -203,7 +210,7 @@ class NavigationBackground : public views::Background {
   NavigationBackground() { SetColor(ui::kColorSysBase); }
 
   void Paint(gfx::Canvas* canvas, views::View* view) const override {
-    canvas->DrawColor(color().ResolveToSkColor(view->GetColorProvider()));
+    canvas->DrawColor(view->GetColorProvider()->GetColor(NavigationColor(view)));
   }
 
   void OnViewThemeChanged(views::View* view) override {
@@ -211,6 +218,50 @@ class NavigationBackground : public views::Background {
     view->SchedulePaint();
   }
 };
+
+constexpr int kFolderEdgeFadeHeight = 12;
+
+class FolderEdgeFade : public views::View {
+  METADATA_HEADER(FolderEdgeFade, views::View)
+ public:
+  FolderEdgeFade(views::ScrollView* scroll, bool top) : scroll_(scroll), top_(top) {
+    SetCanProcessEventsWithinSubtree(false);
+    GetViewAccessibility().SetIsIgnored(true);
+    scroll_subscription_ = scroll_->AddContentsScrolledCallback(base::BindRepeating(
+        &FolderEdgeFade::SchedulePaint, base::Unretained(this)));
+  }
+  void OnThemeChanged() override {
+    views::View::OnThemeChanged();
+    SchedulePaint();
+  }
+ protected:
+  void OnPaint(gfx::Canvas* canvas) override {
+    if (!scroll_->contents() || width() <= 0 || height() <= 0) return;
+    const float offset = scroll_->CurrentOffset().y();
+    const float distance = top_ ? offset :
+        scroll_->contents()->height() - scroll_->GetVisibleRect().height() - offset;
+    // Ease down to zero at the boundary instead of popping a full-strength
+    // edge on the first pixel of scrolling. The indicator takes no layout space.
+    const float fraction = std::clamp(distance / kFolderEdgeFadeHeight, 0.0f, 1.0f);
+    if (fraction <= 0) return;
+    auto edge = SkColor4f::FromColor(GetColorProvider()->GetColor(kFolderSurfaceColor));
+    edge.fA *= fraction * fraction * (3.0f - 2.0f * fraction);
+    auto transparent = edge;
+    transparent.fA = 0;
+    const SkColor4f colors[] = {edge, transparent};
+    const SkPoint points[] = {{0, top_ ? 0.0f : static_cast<float>(height())},
+                              {0, top_ ? static_cast<float>(height()) : 0.0f}};
+    cc::PaintFlags flags;
+    flags.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr, 2, SkTileMode::kClamp));
+    canvas->DrawRect(GetLocalBounds(), flags);
+  }
+ private:
+  const raw_ptr<views::ScrollView> scroll_;
+  const bool top_;
+  base::CallbackListSubscription scroll_subscription_;
+};
+BEGIN_METADATA(FolderEdgeFade)
+END_METADATA
 
 // Paint the outline and fill together so both have square bottom corners.
 class FooterBackground : public views::Background {
@@ -2128,7 +2179,10 @@ class FileRow : public views::Button {
     return tooltip_callback_ ? tooltip_callback_.Run() : std::u16string();
   }
   void SetDragDoneCallback(base::RepeatingClosure callback) { drag_done_ = std::move(callback); }
-  void OnDragDone() override { if (drag_done_) drag_done_.Run(); }
+  void OnDragDone() override {
+    views::Button::OnDragDone();
+    if (drag_done_) drag_done_.Run();
+  }
   KeyClickAction GetKeyClickActionForEvent(const ui::KeyEvent& event) override {
     if (event.key_code() == ui::VKEY_RETURN) return KeyClickAction::kOnKeyPress;
     return views::Button::GetKeyClickActionForEvent(event);
@@ -2348,6 +2402,16 @@ class ColumnHeader : public views::View, public views::ResizeAreaDelegate {
 };
 BEGIN_METADATA(ColumnHeader)
 END_METADATA
+class SelectionMarqueeBackground : public views::Background {
+ public:
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
+    cc::PaintFlags flags;
+    flags.setColor(view->GetColorProvider()->GetColor(ui::kColorSysPrimary));
+    flags.setAlphaf(0.12f);
+    canvas->DrawRect(view->GetLocalBounds(), flags);
+  }
+  void OnViewThemeChanged(views::View* view) override { view->SchedulePaint(); }
+};
 constexpr int kListHeaderHeight = 28;
 class FileLayout : public views::View {
   METADATA_HEADER(FileLayout, views::View)
@@ -2364,7 +2428,8 @@ class FileLayout : public views::View {
     marquee_ = AddChildView(std::make_unique<views::View>());
     marquee_->SetCanProcessEventsWithinSubtree(false);
     marquee_->SetPaintToLayer(); marquee_->layer()->SetFillsBoundsOpaquely(false);
-    marquee_->SetBorder(views::CreateSolidBorder(1, ui::kColorSysPrimary));
+    marquee_->SetBackground(std::make_unique<SelectionMarqueeBackground>());
+    marquee_->SetBorder(views::CreateSolidBorder(1, ui::kColorSysOutline));
     marquee_->SetVisible(false);
   }
   views::View* GetTooltipHandlerForPoint(const gfx::Point& point) override {
@@ -2770,7 +2835,10 @@ class FileButton : public views::LabelButton {
     InvalidateLayout();
   }
   void SetDragDoneCallback(base::RepeatingClosure callback) { drag_done_ = std::move(callback); }
-  void OnDragDone() override { if (drag_done_) drag_done_.Run(); }
+  void OnDragDone() override {
+    views::LabelButton::OnDragDone();
+    if (drag_done_) drag_done_.Run();
+  }
   KeyClickAction GetKeyClickActionForEvent(const ui::KeyEvent& event) override {
     if (event.key_code() == ui::VKEY_RETURN) return KeyClickAction::kOnKeyPress;
     return views::LabelButton::GetKeyClickActionForEvent(event);
@@ -3161,6 +3229,55 @@ BEGIN_METADATA(TabBar)
 END_METADATA
 // An IME may activate a native window temporarily. Restore the editor only
 // when our window becomes active again, never while the IME owns activation.
+// File rows can be recycled during a native drag. Observe the window's drag
+// completion instead of relying on the continued existence of the source row.
+class FileDragCursorObserver : public views::WidgetObserver {
+ public:
+  explicit FileDragCursorObserver(views::Widget* widget) : widget_(widget->GetWeakPtr()) {
+    widget->AddObserver(this);
+  }
+  ~FileDragCursorObserver() override {
+    if (widget_) widget_->RemoveObserver(this);
+  }
+  void OnWidgetDragDropWillStart(views::Widget*) override {
+    weak_.InvalidateWeakPtrs();
+  }
+  void OnWidgetDragDropCompleted(views::Widget*) override {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce(&FileDragCursorObserver::Restore, weak_.GetWeakPtr()));
+  }
+  void OnWidgetDestroying(views::Widget* widget) override {
+    widget->RemoveObserver(this);
+    widget_.reset();
+    weak_.InvalidateWeakPtrs();
+  }
+ private:
+  void Restore() {
+    if (!widget_ || widget_->IsClosed() || !widget_->IsVisible()) return;
+    // Wayland screen coordinates may be unavailable immediately after a drag.
+    // Restore the source window's arrow even when target hit testing fails.
+    ui::Cursor cursor(ui::mojom::CursorType::kPointer);
+    auto* root = widget_->GetRootView();
+    auto point = display::Screen::Get()->GetCursorScreenPoint();
+    views::View::ConvertPointFromScreen(root, &point);
+    if (root->HitTestPoint(point)) {
+      if (auto* target = root->GetEventHandlerForPoint(point)) {
+        auto local = point;
+        views::View::ConvertPointToTarget(root, target, &local);
+        ui::MouseEvent event(ui::EventType::kMouseMoved, local, point, base::TimeTicks::Now(), 0, 0);
+        cursor = target->GetCursor(event);
+        if (cursor.type() == ui::mojom::CursorType::kNull)
+          cursor = ui::Cursor(ui::mojom::CursorType::kPointer);
+      }
+    } else if (!widget_->IsActive()) {
+      return;
+    }
+    widget_->SetCursor(cursor);
+  }
+  base::WeakPtr<views::Widget> widget_;
+  base::WeakPtrFactory<FileDragCursorObserver> weak_{this};
+};
+
 class RenameFocusObserver : public views::WidgetObserver {
  public:
   RenameFocusObserver(views::Widget* owner, views::Widget* bubble, views::Textfield* field)
@@ -3839,7 +3956,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     pane_id_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
-    SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : ui::kColorSysSurface));
+    if (root_) SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+    else SetBackground(std::make_unique<NavigationBackground>());
     if (!root_) {
     toolbar_ = AddChildView(std::make_unique<views::View>());
     toolbar_->SetBackground(std::make_unique<NavigationBackground>());
@@ -3913,6 +4031,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     layout->SetFlexForView(body, 1);
     if (!root_) {
     sidebar_viewport_ = body->AddChildView(std::make_unique<SidebarViewport>());
+    sidebar_viewport_->SetBackground(std::make_unique<NavigationBackground>());
     sidebar_viewport_->SetPreferredSize(gfx::Size(sidebar_display_width_, 0));
     sidebar_ = sidebar_viewport_->AddChildView(std::make_unique<views::View>());
     auto* sidebar = sidebar_.get();
@@ -3979,7 +4098,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     auto* center = body->AddChildView(std::make_unique<views::View>());
     center->SetVisible(root_ != nullptr);
-    center->SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : ui::kColorSysSurface));
+    center->SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
     auto* center_layout = center->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
     body_layout->SetFlexForView(center, 1);
@@ -3998,7 +4117,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     file_surface_ = files_;
     files_->SetPaintToLayer();
     files_->layer()->SetFillsBoundsOpaquely(false);
-    files_->SetBackgroundColor(history_page_ ? ui::kColorSysBase : ui::kColorSysSurface);
+    files_->SetBackgroundColor(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor);
     center_layout->SetFlexForView(files_, 1);
     // A plain View in ScrollView otherwise retains its initial zero size.
     files_->SetUseContentsPreferredSize(true);
@@ -4006,7 +4125,22 @@ class FilesView : public views::View, public views::TextfieldController, public 
         Text(history_page_ ? IDS_CRFILES_HISTORY : IDS_CRFILES_FILES));
     files_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     if (root_) files_->set_context_menu_controller(this);
-    files_->RegisterPostLayoutCallback(base::BindRepeating(&FilesView::RestoreScroll, base::Unretained(this)));
+    if (!history_page_) {
+      auto* top_fade = files_->SetCustomOverflowIndicator(views::OverflowIndicatorAlignment::kTop,
+          std::make_unique<FolderEdgeFade>(files_, true), kFolderEdgeFadeHeight, false);
+      auto* bottom_fade = files_->SetCustomOverflowIndicator(views::OverflowIndicatorAlignment::kBottom,
+          std::make_unique<FolderEdgeFade>(files_, false), kFolderEdgeFadeHeight, false);
+      files_->RegisterPostLayoutCallback(base::BindRepeating(
+          [](FilesView* self, views::View* top, views::View* bottom, views::ScrollView* scroll) {
+            self->RestoreScroll(scroll);
+            // Content and viewport size changes can change the remaining distance
+            // without a scroll event. The indicators are owned by this ScrollView.
+            top->SchedulePaint();
+            bottom->SchedulePaint();
+          }, base::Unretained(this), base::Unretained(top_fade), base::Unretained(bottom_fade)));
+    } else {
+      files_->RegisterPostLayoutCallback(base::BindRepeating(&FilesView::RestoreScroll, base::Unretained(this)));
+    }
     file_scroll_subscription_ = files_->AddContentsScrolledCallback(base::BindRepeating(&FilesView::FileContentsScrolled, weak_.GetWeakPtr()));
     files_->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
     auto* footer = center->AddChildView(std::make_unique<views::View>());
@@ -5667,7 +5801,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const auto& path = *Current().selected.begin();
     const auto entry = std::ranges::find(Current().entries, path, &Entry::path);
     auto* colors = GetColorProvider();
-    gfx::Canvas canvas(gfx::Size(280, 88), 1.f, false);
+    constexpr float kDragPreviewScale = 1.12f;
+    gfx::Canvas canvas(gfx::Size(static_cast<int>(std::ceil(280 * kDragPreviewScale)),
+                                static_cast<int>(std::ceil(88 * kDragPreviewScale))), 1.f, false);
+    canvas.Scale(kDragPreviewScale, kDragPreviewScale);
     cc::PaintFlags flags; flags.setAntiAlias(true);
     const int stack = std::min<size_t>(3, Current().selected.size());
     for (int i = stack - 1; i >= 0; --i) {
@@ -5693,10 +5830,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
         colors->GetColor(ui::kColorSysOnSurface), gfx::Rect(68, 12, 184, 24), gfx::Canvas::NO_SUBPIXEL_RENDERING);
     canvas.DrawStringRectWithFlags(base::NumberToString16(Current().selected.size()) + u" " + Text(IDS_CRFILES_ITEMS),
         gfx::FontList(), colors->GetColor(ui::kColorSysOnSurface), gfx::Rect(68, 36, 184, 20), gfx::Canvas::NO_SUBPIXEL_RENDERING);
-    data->provider().SetDragImage(gfx::ImageSkia::CreateFrom1xBitmap(canvas.GetBitmap()), gfx::Vector2d(20, 20));
+    const int hotspot = static_cast<int>(std::lround(20 * kDragPreviewScale));
+    data->provider().SetDragImage(gfx::ImageSkia::CreateFrom1xBitmap(canvas.GetBitmap()), gfx::Vector2d(hotspot, hotspot));
   }
   void StartFileDrag() {
     FinishFileDrag();
+    file_drag_cursor_observer_ = std::make_unique<FileDragCursorObserver>(GetWidget());
     for (const auto& path : Current().selected) {
       auto found = row_views_.find(path); if (found == row_views_.end()) continue;
       auto* row = found->second.get();
@@ -6106,7 +6245,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       pane->pane_can_close_ = multiple;
       pane->UpdateFooterVisibility();
       pane->SetBorder(views::CreateSolidBorder(1, pane == active && multiple ? ui::kColorSysPrimary :
-          pane->history_page_ ? ui::kColorSysBase : ui::kColorSysSurface));
+          pane->history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
     }, base::Unretained(ActivePane()), count > 1));
   }
   void ActivateSelf() {
@@ -7088,9 +7227,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void SyncNavigation() {
     if (tabs_.empty() || !Current().active_pane) return;
     auto* pane = ActivePane();
-    // Without the navigation toolbar, the split host's outer inset touches the
-    // tab strip. Paint that exposed root background like the active History tab.
-    SetBackground(views::CreateSolidBackground(pane->history_page_ ? ui::kColorSysBase : ui::kColorSysSurface));
+    // The outer inset belongs to navigation chrome; each pane paints its own
+    // content surface. Keep the sidebar and toolbar consistent across tabs.
+    SetBackground(std::make_unique<NavigationBackground>());
     toolbar_->SetVisible(!pane->history_page_);
     if (pane->history_page_ && sidebar_drag_start_) {
       sidebar_drag_start_.reset();
@@ -8593,6 +8732,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool footer_hovered_ = false, footer_shown_ = false, drop_highlight_shown_ = false;
   bool trash_footer_animation_pending_ = false;
   std::vector<base::WeakPtr<views::View>> dragging_rows_;
+  std::unique_ptr<FileDragCursorObserver> file_drag_cursor_observer_;
   std::unique_ptr<ShareSessionToast> session_toast_;
   views::ViewTracker sharing_dialog_, trusted_dialog_, sharing_folders_dialog_;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)

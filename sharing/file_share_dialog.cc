@@ -6,6 +6,9 @@
 #include <cmath>
 #include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
+#include "third_party/skia/include/core/SkPathMeasure.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/color/color_provider.h"
@@ -180,6 +183,60 @@ class ShareSessionBubbleDelegate : public views::BubbleDialogDelegate {
  private:
   base::WeakPtr<views::Widget> bounds_owner_;
 };
+constexpr base::TimeDelta kReceiveResultDuration = base::Seconds(8);
+
+class CountdownCloseButton : public views::MdTextButton {
+  METADATA_HEADER(CountdownCloseButton, views::MdTextButton)
+ public:
+  CountdownCloseButton(PressedCallback callback, const std::u16string& text)
+      : views::MdTextButton(std::move(callback), text) {}
+  void SetDeadline(base::TimeTicks deadline) {
+    if (deadline_ == deadline) return;
+    deadline_ = deadline;
+    repaint_timer_.Stop();
+    SetStrokeColorOverrideDeprecated(deadline.is_null() ? std::nullopt : std::optional<SkColor>(SK_ColorTRANSPARENT));
+    if (!deadline.is_null()) {
+      repaint_timer_.Start(FROM_HERE, base::Milliseconds(33), this, &CountdownCloseButton::Tick);
+    }
+    SchedulePaint();
+  }
+ protected:
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
+    views::MdTextButton::OnBoundsChanged(previous_bounds);
+    SetCornerRadius(std::min(width(), height()) / 2.0f);
+  }
+  void PaintButtonContents(gfx::Canvas* canvas) override {
+    views::MdTextButton::PaintButtonContents(canvas);
+    if (deadline_.is_null() || width() <= 2 || height() <= 2) return;
+    const double remaining = std::clamp((deadline_ - base::TimeTicks::Now()) / kReceiveResultDuration, 0.0, 1.0);
+    SkPathBuilder outline;
+    const float radius = std::min(width() - 2, height() - 2) / 2.0f;
+    outline.addRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(1, 1, width() - 2, height() - 2), radius, radius), SkPathDirection::kCW);
+    const SkPath path = outline.detach();
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kStroke_Style);
+    flags.setStrokeWidth(2);
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorButtonBorder));
+    canvas->DrawPath(path, flags);
+    if (remaining <= 0) return;
+    SkPathMeasure measure(path, true);
+    SkPathBuilder segment;
+    if (!measure.getSegment(measure.getLength() * (1 - remaining), measure.getLength(), &segment, true)) return;
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
+    canvas->DrawPath(segment.detach(), flags);
+  }
+ private:
+  void Tick() {
+    SchedulePaint();
+    if (base::TimeTicks::Now() >= deadline_) repaint_timer_.Stop();
+  }
+  base::TimeTicks deadline_;
+  base::RepeatingTimer repaint_timer_;
+};
+BEGIN_METADATA(CountdownCloseButton)
+END_METADATA
+
 class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObserver {
  public:
   ShareSessionToastImpl(views::Widget* owner, std::shared_ptr<ShareService> service,
@@ -188,7 +245,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     owner_observation_.Observe(owner);
     Refresh(); timer_.Start(FROM_HERE, base::Milliseconds(250), this, &ShareSessionToastImpl::Refresh);
   }
-  ~ShareSessionToastImpl() override { owner_observation_.Reset(); timer_.Stop(); Close(); }
+  ~ShareSessionToastImpl() override { result_close_timer_.Stop(); owner_observation_.Reset(); timer_.Stop(); Close(); }
  private:
   bool UseParentWindow(const ShareBubbleAnchor& anchor) const {
     if (!anchor.background && anchor.widget) return true;
@@ -220,6 +277,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     }
     owner_observation_.Reset();
     owner_.reset();
+    result_close_timer_.Stop();
     timer_.Stop();
     Close();
   }
@@ -254,6 +312,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       service_->CancelSession(session_);
       cancel_->SetEnabled(false);
     } else {
+      result_close_timer_.Stop();
       // Destroy the button after its event dispatch has returned.
       dismissed_session_ = session_;
       dismiss_ = true;
@@ -262,6 +321,23 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   void UpdateProgress(const NearbySharing::Snapshot& state) {
     displayed_state_ = state;
     using Stage = NearbySharing::Stage;
+    if (service_->IsQuickShare() && state.receiving && !state.busy && state.stage == Stage::kComplete) {
+      if (result_session_ != state.session) {
+        result_session_ = state.session;
+        result_deadline_ = base::TimeTicks::Now() + kReceiveResultDuration;
+        result_close_timer_.Start(FROM_HERE, result_deadline_ - base::TimeTicks::Now(),
+            base::BindOnce([](base::WeakPtr<ShareSessionToastImpl> self, uint64_t session) {
+              if (!self || self->session_ != session) return;
+              self->dismissed_session_ = session;
+              self->Close();
+            }, weak_.GetWeakPtr(), state.session));
+      }
+    } else {
+      result_close_timer_.Stop();
+      result_session_ = 0;
+      result_deadline_ = base::TimeTicks();
+    }
+    cancel_->SetDeadline(result_deadline_);
     const auto filename = base::UTF8ToUTF16(state.current_file.empty() ?
         (state.files.empty() ? std::string() : state.files.front()) : state.current_file);
     bool resize = filename_->GetText() != filename;
@@ -296,6 +372,12 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     const bool decided = same_prompt && decided_;
     const bool trusted = same_prompt && trust_ && trust_->GetChecked();
     const auto ready = same_prompt ? ready_ : base::TimeTicks::Now() + base::Milliseconds(500);
+    // Reparenting the same result must not restart its countdown.
+    if (session_ != state.session) {
+      result_close_timer_.Stop();
+      result_session_ = 0;
+      result_deadline_ = base::TimeTicks();
+    }
     Close(); session_ = state.session; stage_ = state.stage; decided_ = decided;
     conflict_id_ = state.conflict_id;
     displayed_state_ = state;
@@ -370,7 +452,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     auto* layout = actions->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
     layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
     if (transfer) {
-      cancel_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
+      cancel_ = actions->AddChildView(std::make_unique<CountdownCloseButton>(
           base::BindRepeating(&ShareSessionToastImpl::CancelOrClose, weak_.GetWeakPtr()), Text(IDS_CRFILES_CANCEL)));
       if (service_->IsQuickShare() && state.receiving) {
         open_received_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
@@ -460,7 +542,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     }
   }
   void Refresh() {
-    if (!owner_ || owner_->IsClosed()) { timer_.Stop(); Close(); return; }
+    if (!owner_ || owner_->IsClosed()) { result_close_timer_.Stop(); timer_.Stop(); Close(); return; }
     if (dismiss_) { dismiss_ = false; Close(); }
     const auto state = service_->GetSnapshot();
     using Stage = NearbySharing::Stage;
@@ -507,8 +589,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       if (!widget_ || transfer_view_ || session_ != state.session || stage_ != state.stage ||
           conflict_id_ != state.conflict_id) Show(state);
     } else {
-      // Keep the transfer result visible until explicitly dismissed, including
-      // when discovery or a later connection replaces the service snapshot.
+      // Preserve results across discovery snapshot changes. Successful Quick
+      // Share receives retain their independent auto-close deadline.
       if (!transfer_view_) Close();
       else if (widget_ && state.session != session_) {
         cancel_->SetText(Text(IDS_CRFILES_CLOSE)); cancel_->SetEnabled(true);
@@ -536,7 +618,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   std::optional<NearbySharing::Snapshot> displayed_state_;
   raw_ptr<views::Checkbox> trust_ = nullptr;
   raw_ptr<views::MdTextButton> accept_ = nullptr, reject_ = nullptr;
-  raw_ptr<views::MdTextButton> cancel_ = nullptr;
+  raw_ptr<CountdownCloseButton> cancel_ = nullptr;
   raw_ptr<views::Label> filename_ = nullptr, progress_status_ = nullptr;
   raw_ptr<views::ProgressBar> progress_ = nullptr;
   uint64_t session_ = 0;
@@ -550,6 +632,9 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   std::optional<bool> background_mode_;
   bool stacking_dirty_ = true;
   base::TimeTicks ready_;
+  uint64_t result_session_ = 0;
+  base::TimeTicks result_deadline_;
+  base::OneShotTimer result_close_timer_;
   base::RepeatingTimer timer_;
   base::WeakPtrFactory<ShareSessionToastImpl> weak_{this};
 };

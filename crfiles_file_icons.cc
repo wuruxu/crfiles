@@ -56,7 +56,8 @@ std::string_view IconAsset(const std::string& mime, bool directory) {
   if (mime.find("script") != std::string::npos || mime.find("python") != std::string::npos || mime.find("shell") != std::string::npos) return "text-x-script";
   if (mime.starts_with("text/")) return "text-x-generic";
   if (mime.find("executable") != std::string::npos || mime.find("sharedlib") != std::string::npos) return "application-x-executable";
-  return "application-x-generic";
+  // Use Adwaita's lined document for files without a dedicated type icon.
+  return "text-x-generic";
 }
 std::map<std::string, std::string>& SvgSourceCache() {
   static base::NoDestructor<std::map<std::string, std::string>> cache;
