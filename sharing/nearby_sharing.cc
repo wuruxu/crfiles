@@ -6,6 +6,7 @@
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/crfiles_history.h"
+#include "crFiles/crfiles_tags.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "crFiles/sharing/phone_sender.h"
 #include "crFiles/sharing/connect_client.h"
@@ -1159,6 +1160,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
   }
   base::FilePath root;
   bool direct_target = false;
+  int64_t receive_tag = 0;
   {
     base::AutoLock lock(state->lock);
     state->snapshot.total = total;
@@ -1171,7 +1173,8 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
       auto found = std::ranges::find(state->targets, *target, &NearbySharing::SharedTarget::id);
       if (found == state->targets.end()) return FailTransfer(failure, kFolderError);
       root = found->directory;
-      direct_target = true;
+      receive_tag = found->tag_id;
+      direct_target = receive_tag == 0;
       state->snapshot.receive_target = found->id;
       state->snapshot.receive_target_name = found->name;
     }
@@ -1274,7 +1277,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
 #else
   const auto scan_directory = root_fd.get();
 #endif
-  if (!direct_target && !tree && !CollectReceivedNames(scan_directory, true, 0, entries, existing, *state,
+  if (!direct_target && !tree && receive_tag == 0 && !CollectReceivedNames(scan_directory, true, 0, entries, existing, *state,
                             generation, base::TimeTicks::Now() + base::Seconds(60)))
     return FailTransfer(failure, kFolderError);
   const size_t offered_count = files.size();
@@ -1329,6 +1332,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
   if (!channel.SendJson(std::move(acceptance))) return FailTransfer(failure, kConnectionError);
   SetStage(state, Stage::kTransferring);
   std::vector<uint8_t> buffer(kChunkSize);
+  std::set<base::FilePath> tag_paths;
   for (const auto& [name, size] : files) {
     std::string sender;
     {
@@ -1439,6 +1443,19 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     if (!UpdateTrust(state, false, 0, size)) return FailTransfer(failure, kStatisticsError);
     if (!channel.SendJson(Message("stored"))) return FailTransfer(failure, kConnectionError);
     log.Succeed();
+    if (receive_tag > 0) {
+      auto path = batch;
+      for (const auto& part : parts) {
+        path = path.Append(base::FilePath::FromUTF8Unsafe(part));
+        tag_paths.insert(path);
+      }
+    }
+  }
+  if (receive_tag > 0 && !tag_paths.empty() &&
+      EditFileTags(std::vector<base::FilePath>(tag_paths.begin(), tag_paths.end()), {receive_tag}, {}) != TagWriteResult::kOk) {
+    LOG(ERROR) << "crFiles: received files saved, but tagging failed; tag=" << receive_tag;
+    base::AutoLock lock(state->lock);
+    state->snapshot.warning_message_id = IDS_CRFILES_TAG_SAVE_ERROR;
   }
   if (!channel.SendJson(Message("complete"))) return FailTransfer(failure, kConnectionError);
   return true;
@@ -2103,6 +2120,7 @@ void Run(std::shared_ptr<State> state) {
         state->snapshot.finished_at = base::TimeTicks();
       }
       state->snapshot.receiving = !outgoing;
+      state->snapshot.warning_message_id = 0;
       state->snapshot.files.clear();
       state->snapshot.current_file.clear();
       state->snapshot.receive_target.clear(); state->snapshot.receive_target_name.clear();
@@ -2290,7 +2308,7 @@ void NearbySharing::SetSharedTargets(std::vector<SharedTarget> targets) {
   if (state_->snapshot.busy && state_->snapshot.receiving && !state_->snapshot.receive_target.empty()) {
     auto previous = std::ranges::find(state_->targets, state_->snapshot.receive_target, &SharedTarget::id);
     auto next = std::ranges::find(targets, state_->snapshot.receive_target, &SharedTarget::id);
-    if (previous == state_->targets.end() || next == targets.end() || previous->directory != next->directory) ++state_->cancel;
+    if (previous == state_->targets.end() || next == targets.end() || (previous->directory != next->directory || previous->tag_id != next->tag_id)) ++state_->cancel;
   }
   state_->targets = std::move(targets);
 }

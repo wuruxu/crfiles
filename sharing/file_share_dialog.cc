@@ -767,8 +767,8 @@ class SharingFoldersView : public views::View {
  public:
   SharingFoldersView(
       base::RepeatingCallback<std::vector<NearbySharing::SharedTarget>()> folders,
-      base::RepeatingCallback<void(base::FilePath)> open,
-      base::RepeatingCallback<void(base::FilePath)> remove)
+      base::RepeatingCallback<void(NearbySharing::SharedTarget)> open,
+      base::RepeatingCallback<void(NearbySharing::SharedTarget)> remove)
       : folders_(std::move(folders)), open_(std::move(open)), remove_(std::move(remove)) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 12));
@@ -794,12 +794,12 @@ class SharingFoldersView : public views::View {
       layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
       row->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant, 8));
       auto* button = row->AddChildView(std::make_unique<views::MdTextButton>(
-          base::BindRepeating([](base::RepeatingCallback<void(base::FilePath)> open,
-                                 base::FilePath path) {
+          base::BindRepeating([](base::RepeatingCallback<void(NearbySharing::SharedTarget)> open,
+                                 NearbySharing::SharedTarget target) {
             // Opening a tab closes this dialog; let the click finish first.
             base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-                FROM_HERE, base::BindOnce(open, std::move(path)));
-          }, open_, folder.directory), std::u16string()));
+                FROM_HERE, base::BindOnce(open, std::move(target)));
+          }, open_, folder), std::u16string()));
       button->SetImageModel(views::Button::STATE_NORMAL,
           ui::ImageModel::FromVectorIcon(vector_icons::kFolderOpenIcon, ui::kColorSysOnSurface, 24));
       button->SetImageCentered(true);
@@ -822,7 +822,7 @@ class SharingFoldersView : public views::View {
       path->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
       path->SetTooltipText(folder.directory.AsUTF16Unsafe());
       auto remove = views::CreateVectorImageButtonWithNativeTheme(
-          base::BindRepeating(remove_, folder.directory),
+          base::BindRepeating(remove_, folder),
           kDeleteIcon, 20, ui::kColorSysError, ui::kColorIconDisabled,
           ui::kColorSysError);
       remove->SetPreferredSize(gfx::Size(36, 36));
@@ -834,7 +834,7 @@ class SharingFoldersView : public views::View {
     InvalidateLayout();
   }
   base::RepeatingCallback<std::vector<NearbySharing::SharedTarget>()> folders_;
-  base::RepeatingCallback<void(base::FilePath)> open_, remove_;
+  base::RepeatingCallback<void(NearbySharing::SharedTarget)> open_, remove_;
   std::vector<NearbySharing::SharedTarget> displayed_;
   raw_ptr<views::View> list_ = nullptr;
   raw_ptr<views::Label> empty_ = nullptr;
@@ -1406,8 +1406,8 @@ views::View* ShowTrustedDevicesDialog(views::Widget* parent,
 
 views::View* ShowSharingFoldersDialog(views::Widget* parent,
     base::RepeatingCallback<std::vector<NearbySharing::SharedTarget>()> folders,
-    base::RepeatingCallback<void(base::FilePath)> open,
-    base::RepeatingCallback<void(base::FilePath)> remove) {
+    base::RepeatingCallback<void(NearbySharing::SharedTarget)> open,
+    base::RepeatingCallback<void(NearbySharing::SharedTarget)> remove) {
   if (!parent) return nullptr;
   auto contents = std::make_unique<SharingFoldersView>(
       std::move(folders), std::move(open), std::move(remove));

@@ -393,6 +393,24 @@
       <message name="IDS_CRFILES_QS_INTERFACE_UNAVAILABLE" desc="Quick Share advanced wireless adapter setting.">Unavailable</message>
       <message name="IDS_CRFILES_QS_INTERFACE_AVAILABLE" desc="Quick Share advanced wireless adapter setting.">Available</message>
 <message name="IDS_CRFILES_QS_INTERFACE_CONNECTED" desc="Quick Share wireless adapter is connected to Wi-Fi.">Wi-Fi connected</message>
+      <message name="IDS_CRFILES_TAGS" desc="Custom file tags interface.">Tags</message>
+      <message name="IDS_CRFILES_TAGS_MANAGE" desc="Custom file tags interface.">Create reusable tags for files and folders.</message>
+      <message name="IDS_CRFILES_TAGS_HINT" desc="Custom file tags interface.">Select tags to add or remove. Each path can have up to 6 tags. Unchanged mixed tags are preserved.</message>
+      <message name="IDS_CRFILES_TAG_NAME" desc="Custom file tags interface.">Tag name</message>
+      <message name="IDS_CRFILES_TAG_CREATE" desc="Custom file tags interface.">Create Tag</message>
+      <message name="IDS_CRFILES_TAG_APPLY" desc="Custom file tags interface.">Apply tags</message>
+      <message name="IDS_CRFILES_TAG_EDIT" desc="Custom file tags interface.">Edit tags</message>
+      <message name="IDS_CRFILES_TAG_MIXED" desc="Custom file tags interface.">Some selected items</message>
+      <message name="IDS_CRFILES_TAGS_EMPTY" desc="Custom file tags interface.">No tags yet. Create a tag to get started.</message>
+      <message name="IDS_CRFILES_TAG_NAME_INVALID" desc="Custom file tags interface.">Use 1–40 characters without control characters.</message>
+      <message name="IDS_CRFILES_TAG_LIMIT" desc="Custom file tags interface.">Each path can have up to 6 tags. No changes were saved.</message>
+      <message name="IDS_CRFILES_TAG_UNAVAILABLE" desc="Custom file tags interface.">Some paths are unavailable.</message>
+      <message name="IDS_CRFILES_TAGS_MAP_HINT" desc="Custom file tags interface.">Block area reflects item count. Empty tags keep a small block. Sizes include folder contents without counting nested paths twice.</message>
+  <message name="IDS_CRFILES_TAG_SAVE_ERROR" desc="Warning when received files were saved but custom tag association failed">Files were received, but their tags could not be saved.</message>
+      <message name="IDS_CRFILES_TAG_ADD" desc="Custom file tag context menu and deletion.">Add Tags</message>
+      <message name="IDS_CRFILES_TAG_DELETE" desc="Custom file tag context menu and deletion.">Delete Tag</message>
+      <message name="IDS_CRFILES_TAG_DELETE_ERROR" desc="Custom file tag context menu and deletion.">Tags could not be deleted.</message>
+      <message name="IDS_CRFILES_TAG_DELETE_CONFIRM" desc="Confirmation before deleting tags; selected virtual tag paths are listed below.">Delete the tags listed below and remove them from all associated files and folders? The files and folders themselves will be kept.</message>
 </messages>
   </release>
 </grit>

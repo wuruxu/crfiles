@@ -31,6 +31,7 @@ class ShareService {
     std::string id;
     std::string name;
     base::FilePath directory;  // Local only; never sent to another device.
+    int64_t tag_id = 0;  // Local-only association for successful receives.
     bool operator==(const SharedTarget&) const = default;
   };
   struct Peer {

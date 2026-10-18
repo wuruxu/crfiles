@@ -6,6 +6,8 @@
 #include "crFiles/crfiles_tray.h"
 #include "crFiles/crfiles_dialog.h"
 #include "crFiles/crfiles_history.h"
+#include "crFiles/crfiles_tags.h"
+#include "crFiles/crfiles_tags_view.h"
 #include "crFiles/crfiles_search_view.h"
 #include "crFiles/crfiles_context_actions.h"
 #include "ui/views/context_menu_controller.h"
@@ -344,7 +346,36 @@ constexpr gfx::PathElement kQuickShareAndroidIconPath[] = {
 };
 const gfx::VectorIconRep kQuickShareAndroidIconReps[] = {{kQuickShareAndroidIconPath}};
 const gfx::VectorIcon kQuickShareAndroidIcon = {kQuickShareAndroidIconReps, 1, "quick_share_android"};
-// A zipped document, drawn in the same theme color as other menu icons.
+// A path tag, drawn in the same theme color as other menu icons.
+constexpr gfx::PathElement kTagsIconPath[] = {
+    gfx::CANVAS_DIMENSIONS, 20, gfx::STROKE, 1.5f,
+    gfx::MOVE_TO, 2, 3, gfx::LINE_TO, 10, 3, gfx::LINE_TO, 18, 11,
+    gfx::LINE_TO, 11, 18, gfx::LINE_TO, 2, 9, gfx::CLOSE,
+    gfx::CIRCLE, 6, 7, 1,
+};
+const gfx::VectorIconRep kTagsIconReps[] = {{kTagsIconPath}};
+const gfx::VectorIcon kTagsIcon(kTagsIconReps, 1, "crfiles_tags");
+
+// Geometry from tag-folder.svg. Both paths inherit the theme's icon color.
+constexpr gfx::PathElement kTagFolderIconPath[] = {
+    gfx::CANVAS_DIMENSIONS, 24, gfx::STROKE, 1.5f, gfx::CAP_SQUARE,
+    gfx::MOVE_TO, 3, 10, gfx::LINE_TO, 3, 5.75f,
+    gfx::LINE_TO, 4.25f, 4.5f, gfx::LINE_TO, 9, 4.5f,
+    gfx::LINE_TO, 11.5f, 7, gfx::LINE_TO, 19.75f, 7,
+    gfx::LINE_TO, 21, 8.25f, gfx::LINE_TO, 21, 10.5f,
+    gfx::MOVE_TO, 3, 13.5f, gfx::LINE_TO, 3, 17.75f,
+    gfx::LINE_TO, 4.25f, 19, gfx::LINE_TO, 7, 19,
+    gfx::MOVE_TO, 10, 19, gfx::LINE_TO, 11, 19,
+    gfx::MOVE_TO, 6.5f, 10, gfx::LINE_TO, 16.5f, 10,
+    gfx::MOVE_TO, 14, 12.5f, gfx::LINE_TO, 18.5f, 12.5f,
+    gfx::LINE_TO, 22.5f, 16.5f, gfx::LINE_TO, 17.5f, 21.5f,
+    gfx::LINE_TO, 13.5f, 17.5f, gfx::LINE_TO, 13.5f, 13,
+    gfx::CLOSE,
+    gfx::NEW_PATH, gfx::CIRCLE, 16.5f, 15.5f, 0.9f,
+};
+const gfx::VectorIconRep kTagFolderIconReps[] = {{kTagFolderIconPath}};
+const gfx::VectorIcon kTagFolderIcon(kTagFolderIconReps, 1, "crfiles_tag_folder");
+
 constexpr gfx::PathElement kBreadcrumbDiskIconPath[] = {
     gfx::CANVAS_DIMENSIONS, 20,
     gfx::STROKE, 1.5f,
@@ -486,6 +517,9 @@ struct Entry {
   bool package = false;
   base::Time created = {};
   std::optional<int> permissions = std::nullopt;
+  int64_t tag = 0;  // Nonzero only for virtual folder entries in Tags/.
+  std::string tag_name = {};
+  size_t tag_count = 0;
 };
 // Read actual birth time, never POSIX ctime (metadata-change time).
 // Called only by directory/metadata workers. Missing metadata displays as a dash.
@@ -803,7 +837,8 @@ DirectoryCache& CachedDirectories() {
 bool SameMetadata(const Entry& a, const Entry& b) {
   return a.path == b.path && a.directory == b.directory &&
       a.size == b.size && a.modified == b.modified && a.mime == b.mime && a.hidden == b.hidden &&
-      a.created == b.created && a.permissions == b.permissions;
+      a.created == b.created && a.permissions == b.permissions && a.package == b.package &&
+      a.tag == b.tag && a.tag_name == b.tag_name && a.tag_count == b.tag_count;
 }
 DirectoryResult CompareDirectory(DirectoryEntries previous, std::set<base::FilePath> removed,
     uint64_t generation, DirectoryResult result, CancelFlag canceled) {
@@ -1194,7 +1229,7 @@ END_METADATA
 void ShowFileProperties(views::Widget* parent,
                         const std::vector<base::FilePath>& paths,
                         const std::vector<Entry>& entries,
-                        bool calculate_directory_size = true) {
+                        bool calculate_directory_size, OpenTagCallback open_tag) {
   auto dialog = std::make_unique<views::DialogDelegate>(); dialog->SetTitle(Text(IDS_CRFILES_PROPERTIES));
   dialog->SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk));
   auto contents = std::make_unique<views::View>();
@@ -1226,13 +1261,17 @@ void ShowFileProperties(views::Widget* parent,
       ((has_directory || entries.empty()) ? std::u16string(u"—") : ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(bytes))))));
     size_label->SetHorizontalAlignment(gfx::ALIGN_LEFT); size_label->SetSelectable(true);
   }
+  if (!paths.empty() && std::ranges::all_of(paths, [](const auto& path) { return path.IsAbsolute() && !IsDrivesLocation(path); })) {
+    contents->AddChildView(CreateTagsPropertyView(paths, std::move(open_tag)));
+    contents->SetPreferredSize(gfx::Size(520, 440));
+  }
   dialog->SetContentsView(std::move(contents));
   ShowCrFilesDialog(std::move(dialog), parent);
 }
 
 // Sidebar targets are not necessarily present in the current directory listing.
 // Read their metadata off the UI thread, then use the same properties layout.
-void ShowFolderProperties(views::Widget* parent, base::FilePath path) {
+void ShowFolderProperties(views::Widget* parent, base::FilePath path, OpenTagCallback open_tag) {
   if (!parent || parent->IsClosed() || path.empty()) return;
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -1248,17 +1287,17 @@ void ShowFolderProperties(views::Widget* parent, base::FilePath path) {
         }
         return entries;
       }, path),
-      base::BindOnce([](base::WeakPtr<views::Widget> parent, base::FilePath path,
+      base::BindOnce([](base::WeakPtr<views::Widget> parent, base::FilePath path, OpenTagCallback open_tag,
                         std::vector<Entry> entries) {
-        if (parent && !parent->IsClosed()) ShowFileProperties(parent.get(), {path}, entries);
-      }, parent->GetWeakPtr(), path));
+        if (parent && !parent->IsClosed()) ShowFileProperties(parent.get(), {path}, entries, true, std::move(open_tag));
+      }, parent->GetWeakPtr(), path, std::move(open_tag)));
 }
 class BookmarksView : public views::View, public views::ContextMenuController, public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(BookmarksView, views::View)
  public:
   BookmarksView(base::RepeatingCallback<void(base::FilePath)> open,
-                base::RepeatingCallback<void(base::FilePath)> new_tab)
-      : open_(std::move(open)), new_tab_(std::move(new_tab)) {
+                base::RepeatingCallback<void(base::FilePath)> new_tab, OpenTagCallback open_tag)
+      : open_(std::move(open)), new_tab_(std::move(new_tab)), open_tag_(std::move(open_tag)) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets::VH(8, 0), 6));
     auto stored = GetCrFilesBookmarks();
@@ -1440,7 +1479,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
     // Keep an empty bookmark area available as a drop target.
     auto* space = AddChildView(std::make_unique<views::View>());
     space->SetPreferredSize(gfx::Size(0, 36));
-    error_ = AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_CONFIG_ERROR)));
+    error_ = AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_TAG_DELETE_ERROR)));
     error_->SetSubpixelRenderingEnabled(false);
     error_->SetMultiLine(true); error_->SetVisible(false);
     SetCurrentPath(current_);
@@ -1492,7 +1531,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
     const auto found = std::ranges::find(entries_, path, &Bookmark::path);
     if (found == entries_.end()) return;
     if (command == IDS_CRFILES_OPEN_NEW_TAB) { new_tab_.Run(path); return; }
-    if (command == IDS_CRFILES_PROPERTIES) { ShowFolderProperties(GetWidget(), path); return; }
+    if (command == IDS_CRFILES_PROPERTIES) { ShowFolderProperties(GetWidget(), path, open_tag_); return; }
     if (command == IDS_CRFILES_REMOVE_BOOKMARK) {
       auto entries = entries_; std::erase_if(entries, [&](const auto& entry) { return entry.path == path; });
       Commit(std::move(entries)); return;
@@ -1521,6 +1560,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
     ShowCrFilesDialog(std::move(dialog), GetWidget());
   }
   base::RepeatingCallback<void(base::FilePath)> open_, new_tab_;
+  OpenTagCallback open_tag_;
   std::vector<Bookmark> entries_;
   std::vector<raw_ptr<SidebarButton>> buttons_;
   raw_ptr<views::Label> error_ = nullptr;
@@ -4496,6 +4536,7 @@ enum ContextCommand {
   kContextSplitLeft, kContextSplitRight, kContextSplitTop, kContextSplitBottom, kContextShare, kContextQuickShare,
   kContextExtractHere, kContextExtractFolder, kContextExtractTo,
   kContextShowPackageContents, kContextNewFolder, kContextSortBy, kContextSelectAll,
+  kContextAddTags, kContextDeleteTag,
   kContextSortFirst = 10050,
   kContextApplication = 10100
 };
@@ -4551,7 +4592,7 @@ struct Tab {
 class FilesView : public views::View, public views::TextfieldController, public views::ResizeAreaDelegate, public views::DragController, public ui::SimpleMenuModel::Delegate, public views::ContextMenuController, public ui::SelectFileDialog::Listener {
   METADATA_HEADER(FilesView, views::View)
  public:
-  explicit FilesView(FilesView* root = nullptr, base::FilePath initial_path = {}, bool history_page = false, bool deferred_start = false, bool search_page = false) : history_page_(history_page || search_page), search_page_(search_page), root_(root), sharing_(root ? nullptr : std::make_shared<NearbySharing>()) {
+  explicit FilesView(FilesView* root = nullptr, base::FilePath initial_path = {}, bool history_page = false, bool deferred_start = false, bool search_page = false, int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}) : search_scope_(std::move(search_scope)), tag_id_(tag_id), tag_name_(std::move(tag_name)), history_page_(history_page || search_page), search_page_(search_page), root_(root), sharing_(root ? nullptr : std::make_shared<NearbySharing>()) {
     if (!root_) g_contents = this;
     if (root_) {
       // Keep the pane outline in the same layer subtree as its scrolling content.
@@ -4561,7 +4602,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     pane_id_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
-    if (root_) SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+    if (root_) SetBackground(views::CreateSolidBackground((history_page_ && tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor));
     else SetBackground(std::make_unique<NavigationBackground>());
     if (!root_) {
     toolbar_ = AddChildView(std::make_unique<views::View>());
@@ -4666,6 +4707,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetVisible(false);
     add_place(kDeleteIcon, IDS_CRFILES_TRASH, base::BindRepeating(&FilesView::Trash, base::Unretained(this)));
     sidebar->AddChildView(std::make_unique<views::Separator>());
+    add_place(kTagsIcon, IDS_CRFILES_TAGS, base::BindRepeating(&FilesView::ShowTagsTab, base::Unretained(this)));
+    sidebar->AddChildView(std::make_unique<views::Separator>());
     auto* bookmark_scroll = sidebar->AddChildView(std::make_unique<BookmarkScrollView>());
     bookmarks_ = bookmark_scroll->SetContents(std::make_unique<BookmarksView>(
         base::BindRepeating([](base::WeakPtr<FilesView> view, base::FilePath path) {
@@ -4673,7 +4716,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr()),
         base::BindRepeating([](base::WeakPtr<FilesView> view, base::FilePath path) {
           if (view) view->AddPaneTab(path);
-        }, weak_.GetWeakPtr())));
+        }, weak_.GetWeakPtr()), TagOpener()));
     static_cast<views::BoxLayout*>(sidebar->GetLayoutManager())->SetFlexForView(bookmark_scroll, 1);
 
 #if BUILDFLAG(IS_WIN)
@@ -4705,7 +4748,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     auto* center = body->AddChildView(std::make_unique<views::View>());
     center->SetVisible(root_ != nullptr);
-    center->SetBackground(views::CreateSolidBackground(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+    center->SetBackground(views::CreateSolidBackground((history_page_ && tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor));
     auto* center_layout = center->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
     body_layout->SetFlexForView(center, 1);
@@ -4724,12 +4767,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     file_surface_ = files_;
     files_->SetPaintToLayer();
     files_->layer()->SetFillsBoundsOpaquely(false);
-    files_->SetBackgroundColor(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor);
+    files_->SetBackgroundColor((history_page_ && tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor);
     center_layout->SetFlexForView(files_, 1);
     // A plain View in ScrollView otherwise retains its initial zero size.
     files_->SetUseContentsPreferredSize(true);
     files_->SetAccessibleName(
-        Text(history_page_ ? IDS_CRFILES_HISTORY : IDS_CRFILES_FILES));
+        Text(tag_id_ >= 0 ? IDS_CRFILES_TAGS : history_page_ ? IDS_CRFILES_HISTORY : IDS_CRFILES_FILES));
     files_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     if (root_) files_->set_context_menu_controller(this);
     if (!history_page_) {
@@ -4755,7 +4798,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     footer->SetProperty(views::kViewIgnoredByLayoutKey, true);
     footer->SetPaintToLayer(); footer->layer()->SetFillsBoundsOpaquely(false);
     footer->layer()->SetOpacity(0.f); footer->SetCanProcessEventsWithinSubtree(false);
-    footer->SetBackground(std::make_unique<FooterBackground>(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+    footer->SetBackground(std::make_unique<FooterBackground>((history_page_ && tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor));
     footer->SetBorder(std::make_unique<FooterGlowBorder>(false));
     auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(4, 8), 4));
@@ -4879,6 +4922,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (root_) {
       activation_ = std::make_unique<PaneActivation>(this, base::BindRepeating(&FilesView::ActivateFromInput, base::Unretained(this)));
       activation_->SetFileKeys(base::BindRepeating(&FilesView::FileKeyPressed, base::Unretained(this)));
+      if (tag_id_ >= 0) {
+        tabs_.push_back(Tab{.id = next_id_++});
+        Current().sidebar_selection = IDS_CRFILES_TAGS;
+        tag_history_.push_back({tag_id_, tag_name_, {}, {}});
+        LoadTagFiles();
+        return;
+      }
       if (search_page_) {
         tabs_.push_back(Tab{.id = next_id_++}); Current().path = initial_path;
         files_->SetVisible(false); footer_->SetVisible(false);
@@ -4902,7 +4952,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
             }, weak_.GetWeakPtr()),
             base::BindRepeating([](base::WeakPtr<FilesView> pane) {
               if (pane && pane->root_) pane->root_->UpdateSearchTabStates();
-            }, weak_.GetWeakPtr())), 0);
+            }, weak_.GetWeakPtr()), search_scope_), 0);
         center_layout->SetFlexForView(search_view_, 1);
         return;
       }
@@ -4935,11 +4985,223 @@ class FilesView : public views::View, public views::TextfieldController, public 
     timer_.Start(FROM_HERE, base::Seconds(1), this, &FilesView::UpdateNearby);
     UpdateNearby();
   }
+  OpenTagCallback TagOpener() {
+    auto* shell = root_ ? root_.get() : this;
+    return base::BindRepeating([](base::WeakPtr<FilesView> view, int64_t id, std::string name) {
+      if (view) view->AddPaneTab({}, false, false, id, std::move(name));
+    }, shell->weak_.GetWeakPtr());
+  }
+  void ShowTagsTab() {
+    auto* shell = root_ ? root_.get() : this;
+    auto* pane = shell->ActivePane();
+    if (!pane) return;
+    shell->EndAddressEditing();
+    if (pane->history_page_) {
+      // History/search own a different content tree. Replace only this leaf,
+      // preserving the current tab and any surrounding split layout.
+      auto replacement = std::make_unique<FilesView>(shell, base::FilePath(), false, false, false, 0);
+      replacement->pane_id_ = pane->pane_id_;
+      auto* added = replacement.get();
+      auto* parent = pane->parent();
+      pane->PrepareToClose();
+      if (auto* split = views::AsViewClass<PaneSplit>(parent)) split->Replace(pane, added);
+      shell->Current().active_pane = added;
+      auto removed = parent->RemoveChildViewT(pane);
+      parent->AddChildView(std::move(replacement));
+      removed.reset();
+      parent->InvalidateLayout();
+    } else {
+      if (pane->tag_history_.empty()) {
+        const auto& tab = pane->Current();
+        for (int i = 0; i <= tab.history_index; ++i)
+          pane->tag_history_.push_back({-1, {}, {}, tab.history[i]});
+        if (pane->tag_history_.empty()) pane->tag_history_.push_back({-1, {}, {}, tab.path});
+        pane->tag_history_index_ = static_cast<int>(pane->tag_history_.size()) - 1;
+      }
+      pane->NavigateTag({0, {}, {}, {}});
+    }
+    shell->UpdatePaneControls(); shell->SyncNavigation(); shell->ScheduleWorkspaceSave();
+    shell->ActivePane()->DefaultFocusView()->RequestFocus();
+  }
+  bool IsTagListing() const { return tag_id_ >= 0 && tag_directory_root_.empty(); }
+  struct TagLocation {
+    int64_t id;
+    std::string name;
+    base::FilePath root;
+    base::FilePath path;
+  };
+  void NavigateTag(TagLocation location, int history_index = -1) {
+    if (tag_id_ == location.id && tag_directory_root_ == location.root && Current().path == location.path) { Refresh(); return; }
+    SaveScroll(); CancelDirectoryWork(); CancelFileVisuals(); ClearMaterializedRows();
+    ResetDirectoryAnimation(); CloseNewFolder(); CloseViewOptions();
+    ++context_generation_;
+    if (context_runner_ && context_runner_->IsRunning()) context_runner_->Cancel();
+    ++Current().request; ++access_generation_; tag_loading_ = false;
+    pending_navigation_.reset();
+    tag_id_ = location.id; tag_name_ = location.name; tag_directory_root_ = location.root;
+    auto& tab = Current();
+    tag_sizes_.clear(); tag_sizes_pending_ = false;
+    tab.entries.clear(); tab.sorted_entries.clear(); tab.selected.clear(); tab.removed.clear();
+    tab.visuals.clear(); tab.failed_thumbnails.clear(); ++tab.metadata_generation;
+    tab.path = {}; tab.scroll = 0; pending_scroll_ = 0; tab.error = false; tab.InvalidateOrder();
+    tab.sidebar_selection = location.id >= 0 ? IDS_CRFILES_TAGS : 0;
+    files_->SetAccessibleName(Text(location.id >= 0 ? IDS_CRFILES_TAGS : IDS_CRFILES_FILES));
+    if (history_index >= 0) tag_history_index_ = history_index;
+    else {
+      tag_history_.resize(tag_history_index_ + 1);
+      tag_history_.push_back(location); tag_history_index_ = tag_history_.size() - 1;
+    }
+    if (location.id >= 0 && location.root.empty()) LoadTagFiles();
+    else Navigate(location.path, -1, true);
+    root_->PaneNavigated(this);
+  }
+  void NavigateTagRoot() {
+    auto* pane = ActivePane();
+    if (pane->tag_id_ >= 0) pane->NavigateTag({0, {}, {}, {}});
+    else ShowTagsTab();
+  }
+  struct TagFilesResult {
+    bool ok = false;
+    std::string name;
+    std::vector<Entry> entries;
+  };
+  void LoadTagFiles() {
+    if (!IsTagListing() || tag_loading_) return;
+    tag_loading_ = true; tag_version_ = FileTagsVersion();
+    CancelDirectoryWork();
+    // Metadata refresh must not invalidate thumbnail jobs for retained rows.
+    const uint64_t request = Current().request;
+    Current().loading = true;
+    const auto token = read_cancel_;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce([](int64_t id, CancelFlag token) {
+          TagFilesResult result;
+          const auto snapshot = ReadFileTags();
+          if (!snapshot.ok) return result;
+          if (id == 0) {
+            result.ok = true;
+            for (const auto& tag : snapshot.tags) {
+              Entry entry{base::FilePath(FILE_PATH_LITERAL("tags")).AppendASCII(base::NumberToString(tag.id)), true, -1, {}, "inode/directory"};
+              entry.tag = tag.id; entry.tag_name = tag.name; entry.tag_count = tag.paths.size();
+              entry.name_key = base::i18n::ToLower(base::UTF8ToUTF16(tag.name));
+              result.entries.push_back(std::move(entry));
+            }
+            return result;
+          }
+          const auto tag = std::ranges::find(snapshot.tags, id, &FileTag::id);
+          if (tag == snapshot.tags.end()) return result;
+          result.ok = true; result.name = tag->name;
+          for (const auto& path : tag->paths) {
+            if (Stopped(token)) return result;
+            base::File::Info info;
+            if (!base::GetFileInfo(path, &info)) continue;
+            std::string mime = "inode/directory";
+            if (!info.is_directory && !net::GetMimeTypeFromFile(path, &mime)) mime = "application/octet-stream";
+            bool hidden = path.BaseName().AsUTF8Unsafe().starts_with(".");
+#if BUILDFLAG(IS_WIN)
+            const DWORD attributes = GetFileAttributesW(path.value().c_str());
+            hidden |= attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_HIDDEN);
+#endif
+            result.entries.push_back({path, info.is_directory, info.size, info.last_modified, mime, hidden});
+            ReadExtraMetadata(result.entries.back());
+#if BUILDFLAG(IS_MAC)
+            result.entries.back().package = info.is_directory && IsFilePackageMac(path);
+#endif
+          }
+          return result;
+        }, tag_id_, token),
+        base::BindOnce([](base::WeakPtr<FilesView> pane, CancelFlag token, uint64_t request, TagFilesResult result) {
+          if (!pane || Stopped(token) || pane->Current().request != request) return;
+          DirectoryResult directory;
+          directory.ok = result.ok; directory.entries = std::move(result.entries);
+          pane->CompareTagFiles(token, request, std::move(result.name), std::move(directory));
+        }, weak_.GetWeakPtr(), token, request));
+    UpdateStatus();
+  }
+  void CompareTagFiles(CancelFlag token, uint64_t request, std::string name, DirectoryResult result) {
+    const auto& tab = Current();
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+        base::BindOnce([](DirectoryEntries previous, std::set<base::FilePath> removed,
+                         uint64_t generation, FileSort sort, bool hidden,
+                         DirectoryResult data, CancelFlag canceled) {
+          data.sort = sort; data.hidden = hidden;
+          data.order = SortDirectory(SortRecords(data.entries, canceled), sort, hidden, false, canceled);
+          return CompareDirectory(std::move(previous), std::move(removed), generation, std::move(data), canceled);
+        }, tab.entries, tab.removed, tab.metadata_generation, tab.options.sort, tab.options.show_hidden, std::move(result), token),
+        base::BindOnce([](base::WeakPtr<FilesView> pane, CancelFlag canceled, uint64_t serial,
+                         std::string title, DirectoryResult data) {
+          if (!pane || Stopped(canceled) || pane->Current().request != serial) return;
+          auto& current = pane->Current();
+          if (data.base_generation != current.metadata_generation || data.sort != current.options.sort ||
+              data.hidden != current.options.show_hidden) {
+            pane->CompareTagFiles(canceled, serial, std::move(title), std::move(data)); return;
+          }
+          pane->tag_loading_ = false;
+          const bool title_changed = data.ok && pane->tag_name_ != title;
+          if (data.ok) pane->tag_name_ = std::move(title);
+          current.loading = false;
+          pane->CancelOrdering();
+          if (pane->restored_scroll_) {
+            current.scroll = *pane->restored_scroll_; pane->pending_scroll_ = *pane->restored_scroll_;
+            pane->restored_scroll_.reset();
+          }
+          // Reuse the ordinary folder's delta application: unchanged rows,
+          // selection, thumbnails and the visible scroll anchor survive.
+          if (views::AsViewClass<FileLayout>(pane->files_->contents()) &&
+              current.sorted_mode == data.sort && current.sorted_hidden == data.hidden) {
+            pane->ApplyLiveDirectory(std::move(data));
+            pane->RequestFileVisuals();
+          } else {
+            pane->SaveScroll(); pane->CancelOrdering(); pane->CancelFileVisuals(); pane->ClearMaterializedRows();
+            current.error = !data.ok;
+            std::erase_if(current.visuals, [&](const auto& item) { return !data.delta->unchanged.contains(item.first); });
+            std::erase_if(current.failed_thumbnails, [&](const auto& path) { return !data.delta->unchanged.contains(path); });
+            std::erase_if(current.selected, [&](const auto& path) { return !data.delta->positions.contains(path); });
+            current.entries = std::move(data.entries); current.removed.clear(); ++current.metadata_generation;
+            current.sorted_entries = data.order.values(); current.sorted_mode = data.sort; current.sorted_hidden = data.hidden;
+            pane->RenderFiles(); pane->UpdateStatus();
+          }
+          if (title_changed) pane->root_->PaneNavigated(pane.get());
+          if (pane->tag_id_ == 0) pane->LoadTagSizes(canceled, serial);
+        }, weak_.GetWeakPtr(), token, request, std::move(name)));
+  }
+  void LoadTagSizes(CancelFlag token, uint64_t request) {
+    tag_sizes_pending_ = true;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+        base::BindOnce([](CancelFlag canceled) {
+          std::map<int64_t, TagSize> sizes;
+          for (auto& tag : ReadFileTags().tags) {
+            if (Stopped(canceled)) break;
+            sizes.emplace(tag.id, CalculateTagSize(std::move(tag.paths), canceled));
+          }
+          return sizes;
+        }, token), base::BindOnce([](base::WeakPtr<FilesView> pane, CancelFlag canceled,
+                                     uint64_t serial, std::map<int64_t, TagSize> sizes) {
+          if (!pane || Stopped(canceled) || pane->Current().request != serial) return;
+          pane->tag_sizes_pending_ = false;
+          pane->SaveScroll(); pane->CancelOrdering(); pane->ClearMaterializedRows();
+          auto entries = pane->Current().entries.values();
+          for (auto& entry : entries) {
+            auto size = sizes.find(entry.tag);
+            if (size != sizes.end()) entry.size = static_cast<int64_t>(std::min<uint64_t>(size->second.bytes, std::numeric_limits<int64_t>::max()));
+          }
+          pane->tag_sizes_ = std::move(sizes);
+          pane->Current().entries = std::move(entries); ++pane->Current().metadata_generation;
+          pane->Current().InvalidateOrder(); pane->RenderFiles();
+        }, weak_.GetWeakPtr(), token, request));
+  }
   void ShowSearchTab() {
     auto* pane = ActivePane();
-    if (!pane || pane->history_page_ || pane->Current().loading || !pane->Current().path.IsAbsolute() ||
-        pane->Current().path == TrashRoot()) return;
-    (root_ ? root_.get() : this)->AddPaneTab(pane->Current().path, false, true);
+    if (!pane || pane->history_page_ || pane->Current().loading || pane->Current().error) return;
+    auto* shell = root_ ? root_.get() : this;
+    if (pane->tag_id_ > 0 && pane->IsTagListing()) {
+      SearchScope scope;
+      scope.multiple = true; scope.tag_id = pane->tag_id_;
+      scope.title = Text(IDS_CRFILES_TAGS) + u" / " + base::UTF8ToUTF16(pane->tag_name_);
+      shell->AddPaneTab({}, false, true, -1, {}, std::move(scope));
+    } else if (pane->Current().path.IsAbsolute() && pane->Current().path != TrashRoot()) {
+      shell->AddPaneTab(pane->Current().path, false, true);
+    }
   }
   void RefreshReceivedSidebar() {
     if (root_ || !GetWidget() || GetWidget()->IsClosed()) return;
@@ -4948,13 +5210,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ShowHistoryTab() {
     if (root_) { root_->ShowHistoryTab(); return; }
-    for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->history_page_ && !tab.active_pane->search_page_) { SelectPaneTab(tab.id); return; }
+    for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->history_page_ && !tab.active_pane->search_page_ && tab.active_pane->tag_id_ < 0) { SelectPaneTab(tab.id); return; }
     AddPaneTab({}, true);
   }
   void LoadHistory() { RequestHistory(false); }
   void LoadMoreHistory() { RequestHistory(true); }
   void RequestHistory(bool append) {
-    if (!history_page_ || search_page_ || history_loading_) return;
+    if (!history_page_ || search_page_ || tag_id_ >= 0 || history_loading_) return;
     auto* list = views::AsViewClass<HistoryList>(files_->contents());
     append = append && list && history_cache_valid_ &&
         history_loaded_query_ == history_query_ && history_loaded_filter_ == history_filter_ &&
@@ -5031,7 +5293,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     views::View::RemovedFromWidget();
   }
   void OnResize(int amount, bool done) override {
-    if (!sidebar_viewport_ || !ActivePane() || ActivePane()->history_page_) return;
+    if (!sidebar_viewport_ || !ActivePane() || (ActivePane()->history_page_ && ActivePane()->tag_id_ < 0)) return;
     if (!sidebar_drag_start_) {
       sidebar_animation_timer_.Stop();
       sidebar_drag_start_ = sidebar_display_width_;
@@ -5049,7 +5311,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateSidebarPresentation() {
     if (!sidebar_viewport_) return;
-    const bool history = ActivePane() && ActivePane()->history_page_;
+    const bool history = ActivePane() && ActivePane()->history_page_ && ActivePane()->tag_id_ < 0;
     sidebar_viewport_->SetPreferredSize(gfx::Size(sidebar_display_width_, 0));
     sidebar_viewport_->SetVisible(!history && sidebar_display_width_ > 0);
     sidebar_resize_->SetVisible(!history);
@@ -5075,7 +5337,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateSidebarPresentation();
   }
   void RestoreSidebar() {
-    if (!ActivePane() || ActivePane()->history_page_) return;
+    if (!ActivePane() || (ActivePane()->history_page_ && ActivePane()->tag_id_ < 0)) return;
     sidebar_drag_start_.reset();
     AnimateSidebarTo(sidebar_width_);
     ActivePane()->DefaultFocusView()->RequestFocus();
@@ -5090,7 +5352,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
           std::min(std::max(0, area.width() - 8), static_cast<int>(std::lround(preferred.width() * 1.12))) : std::max(0, area.width());
       const int footer_height = trash ? static_cast<int>(std::lround(preferred.height() * 1.08)) : preferred.height();
       if (auto* layout = views::AsViewClass<FileLayout>(files_->contents()))
-        layout->SetBottomPadding(footer_height + 10);
+        layout->SetBottomPadding(tag_id_ == 0 ? 0 : footer_height + 10);
       footer_->SetBounds(area.x() + (area.width() - footer_width) / 2,
           std::max(area.y(), area.bottom() - footer_height -
               (Current().path == TrashRoot() ? 2 : 0)), footer_width, footer_height);
@@ -5307,7 +5569,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (!root_ || history_page_ || root_->local_operation_busy_ || trash_busy_ || Current().loading) return false;
       if (command_id == kContextSortBy ||
           (command_id >= kContextSortFirst && command_id < kContextSortFirst + static_cast<int>(kSortMenuLabels.size()))) return true;
+      if (command_id == kContextDeleteTag) return tag_id_ == 0 && !context_paths_.empty();
+      if (tag_id_ == 0 && command_id != kContextOpen && command_id != kContextSelectAll && command_id != kContextNewFolder) return false;
+      if (tag_id_ == 0 && command_id == kContextNewFolder) return true;
       if (command_id == kContextSelectAll) return !displayed_entries_.empty() && !order_pending_;
+      if (IsTagListing() && (command_id == kContextNewFolder || command_id == kContextPaste ||
+          (context_paths_.empty() && (command_id == kContextProperties || command_id == kContextTerminal)))) return false;
       if (command_id == kContextNewFolder)
         return !IsDrivesLocation(Current().path) && Current().path != TrashRoot() && !TrashRoot().IsParent(Current().path);
       if (context_paths_.empty() && (command_id == kContextProperties || command_id == kContextTerminal))
@@ -5330,14 +5597,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
           (command_id >= kContextSplitLeft && command_id <= kContextSplitBottom)) return single && context_directory_;
       return !root_->local_operation_busy_ && !trash_busy_ && !Current().loading;
     }
-    if (history_page_) return !HistoryFilterAction(command_id).empty();
+    if (history_page_) return history_header_ && !HistoryFilterAction(command_id).empty();
     if (tabs_.empty()) return false;
     const auto& tab = tabs_[active_];
     switch (command_id) {
       case IDS_CRFILES_RENAME_PANE: return true;
       case IDS_CRFILES_CLOSE_PANE: return pane_can_close_;
       case IDS_CRFILES_MOVE_TRASH:
-        return !trash_busy_ && !tab.loading && !tab.selected.empty() && tab.path != TrashRoot() && !TrashRoot().IsParent(tab.path);
+        return tag_id_ != 0 && !trash_busy_ && !tab.loading && !tab.selected.empty() && tab.path != TrashRoot() && !TrashRoot().IsParent(tab.path);
       default: return false;
     }
   }
@@ -5348,14 +5615,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
           base::BindOnce([](base::WeakPtr<FilesView> view, int command, base::FilePath path) {
             if (!view) return;
             if (command == IDS_CRFILES_OPEN_NEW_TAB) view->AddPaneTab(path);
-            else ShowFolderProperties(view->GetWidget(), path);
+            else ShowFolderProperties(view->GetWidget(), path, view->TagOpener());
           }, weak_.GetWeakPtr(), command_id, sidebar_context_path_));
       return;
     }
     if (command_id >= kContextOpen && command_id < kContextApplication + 1000) {
       Deferred(base::BindRepeating(&FilesView::ContextAction, weak_.GetWeakPtr(), command_id, context_generation_, Current().request)).Run(); return;
     }
-    if (history_page_) {
+    if (history_page_ && history_header_) {
       const auto action = HistoryFilterAction(command_id);
       history_filter_ = history_filter_ == action ? std::string() : action;
       history_header_->SetFilter(history_filter_.empty() ? std::u16string() : Text(command_id));
@@ -5381,14 +5648,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
         base::BindRepeating([](base::WeakPtr<FilesView> shell) {
           return shell ? shell->shared_directories_ : std::vector<NearbySharing::SharedTarget>();
         }, weak_.GetWeakPtr()),
-        base::BindRepeating([](base::WeakPtr<FilesView> shell, base::FilePath path) {
+        base::BindRepeating([](base::WeakPtr<FilesView> shell, NearbySharing::SharedTarget target) {
           if (!shell) return;
           if (auto* view = shell->sharing_folders_dialog_.view(); view && view->GetWidget())
             view->GetWidget()->Close();
-          shell->NewTab(std::move(path));
+          if (target.tag_id > 0) shell->AddPaneTab({}, false, false, target.tag_id, target.name);
+          else shell->NewTab(target.directory);
         }, weak_.GetWeakPtr()),
-        base::BindRepeating([](base::WeakPtr<FilesView> shell, base::FilePath path) {
-          if (shell) shell->RemoveSharedDirectory(path);
+        base::BindRepeating([](base::WeakPtr<FilesView> shell, NearbySharing::SharedTarget target) {
+          if (!shell) return;
+          std::erase_if(shell->shared_directories_, [&](const auto& shared) { return shared.id == target.id; });
+          shell->SyncSharedTargets(); shell->ScheduleWorkspaceSave();
         }, weak_.GetWeakPtr())));
   }
   void ApplyViewSettings() {
@@ -5422,12 +5692,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
         views::MenuAnchorPosition::kBubbleBottomRight, ui::mojom::MenuSourceType::kMouse);
   }
   int GetDragOperationsForView(views::View*, const gfx::Point&) override {
-    return root_ && !history_page_ && !IsDrivesLocation(Current().path) && !Current().loading ? (ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK) : ui::DragDropTypes::DRAG_NONE;
+    return root_ && !history_page_ && tag_id_ != 0 && !IsDrivesLocation(Current().path) && !Current().loading ? (ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK) : ui::DragDropTypes::DRAG_NONE;
   }
   bool CanStartDragForView(views::View*, const gfx::Point& start, const gfx::Point& point) override {
     return views::View::ExceededDragThreshold(point - start);
   }
   void WriteDragDataForView(views::View* sender, const gfx::Point&, ui::OSExchangeData* data) override {
+    if (tag_id_ == 0) return;
     if (IsDrivesLocation(Current().path)) return;
     for (const auto& [path, row] : row_views_) if (row->Contains(sender)) {
       if (!Current().selected.contains(path)) {
@@ -5446,7 +5717,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     *formats = ui::OSExchangeData::FILE_NAME; return true;
   }
   bool CanDrop(const ui::OSExchangeData& data) override {
-    if (!root_ || history_page_ || root_->local_operation_busy_ || Current().loading || Current().error ||
+    if (!root_ || history_page_ || IsTagListing() || root_->local_operation_busy_ || Current().loading || Current().error ||
         IsDrivesLocation(Current().path) || Current().path == TrashRoot() || TrashRoot().IsParent(Current().path)) return false;
     const auto files = data.GetFilenames();
     if (!files || files->empty() || files->size() > 4096) return false;
@@ -5530,6 +5801,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     for (auto& tab : tabs_) VisitPanes(tab.pane_host,
         base::BindRepeating([](const std::set<base::FilePath>& folders, const FileOperationResult& changes, FilesView* pane) {
           if (pane->history_page_) return;
+          if (pane->IsTagListing()) {
+            pane->local_operation_error_ = changes.failed != 0;
+            pane->local_sources_retained_ = changes.sources_retained != 0;
+            pane->LoadTagFiles(); return;
+          }
 #if BUILDFLAG(IS_WIN)
           if (!folders.contains(pane->Current().path)) {
             const auto current = pane->Current().path.NormalizePathSeparators().StripTrailingSeparators();
@@ -5560,7 +5836,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
 
   std::vector<base::FilePath> SelectionPaths() const {
-    if (!root_ || history_page_ || tabs_.empty()) return {};
+    if (!root_ || history_page_ || tag_id_ == 0 || tabs_.empty()) return {};
     const auto& selected = tabs_[active_].selected;
     return {selected.begin(), selected.end()};
   }
@@ -5608,13 +5884,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
         keyboard_position_ = static_cast<FileLayout*>(files_->contents())->IndexOf(row);
         keyboard_anchor_ = keyboard_position_; UpdateStatus();
       }
-      context_paths_ = SelectionPaths();
+      // Context menus also operate on virtual tag entries. SelectionPaths()
+      // intentionally excludes them from filesystem operations.
+      context_paths_.assign(Current().selected.begin(), Current().selected.end());
       auto entry = std::ranges::find(Current().entries, path, &Entry::path);
       context_directory_ = entry != Current().entries.end() && entry->directory;
       break;
     }
     if (context_paths_.empty() && type == ui::mojom::MenuSourceType::kKeyboard) {
-      context_paths_ = SelectionPaths();
+      context_paths_.assign(Current().selected.begin(), Current().selected.end());
       if (!context_paths_.empty()) {
         auto entry = std::ranges::find(Current().entries, context_paths_.front(), &Entry::path);
         context_directory_ = entry != Current().entries.end() && entry->directory;
@@ -5653,19 +5931,29 @@ class FilesView : public views::View, public views::TextfieldController, public 
       else context_menu_->AddItem(command, Text(label));
     };
     if (context_paths_.empty()) {
-      add(kContextNewFolder, IDS_CRFILES_NEW_FOLDER, &vector_icons::kFolderOpenIcon);
+      add(kContextNewFolder, tag_id_ == 0 ? IDS_CRFILES_TAG_CREATE : IDS_CRFILES_NEW_FOLDER, tag_id_ == 0 ? &kTagsIcon : &vector_icons::kFolderOpenIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       context_sort_ = std::make_unique<ui::SimpleMenuModel>(this);
-      for (size_t i = 0; i < kSortMenuLabels.size(); ++i)
+      for (size_t i = 0; i < kSortMenuLabels.size(); ++i) {
+        const auto sort = static_cast<FileSort>(i);
+        if (sort == FileSort::kTypeDescending || sort == FileSort::kPermissionsAscending ||
+            sort == FileSort::kPermissionsDescending) continue;
         context_sort_->AddRadioItem(kContextSortFirst + static_cast<int>(i), Text(kSortMenuLabels[i]), 1);
+      }
       context_menu_->AddSubMenu(kContextSortBy, Text(IDS_CRFILES_SORT_BY), context_sort_.get());
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
-      add(kContextPaste, IDS_CRFILES_PASTE, &kContentPasteIcon);
+      if (tag_id_ != 0) add(kContextPaste, IDS_CRFILES_PASTE, &kContentPasteIcon);
       add(kContextSelectAll, IDS_CRFILES_SELECT_ALL);
+      if (tag_id_ != 0) {
+        context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
+        add(kContextTerminal, IDS_CRFILES_OPEN_TERMINAL, &kCodeIcon);
+        context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
+        add(kContextProperties, IDS_CRFILES_PROPERTIES, &kInfoIcon);
+      }
+    } else if (tag_id_ == 0) {
+      add(kContextOpen, IDS_CRFILES_OPEN, &kTagFolderIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
-      add(kContextTerminal, IDS_CRFILES_OPEN_TERMINAL, &kCodeIcon);
-      context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
-      add(kContextProperties, IDS_CRFILES_PROPERTIES, &kInfoIcon);
+      add(kContextDeleteTag, IDS_CRFILES_TAG_DELETE, &kDeleteIcon);
     } else {
       if (context_paths_.size() == 1 && context_directory_ && !context_package_) {
         add(kContextNewTab, IDS_CRFILES_OPEN_NEW_TAB, &kOpenInNewIcon);
@@ -5696,7 +5984,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextCut, IDS_CRFILES_CUT, &kContentCutIcon); add(kContextCopy, IDS_CRFILES_HISTORY_COPY, &vector_icons::kContentCopyIcon);
-      add(kContextMoveTo, IDS_CRFILES_MOVE_TO, &kMoveGroupIcon); add(kContextCopyTo, IDS_CRFILES_COPY_TO, &vector_icons::kContentCopyIcon);
+      context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
+      add(kContextAddTags, IDS_CRFILES_TAGS, &kTagsIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextShare, IDS_CRFILES_SHARE_TO, &vector_icons::kScreenShareIcon);
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
@@ -5737,6 +6026,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         *root_->clipboard_sequence_ == ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
   }
   void PasteSelection(bool force_move = false) {
+    if (IsTagListing()) return;
     if (IsDrivesLocation(Current().path)) return;
     if (!root_ || history_page_ || Current().loading || root_->local_operation_busy_ || !HasFileClipboard()) return;
 #if BUILDFLAG(IS_WIN)
@@ -5910,7 +6200,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       return;
     }
     if (context_paths_.empty() && command == kContextProperties) {
-      ShowFolderProperties(GetWidget(), Current().path);
+      ShowFolderProperties(GetWidget(), Current().path, TagOpener());
       return;
     }
     if (context_paths_.empty() && command == kContextTerminal) {
@@ -5932,6 +6222,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     if (command >= kContextSplitLeft && command <= kContextSplitBottom) { root_->SplitPane(this, command - kContextSplitLeft, path); return; }
     switch (command) {
+      case kContextAddTags: ShowFileTagEditor(GetWidget(), context_paths_); break;
+      case kContextDeleteTag: DeleteSelectedTags(); break;
       case kContextOpen: Open(path, context_directory_); break;
       case kContextShowPackageContents: Navigate(path); break;
       case kContextNewTab: root_->AddPaneTab(path); break;
@@ -5967,6 +6259,74 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       case kContextProperties: ShowEntryProperties(); break;
     }
+  }
+  void DeleteSelectedTags() {
+    std::vector<int64_t> ids;
+    std::u16string locations;
+    for (const auto& entry : Current().entries) {
+      if (entry.tag <= 0 || std::ranges::find(context_paths_, entry.path) == context_paths_.end()) continue;
+      ids.push_back(entry.tag);
+      if (!locations.empty()) locations += u"\n";
+      locations += Text(IDS_CRFILES_TAGS) + u"/" + base::UTF8ToUTF16(entry.tag_name);
+    }
+    if (ids.empty()) return;
+    auto dialog = std::make_unique<views::DialogDelegate>();
+    dialog->SetTitle(Text(IDS_CRFILES_TAG_DELETE));
+    dialog->SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
+                       static_cast<int>(ui::mojom::DialogButton::kCancel));
+    dialog->SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kCancel));
+    dialog->SetButtonLabel(ui::mojom::DialogButton::kOk, Text(IDS_CRFILES_TAG_DELETE));
+    auto contents = std::make_unique<views::View>();
+    contents->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(20), 12));
+    auto* explanation = contents->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_TAG_DELETE_CONFIRM)));
+    explanation->SetMultiLine(true); explanation->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    explanation->SizeToFit(420);
+    auto* scroll = contents->AddChildView(std::make_unique<views::ScrollView>());
+    scroll->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
+    scroll->ClipHeightTo(0, 240);
+    auto names = std::make_unique<views::Label>(locations);
+    names->SetMultiLine(true); names->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    names->SizeToFit(420); scroll->SetContents(std::move(names));
+    dialog->SetContentsView(std::move(contents));
+    dialog->SetAcceptCallbackWithClose(base::BindRepeating([](base::WeakPtr<FilesView> pane, const std::vector<int64_t>& selected_ids) {
+      if (!pane) return true;
+      if (pane->root_->local_operation_busy_) return false;
+      pane->DeleteTagsConfirmed(selected_ids);
+      return true;
+    }, weak_.GetWeakPtr(), std::move(ids)));
+    ShowCrFilesDialog(std::move(dialog), GetWidget());
+  }
+  void DeleteTagsConfirmed(std::vector<int64_t> ids) {
+    root_->local_operation_busy_ = true;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&DeleteFileTags, ids),
+        base::BindOnce([](base::WeakPtr<FilesView> shell, std::vector<int64_t> deleted, TagWriteResult result) {
+          if (!shell) return;
+          shell->local_operation_busy_ = false;
+          if (result != TagWriteResult::kOk) {
+            auto dialog = std::make_unique<views::DialogDelegate>();
+            dialog->SetTitle(Text(IDS_CRFILES_TAG_DELETE));
+            auto label = std::make_unique<views::Label>(Text(IDS_CRFILES_TAG_DELETE_ERROR));
+            label->SetBorder(views::CreateEmptyBorder(gfx::Insets(16)));
+            dialog->SetContentsView(std::move(label));
+            ShowCrFilesDialog(std::move(dialog), shell->GetWidget());
+            return;
+          }
+          std::erase_if(shell->shared_directories_, [&](const auto& target) {
+            return std::ranges::find(deleted, target.tag_id) != deleted.end();
+          });
+          shell->SyncSharedTargets();
+          for (auto& tab : shell->tabs_) {
+            if (!tab.pane_host) continue;
+            shell->VisitPanes(tab.pane_host, base::BindRepeating([](const std::vector<int64_t>& deleted_ids, FilesView* pane) {
+              if (std::ranges::find(deleted_ids, pane->tag_id_) != deleted_ids.end())
+                pane->NavigateTag({0, {}, {}, {}});
+              else if (pane->tag_id_ == 0) pane->LoadTagFiles();
+            }, deleted));
+          }
+          shell->ScheduleWorkspaceSave();
+        }, root_->weak_.GetWeakPtr(), ids));
   }
   void ContextLaunchFinished(bool ok) { if (!ok) status_->SetText(Text(IDS_CRFILES_OPEN_ERROR)); }
   void ShowEntryName(bool compress) {
@@ -6008,7 +6368,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ShowEntryProperties() {
     ShowFileProperties(GetWidget(), context_paths_, Current().entries.values(),
-                       !IsDrivesLocation(Current().path));
+                       !IsDrivesLocation(Current().path), TagOpener());
   }
 
  private:
@@ -6150,7 +6510,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::set<base::FilePath> paths;
     VisitPanes(Current().pane_host, base::BindRepeating([](bool activated,
                                                         std::set<base::FilePath>* paths, FilesView* pane) {
-      if (pane->history_page_ || pane->tabs_.empty()) return;
+      if (pane->history_page_ || pane->IsTagListing() || pane->tabs_.empty()) return;
       const auto& path = pane->Current().path;
       const bool visible = pane->IsDrawn() && pane->GetWidget()->IsVisible() &&
           !pane->GetWidget()->IsMinimized() && path.IsAbsolute() && !IsDrivesLocation(path)
@@ -6188,6 +6548,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     last_file_scroll_ = {};
   }
   void QueueLiveRead() {
+    if (IsTagListing()) return;
     if (live_dirty_since_.is_null()) live_dirty_since_ = base::TimeTicks::Now();
     live_dirty_ = true;
     if (!live_read_pending_ && !live_read_timer_.IsRunning())
@@ -6360,7 +6721,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateFooterVisibility() {
     if (!root_ || !footer_) return;
-    if (history_page_) { footer_->SetVisible(false); return; }
+    if (history_page_ || tag_id_ == 0) {
+      footer_hide_timer_.Stop(); footer_shown_ = false; footer_restore_pending_ = true;
+      footer_->SetVisible(false); return;
+    }
     const bool active = root_->ActivePane() == this;
     if (footer_active_ != active) {
       footer_active_ = active; footer_expired_ = false; footer_hide_timer_.Stop();
@@ -6491,7 +6855,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
   Tab& Current() { return tabs_[active_]; }
   const Tab& Current() const { return tabs_[active_]; }
   std::string PaneName() const {
-    if (search_page_) return base::UTF16ToUTF8(Text(IDS_CRFILES_SEARCH) + u" · " + EntryName(Current().path));
+    if (tag_id_ > 0 && !IsTagListing()) return base::UTF16ToUTF8(EntryName(Current().path));
+    if (tag_id_ >= 0) return base::UTF16ToUTF8(Text(IDS_CRFILES_TAGS)) + (tag_id_ > 0 ? " · " + tag_name_ : "");
+    if (search_page_) return base::UTF16ToUTF8(Text(IDS_CRFILES_SEARCH) + u" · " +
+        (search_scope_.title.empty() ? EntryName(Current().path) : search_scope_.title));
     if (history_page_) return base::UTF16ToUTF8(Text(IDS_CRFILES_HISTORY));
     if (!pane_name_.empty()) return pane_name_;
     if (!tabs_.empty() && !EntryName(tabs_[active_].path).empty())
@@ -6511,6 +6878,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     } else if (auto* pane = views::AsViewClass<FilesView>(view)) {
       pane->SaveScroll();
       const auto& tab = pane->Current(); const auto& options = tab.options;
+      if (pane->tag_id_ >= 0) { result.Set("tag_id", base::NumberToString(pane->tag_id_)); result.Set("tag_name", pane->tag_name_); result.Set("tag_root", pane->tag_directory_root_.AsUTF8Unsafe()); }
+      if (pane->search_scope_.tag_id > 0) {
+        result.Set("search_tag", base::NumberToString(pane->search_scope_.tag_id));
+        result.Set("search_scope_title", base::UTF16ToUTF8(pane->search_scope_.title));
+      }
       result.Set("history_page", pane->history_page_); result.Set("search_page", pane->search_page_);
       result.Set("id", pane->pane_id_); result.Set("name", pane->pane_name_);
       result.Set("path", tab.path.AsUTF8Unsafe()); result.Set("scroll", pane->restored_scroll_.value_or(tab.scroll));
@@ -6534,6 +6906,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       base::DictValue item;
       item.Set("id", target.id); item.Set("name", target.name);
       item.Set("path", target.directory.AsUTF8Unsafe());
+      if (target.tag_id > 0) item.Set("tag_id", base::NumberToString(target.tag_id));
       shares.Append(std::move(item));
     }
     workspace.Set("shared_directories", std::move(shares));
@@ -6573,12 +6946,54 @@ class FilesView : public views::View, public views::TextfieldController, public 
       split->SetResizeCallback(base::BindRepeating(&FilesView::SplitResizeChanged, weak_.GetWeakPtr()));
       return split;
     }
+    if (const auto* saved_tag = data.FindString("tag_id")) {
+      int64_t id;
+      if (!base::StringToInt64(*saved_tag, &id) || id < 0) return nullptr;
+      ++leaves;
+      const auto* name = data.FindString("tag_name");
+      auto pane = std::make_unique<FilesView>(this, base::FilePath(), false, false, false, id, name ? *name : "");
+      if (const auto* saved_id = data.FindString("id"); saved_id && base::Uuid::ParseLowercase(*saved_id).is_valid() && ids.insert(*saved_id).second)
+        pane->pane_id_ = *saved_id;
+      auto& options = pane->Current().options;
+      options.icons = data.FindBool("icons").value_or(true);
+      options.icon_index = std::clamp(data.FindInt("icon_index").value_or(1), 0, static_cast<int>(kFileIconSizes.size()) - 1);
+      options.sort = static_cast<FileSort>(std::clamp(
+          data.FindInt("sort").value_or(static_cast<int>(options.sort)), 0, 11));
+      options.show_hidden = data.FindBool("hidden").value_or(false);
+      options.size_column = data.FindBool("size_column").value_or(true);
+      options.type_column = data.FindBool("type_column").value_or(true);
+      options.modified_column = data.FindBool("modified_column").value_or(true);
+      options.created_column = data.FindBool("created_column").value_or(false);
+      options.permissions_column = data.FindBool("permissions_column").value_or(false);
+      if (const auto* widths = data.FindList("widths"); widths)
+        for (size_t i = 0; i < std::min(widths->size(), options.column_widths.size()); ++i) options.column_widths[i] = std::clamp((*widths)[i].GetIfInt().value_or(options.column_widths[i]), 60, 1000);
+      if (id > 0) {
+        const auto* saved_root = data.FindString("tag_root");
+        const auto* saved_path = data.FindString("path");
+        if (saved_root && saved_path) {
+          auto directory_root = base::FilePath::FromUTF8Unsafe(*saved_root);
+          auto directory = base::FilePath::FromUTF8Unsafe(*saved_path);
+          if (directory_root.IsAbsolute() && !directory_root.ReferencesParent() &&
+              !directory.ReferencesParent() && (directory_root == directory || directory_root.IsParent(directory)))
+            pane->NavigateTag({id, pane->tag_name_, directory_root, directory});
+        }
+      }
+      pane->restored_scroll_ = std::max(0, data.FindInt("scroll").value_or(0));
+      return pane;
+    }
     if (data.FindBool("search_page").value_or(false)) {
       const auto* saved = data.FindString("path");
       if (!saved) return nullptr;
       const auto folder = base::FilePath::FromUTF8Unsafe(*saved);
       if (!folder.IsAbsolute() || folder.ReferencesParent()) return nullptr;
-      ++leaves; return std::make_unique<FilesView>(this, folder, false, false, true);
+      SearchScope scope;
+      if (const auto* tag = data.FindString("search_tag")) {
+        if (!base::StringToInt64(*tag, &scope.tag_id) || scope.tag_id <= 0) return nullptr;
+        scope.multiple = true;
+        const auto* title = data.FindString("search_scope_title");
+        scope.title = title ? base::UTF8ToUTF16(*title) : Text(IDS_CRFILES_TAGS);
+      }
+      ++leaves; return std::make_unique<FilesView>(this, folder, false, false, true, -1, std::string(), std::move(scope));
     }
     if (data.FindBool("history_page").value_or(false)) { ++leaves; return std::make_unique<FilesView>(this, base::FilePath(), true); }
     const auto* path = data.FindString("path"); if (!path) return nullptr;
@@ -6614,6 +7029,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
       return second && ValidateSavedTree(*first, depth + 1, leaves, ids) && ValidateSavedTree(*second, depth + 1, leaves, ids);
     }
     ++leaves;
+    if (const auto* saved_tag = data.FindString("tag_id")) {
+      int64_t tag_id;
+      if (!base::StringToInt64(*saved_tag, &tag_id) || tag_id < 0) return false;
+      if (const auto* id = data.FindString("id"); id && base::Uuid::ParseLowercase(*id).is_valid()) return ids.insert(*id).second;
+      return true;
+    }
     if (data.FindBool("history_page").value_or(false)) return true;
     const auto* path = data.FindString("path");
     if (!path) return false;
@@ -6665,6 +7086,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
         if (const auto* path = active->FindString("path")) tab.path = base::FilePath::FromUTF8Unsafe(*path);
         if (const auto* name = active->FindString("name")) tab.deferred_title = *name;
         if (active->FindBool("history_page").value_or(false)) tab.deferred_title = base::UTF16ToUTF8(Text(active->FindBool("search_page").value_or(false) ? IDS_CRFILES_SEARCH : IDS_CRFILES_HISTORY));
+        if (active->FindString("search_tag")) {
+          if (const auto* title = active->FindString("search_scope_title"))
+            tab.deferred_title = base::UTF16ToUTF8(Text(IDS_CRFILES_SEARCH)) + " · " + *title;
+        }
+        if (active->FindString("tag_id")) {
+          tab.deferred_title = base::UTF16ToUTF8(Text(IDS_CRFILES_TAGS));
+          if (const auto* name = active->FindString("tag_name"); name && !name->empty()) tab.deferred_title += " · " + *name;
+        }
       }
       if (tab.deferred_title.empty()) tab.deferred_title = base::UTF16ToUTF8(EntryName(tab.path));
     }
@@ -6676,7 +7105,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       for (const auto& value : *shares) {
         const auto* item = value.GetIfDict();
         if (item) RestoreSharedDirectory(item->FindString("id"),
-            item->FindString("name"), item->FindString("path"));
+            item->FindString("name"), item->FindString("path"), item->FindString("tag_id"));
       }
     } else {
       for (const auto& tab : tabs_)
@@ -6706,28 +7135,50 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const auto* shell = root_ ? root_.get() : this;
     const auto directory = ShareDirectoryKey(path);
     return std::ranges::any_of(shell->shared_directories_, [&](const auto& target) {
-      return target.directory == directory;
+      return target.tag_id == 0 && target.directory == directory;
     });
   }
   void UpdateShareButton() {
     if (!share_button_ || tabs_.empty()) return;
-    const bool shared = IsDirectoryShared(Current().path);
-    share_button_->SetEnabled(shared || !IsDrivesLocation(Current().path));
+    const bool tag_target = tag_id_ > 0 && IsTagListing();
+    const bool shared = tag_target ? std::ranges::any_of(root_->shared_directories_,
+        [&](const auto& target) { return target.tag_id == tag_id_; }) : IsDirectoryShared(Current().path);
+    share_button_->SetEnabled(tag_id_ != 0 && (shared || !IsDrivesLocation(Current().path)));
     share_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
     share_button_->GetViewAccessibility().SetCheckedState(shared ? ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
     share_button_->SetBackground(shared ? views::CreateRoundedRectBackground(ui::kColorSysPrimaryContainer, 8) : nullptr);
     share_button_->SetImageModel(views::Button::STATE_NORMAL,
         ui::ImageModel::FromVectorIcon(vector_icons::kScreenShareIcon, shared ? ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface, 20));
     share_button_->SetTooltipText(Text(shared ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE) +
-        (shared ? u"\n" + Current().path.AsUTF16Unsafe() : std::u16string()));
+        (shared ? u"\n" + (tag_target ? base::UTF8ToUTF16(tag_name_) : Current().path.AsUTF16Unsafe()) : std::u16string()));
     share_button_->SetAccessibleName(Text(shared ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE));
   }
   void RemoveSharedDirectory(const base::FilePath& path) {
     const auto directory = ShareDirectoryKey(path);
-    std::erase_if(shared_directories_, [&](const auto& target) { return target.directory == directory; });
+    std::erase_if(shared_directories_, [&](const auto& target) { return target.tag_id == 0 && target.directory == directory; });
     SyncSharedTargets(); ScheduleWorkspaceSave();
   }
   void TogglePaneShare() {
+    if (tag_id_ == 0) return;
+    if (IsTagListing()) {
+      auto& targets = root_->shared_directories_;
+      if (std::erase_if(targets, [&](const auto& target) { return target.tag_id == tag_id_; }) == 0) {
+        if (Current().loading || Current().error) return;
+        const auto prefs = GetNearbySharingPreferences();
+        const auto directory = prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory() : base::FilePath::FromUTF8Unsafe(prefs.directory);
+        EnsureDirectoryAccess(GetWidget(), directory, true, base::BindOnce(
+            [](base::WeakPtr<FilesView> pane, int64_t id, std::string name, base::FilePath destination, bool allowed) {
+              if (!pane || pane->tag_id_ != id || !pane->IsTagListing()) return;
+              if (!allowed) { pane->status_->SetText(Text(IDS_CRFILES_READ_ERROR)); return; }
+              auto& shared_targets = pane->root_->shared_directories_;
+              if (std::ranges::none_of(shared_targets, [&](const auto& target) { return target.tag_id == id; }))
+                shared_targets.push_back({base::Uuid::GenerateRandomV4().AsLowercaseString(), std::move(name), destination, id});
+              pane->root_->SyncSharedTargets(); pane->root_->ScheduleWorkspaceSave();
+            }, weak_.GetWeakPtr(), tag_id_, tag_name_, directory));
+        return;
+      }
+      root_->SyncSharedTargets(); root_->ScheduleWorkspaceSave(); return;
+    }
     const auto directory = ShareDirectoryKey(Current().path);
     if (IsDirectoryShared(directory)) { root_->RemoveSharedDirectory(directory); return; }
     EnsureDirectoryAccess(GetWidget(), directory, true, base::BindOnce(
@@ -6758,18 +7209,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (auto* second = data.FindDict("second")) ClearSavedShares(*second);
   }
   void RestoreSharedDirectory(const std::string* id, const std::string* name,
-                              const std::string* path) {
+                              const std::string* path, const std::string* saved_tag = nullptr) {
+    int64_t tag = 0;
+    if (saved_tag && (!base::StringToInt64(*saved_tag, &tag) || tag <= 0)) return;
     if (!id || !path || !base::Uuid::ParseLowercase(*id).is_valid()) return;
     const auto directory = ShareDirectoryKey(base::FilePath::FromUTF8Unsafe(*path));
     if (!directory.IsAbsolute() || directory.ReferencesParent() ||
         directory == TrashRoot() || TrashRoot().IsParent(directory) ||
-        IsDirectoryShared(directory)) return;
+        (tag == 0 ? IsDirectoryShared(directory) : std::ranges::any_of(shared_directories_, [&](const auto& target) { return target.tag_id == tag; }))) return;
     // Legacy entries used pane IDs; keep the first ID for each directory so
     // restoring or materializing another tab cannot change its receive target.
     if (std::ranges::any_of(shared_directories_, [&](const auto& target) { return target.id == *id; })) return;
     const auto fallback = directory.BaseName().AsUTF8Unsafe();
     shared_directories_.push_back({*id, name && ValidPaneName(*name) ? *name :
-        ValidPaneName(fallback) ? fallback : base::UTF16ToUTF8(Text(IDS_CRFILES_FOLDER)), directory});
+        ValidPaneName(fallback) ? fallback : base::UTF16ToUTF8(Text(IDS_CRFILES_FOLDER)), directory, tag});
   }
   void RestoreLegacyShares(const base::DictValue& data) {
     if (const auto* first = data.FindDict("first")) {
@@ -6788,17 +7241,28 @@ class FilesView : public views::View, public views::TextfieldController, public 
         pane->UpdateShareButton();
       }));
     }
+    const auto share_prefs = GetNearbySharingPreferences();
+    const auto default_directory = share_prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory() : base::FilePath::FromUTF8Unsafe(share_prefs.directory);
+    for (auto& target : shared_directories_) if (target.tag_id > 0) target.directory = default_directory;
     auto targets = shared_directories_;
+    for (auto& target : targets) if (target.tag_id > 0) {
+      target.name = std::string(base::TruncateUTF8ToByteSize(target.name, 64));
+      if (!NearbySharing::IsValidConfiguration(target.name, target.directory)) target.name = base::UTF16ToUTF8(Text(IDS_CRFILES_TAGS)) + " " + base::NumberToString(target.tag_id);
+    }
     // Withdraw only revoked/changed targets immediately. An unrelated pane
     // update must not cancel an ongoing receive to a still-valid target.
     std::erase_if(published_targets_, [&](const auto& old) {
-      return std::ranges::none_of(targets, [&](const auto& target) { return target.id == old.id && target.directory == old.directory; });
+      return std::ranges::none_of(targets, [&](const auto& target) { return target.id == old.id && target.directory == old.directory && target.tag_id == old.tag_id; });
     });
     sharing_->SetSharedTargets(published_targets_);
     const auto generation = ++shared_targets_generation_;
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce([](std::vector<NearbySharing::SharedTarget> list) {
-          std::erase_if(list, [](const auto& target) { return !base::DirectoryExists(target.directory); }); return list;
+          const auto tags = ReadFileTags();
+          std::erase_if(list, [&](const auto& target) {
+            if (target.tag_id > 0) return !tags.ok || std::ranges::none_of(tags.tags, [&](const auto& tag) { return tag.id == target.tag_id; }) || !base::CreateDirectory(target.directory);
+            return !base::DirectoryExists(target.directory);
+          }); return list;
         }, std::move(targets)),
         base::BindOnce([](base::WeakPtr<FilesView> shell, uint64_t serial, std::vector<NearbySharing::SharedTarget> list) {
           if (!shell || shell->shared_targets_generation_ != serial) return;
@@ -6878,7 +7342,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       const bool selected = pane == active && multiple;
       pane->footer_folder_name_->SetEnabledColor(!multiple || selected ?
           ui::kColorSysPrimary : ui::kColorSysOnSurfaceSecondary);
-      const auto surface = pane->history_page_ ? ui::kColorSysBase : kFolderSurfaceColor;
+      const auto surface = (pane->history_page_ && pane->tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor;
       if (selected) {
         const auto style = GetSplitSelectionStyle();
         if (!pane->pane_border_active_ || pane->pane_border_style_ != style)
@@ -6926,16 +7390,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
       pane->history_filter_runner_.reset();
       pane->CancelFileVisuals(); pane->SaveScroll(); pane->CloseNewFolder(); pane->CloseViewOptions();
       pane->CancelDirectoryWork(); ++pane->Current().request;
+      if (pane->IsTagListing() && (pane->tag_loading_ || pane->tag_sizes_pending_))
+        pane->tag_version_ = std::numeric_limits<uint64_t>::max();
+      pane->tag_loading_ = false; pane->tag_sizes_pending_ = false;
     }));
   }
-  void AddPaneTab(base::FilePath path, bool history_page = false, bool search_page = false) {
+  void AddPaneTab(base::FilePath path, bool history_page = false, bool search_page = false,
+                  int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}) {
     SuspendPanePopups();
     for (auto& tab : tabs_) tab.pane_host->SetVisible(false);
     tabs_.push_back(Tab{.id = next_id_++}); active_ = tabs_.size() - 1;
     auto* host = split_host_->AddChildView(std::make_unique<views::View>());
     host->SetLayoutManager(std::make_unique<views::FillLayout>());
     Current().pane_host = host;
-    auto pane = std::make_unique<FilesView>(this, path.empty() ? Home() : path, history_page, false, search_page);
+    auto pane = std::make_unique<FilesView>(this, path.empty() ? Home() : path, history_page, false, search_page, tag_id, std::move(tag_name), std::move(search_scope));
     Current().active_pane = host->AddChildView(std::move(pane));
     UpdatePaneControls(); SyncNavigation();
     if (GetWidget()) ActivePane()->DefaultFocusView()->RequestFocus();
@@ -7019,7 +7487,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void SplitPane(FilesView* target, int direction, base::FilePath path = {}) {
     if (!Current().pane_host->Contains(target)) return;
     target->CloseNewFolder(); target->CloseViewOptions();
-    auto pane = std::make_unique<FilesView>(this, path.empty() ? target->Current().path : path, false, true);
+    auto pane = std::make_unique<FilesView>(this, path.empty() ? (target->tag_id_ >= 0 ? Home() : target->Current().path) : path, false, true);
     pane->Current().options = target->Current().options;
     auto* added = pane.get();
     auto* parent = target->parent();
@@ -7276,7 +7744,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, root_->weak_.GetWeakPtr(), weak_.GetWeakPtr()));
   }
   void ChangeTrash(bool restore) {
-    if (IsDrivesLocation(Current().path) || Current().selected.empty() || trash_busy_ || root_->local_operation_busy_) return;
+    if (tag_id_ == 0 || IsDrivesLocation(Current().path) || Current().selected.empty() || trash_busy_ || root_->local_operation_busy_) return;
     trash_busy_ = true;
     trash_error_ = false;
     UpdateStatus();
@@ -7309,15 +7777,21 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void RemoveCompletedEntries(const base::FilePath& directory,
                               const std::vector<base::FilePath>& completed) {
+    if (history_page_) return;
+    if (IsTagListing()) { LoadTagFiles(); return; }
+    const auto affected = [&](const base::FilePath& folder) {
+      return folder == directory || (directory.empty() && std::ranges::any_of(completed,
+          [&](const auto& path) { return path.DirName() == folder; }));
+    };
     for (auto& tab : tabs_) {
-      if (tab.path != directory) continue;
+      if (!affected(tab.path)) continue;
       for (const auto& path : completed) {
         auto entry = std::ranges::find(tab.entries, path, &Entry::path);
         if (entry != tab.entries.end()) { tab.removed.insert(path); tab.visuals.erase(path); tab.failed_thumbnails.erase(path); ++tab.metadata_generation; }
         tab.selected.erase(path);
       }
     }
-    if (Current().path == directory) {
+    if (affected(Current().path)) {
       SaveScroll();
       RemoveFileRows(completed);
       CancelOrdering();
@@ -7331,6 +7805,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateStatus();
   }
   void Up() {
+    if (auto* pane = ActivePane(); pane->tag_id_ >= 0) {
+      if (pane->IsTagListing()) { if (pane->tag_id_ > 0) pane->NavigateTag({0, {}, {}, {}}); }
+      else if (pane->Current().path == pane->tag_directory_root_) pane->NavigateTag({pane->tag_id_, pane->tag_name_, {}, {}});
+      else pane->NavigateTag({pane->tag_id_, pane->tag_name_, pane->tag_directory_root_, pane->Current().path.DirName()});
+      return;
+    }
     const auto& path = ActivePane()->Current().path;
     if (IsDrivesLocation(path)) return;
     if (IsDriveRoot(path)) Navigate(base::FilePath(FILE_PATH_LITERAL("/")));
@@ -7436,6 +7916,25 @@ class FilesView : public views::View, public views::TextfieldController, public 
     file_surface_->layer()->SetTransform(gfx::Transform());
   }
   void Navigate(base::FilePath path, int history_index = -1, bool refresh = false) {
+    if (root_ && tag_id_ >= 0 && !refresh) {
+      if (tag_id_ == 0) {
+        auto entry = std::ranges::find(Current().entries, path, &Entry::path);
+        if (entry != Current().entries.end() && entry->tag > 0) NavigateTag({entry->tag, entry->tag_name, {}, {}});
+        else if (path.IsAbsolute()) NavigateTag({-1, {}, {}, path}, history_index);
+        return;
+      }
+      if (path.IsAbsolute() && ((!tag_directory_root_.empty() &&
+          (path == tag_directory_root_ || tag_directory_root_.IsParent(path))) ||
+          (IsTagListing() && std::ranges::any_of(Current().entries, [&](const auto& entry) { return entry.path == path && entry.directory; })))) {
+        NavigateTag({tag_id_, tag_name_, IsTagListing() ? path : tag_directory_root_, path}, history_index); return;
+      }
+      if (path.IsAbsolute()) NavigateTag({-1, {}, {}, path}, history_index);
+      return;
+    }
+    if (root_ && !refresh && !tag_history_.empty() &&
+        (path.IsAbsolute() || IsDrivesLocation(path))) {
+      NavigateTag({-1, {}, {}, path}, history_index); return;
+    }
     if (!root_) { EndAddressEditing(); if (ActivePane()->history_page_) AddPaneTab(path); else ActivePane()->Navigate(path, history_index, refresh); return; }
     if (history_page_) return;
     if (!path.IsAbsolute() && !path.empty() && !IsDrivesLocation(path)) {
@@ -7556,6 +8055,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const bool animate_directory = result.ok && !tab.path.empty() && tab.path != result.path;
     if (result.ok) {
       CancelFileVisuals();
+      if (tag_id_ > 0 && restored_scroll_) {
+        tab.scroll = *restored_scroll_; pending_scroll_ = *restored_scroll_; restored_scroll_.reset();
+      }
       if (same_directory && (refresh || revalidate)) {
         SaveScroll();
         std::erase_if(tab.selected, [&](const auto& path) { return !result.delta->positions.contains(path); });
@@ -7579,7 +8081,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
         tab.history.push_back(tab.path); tab.history_index = tab.history.size() - 1;
       }
     }
-    SelectSidebarForPath(tab);
+    if (tag_id_ >= 0) tab.sidebar_selection = IDS_CRFILES_TAGS;
+    else SelectSidebarForPath(tab);
     root_->PaneNavigated(this);
     if (Current().id == id) {
       directory_animation_pending_ = animate_directory && GetFileViewPreferences().animate_folders;
@@ -7589,10 +8092,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void History(int delta) {
     if (ActivePane()->history_page_) return;
     if (!root_) { ActivePane()->History(delta); return; }
+    if (!tag_history_.empty()) {
+      const int index = tag_history_index_ + delta;
+      if (index >= 0 && index < static_cast<int>(tag_history_.size())) NavigateTag(tag_history_[index], index);
+      return;
+    }
     int index = Current().history_index + delta;
     if (index >= 0 && index < static_cast<int>(Current().history.size())) Navigate(Current().history[index], index);
   }
-  void Refresh() { if (ActivePane()->search_view_) RefreshSearchPage(ActivePane()->search_view_); else if (ActivePane()->history_page_) ActivePane()->LoadHistory(); else Navigate(ActivePane()->Current().path, -1, true); }
+  void Refresh() { if (ActivePane()->IsTagListing()) { ActivePane()->LoadTagFiles(); return; } if (ActivePane()->search_view_) RefreshSearchPage(ActivePane()->search_view_); else if (ActivePane()->history_page_) ActivePane()->LoadHistory(); else Navigate(ActivePane()->Current().path, -1, true); }
   void ToggleViewMode() {
     if (!root_) { ActivePane()->ToggleViewMode(); return; }
     CloseViewOptions();
@@ -7679,6 +8187,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_delegate_.reset();
   }
   void ShowNewFolder() {
+    if (tag_id_ == 0) { ShowFileTagEditor(GetWidget(), {}, base::BindRepeating(&FilesView::LoadTagFiles, weak_.GetWeakPtr())); return; }
+    if (IsTagListing()) return;
     if (IsDrivesLocation(Current().path)) return;
     if (new_folder_widget_) { CloseNewFolder(); return; }
     CloseNewFolder();
@@ -7706,6 +8216,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_widget_->Show(); UpdateFooterVisibility();
   }
   void CreateFolder(std::u16string name) {
+    if (IsTagListing()) return;
     if (IsDrivesLocation(Current().path)) return;
     const auto child = base::FilePath::FromUTF16Unsafe(name);
     if (!IsValidEntryName(name)) {
@@ -7793,6 +8304,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void EndAddressEditing() { TransitionPath(false); }
   void EditAddress() {
+    if (ActivePane()->tag_id_ >= 0) return;
     if (!address_editing_) {
       address_->SetInvalid(false);
       address_->SetText(NavigationPath(ActivePane()->Current().path));
@@ -7909,17 +8421,78 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // The outer inset belongs to navigation chrome; each pane paints its own
     // content surface. Keep the sidebar and toolbar consistent across tabs.
     SetBackground(std::make_unique<NavigationBackground>());
-    toolbar_->SetVisible(!pane->history_page_);
-    if (pane->history_page_ && sidebar_drag_start_) {
+    toolbar_->SetVisible(!pane->history_page_ || pane->tag_id_ >= 0);
+    view_toggle_->SetEnabled(true);
+    options_button_->SetEnabled(true);
+    if (pane->history_page_ && pane->tag_id_ < 0 && sidebar_drag_start_) {
       sidebar_drag_start_.reset();
       AnimateSidebarTo(sidebar_display_width_ < 110 ? 0 : std::clamp(sidebar_display_width_, 220, 360));
     }
     UpdateSidebarPresentation();
     Current().path = pane->Current().path;
     UpdateSidebarHighlight(); RenderTabs();
-    back_->SetEnabled(pane->Current().history_index > 0);
-    forward_->SetEnabled(pane->Current().history_index + 1 < static_cast<int>(pane->Current().history.size()));
+    back_->SetEnabled(pane->tag_history_.empty() ? pane->Current().history_index > 0 : pane->tag_history_index_ > 0);
+    forward_->SetEnabled(pane->tag_history_.empty() ?
+        pane->Current().history_index + 1 < static_cast<int>(pane->Current().history.size()) :
+        pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* leaf) { leaf->FileViewportChanged(); }));
+    if (pane->tag_id_ >= 0) {
+      rendered_crumb_path_ = {}; rendered_crumb_pane_.clear(); rendered_crumb_buttons_.clear();
+      view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
+          pane->Current().options.icons ? kGridViewIcon : kListAltIcon, ui::kColorSysOnSurface, 20));
+      view_toggle_->SetTooltipText(Text(pane->Current().options.icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
+      view_toggle_->SetAccessibleName(Text(pane->Current().options.icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
+      const auto style = GetNavigationStyle();
+      auto crumbs = std::make_unique<views::View>();
+      auto* layout = crumbs->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(2, style == NavigationStyle::kConnected ? 2 : 0), 0));
+      layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+      if (style == NavigationStyle::kConnected)
+        crumbs->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysHeaderContainerInactive, 8));
+      auto* root = crumbs->AddChildView(std::make_unique<BreadcrumbButton>(
+          Deferred(base::BindRepeating(&FilesView::NavigateTagRoot, weak_.GetWeakPtr())),
+          Text(IDS_CRFILES_TAGS), pane->tag_id_ == 0, true, style, false));
+      root->SetTooltipText(Text(IDS_CRFILES_TAGS));
+      root->SetImageLabelSpacing(6);
+      const auto color = pane->tag_id_ == 0 &&
+          (style == NavigationStyle::kRaised || style == NavigationStyle::kConnected) ?
+          ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface;
+      for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+                         views::Button::STATE_PRESSED, views::Button::STATE_DISABLED})
+        root->SetImageModel(state, ui::ImageModel::FromVectorIcon(kTagsIcon,
+            state == views::Button::STATE_DISABLED ? ui::kColorSysStateDisabled : color, 20));
+      auto add_segment = [&](std::u16string title, TagLocation location, bool current) {
+        if (style == NavigationStyle::kConnected) {
+          crumbs->AddChildView(std::make_unique<BreadcrumbDivider>());
+        } else if (style != NavigationStyle::kRaised) {
+          auto* divider = crumbs->AddChildView(std::make_unique<views::Label>(base::i18n::IsRTL() ? u"‹" : u"›"));
+          divider->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
+          divider->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 3)));
+        }
+        auto* segment = crumbs->AddChildView(std::make_unique<BreadcrumbButton>(
+            Deferred(base::BindRepeating(&FilesView::NavigateTag, pane->weak_.GetWeakPtr(), location, -1)),
+            title, current, false, style, false));
+        segment->SetTooltipText(location.path.empty() ? title : location.path.AsUTF16Unsafe());
+      };
+      if (pane->tag_id_ > 0) {
+        add_segment(base::UTF8ToUTF16(pane->tag_name_), {pane->tag_id_, pane->tag_name_, {}, {}}, pane->IsTagListing());
+        std::vector<base::FilePath> parents;
+        if (!pane->tag_directory_root_.empty()) {
+          for (auto path = pane->Current().path; path == pane->tag_directory_root_ || pane->tag_directory_root_.IsParent(path); path = path.DirName()) {
+            parents.push_back(path);
+            if (path == pane->tag_directory_root_) break;
+          }
+        }
+        std::ranges::reverse(parents);
+        for (const auto& path : parents)
+          add_segment(EntryName(path), {pane->tag_id_, pane->tag_name_, pane->tag_directory_root_, path}, path == pane->Current().path);
+      }
+      crumbs_scroll_->SetContents(std::move(crumbs));
+      back_->SetEnabled(pane->tag_history_index_ > 0);
+      forward_->SetEnabled(pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
+      return;
+    }
     const auto navigation_style = GetNavigationStyle();
     const bool path_changed = rendered_crumb_path_ != pane->Current().path;
     if (!crumbs_scroll_->contents() || path_changed || rendered_navigation_style_ != navigation_style) {
@@ -8488,7 +9061,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     files_->SetHorizontalScrollBarMode(options.icons ? views::ScrollView::ScrollBarMode::kDisabled :
         views::ScrollView::ScrollBarMode::kEnabled);
     auto contents = std::make_unique<FileLayout>(options.icons, icon_size, minimum_width);
-    contents->SetBottomPadding(footer_->GetPreferredSize({}).height() + 10);
+    contents->SetBottomPadding(tag_id_ == 0 ? 0 : footer_->GetPreferredSize({}).height() + 10);
     contents->SetSelectionCallback(base::BindRepeating(&FilesView::RubberBand, weak_.GetWeakPtr()));
     // Header follows the same column visibility and widths as the data rows.
     if (!options.icons) {
@@ -8582,13 +9155,19 @@ class FilesView : public views::View, public views::TextfieldController, public 
     TrimRowDisplayCache();
     return data;
   }
+  std::u16string TagEntrySize(const Entry& entry) const {
+    if (entry.size < 0) return Text(IDS_CRFILES_CALCULATING_SIZE);
+    const auto found = tag_sizes_.find(entry.tag);
+    return (found != tag_sizes_.end() && found->second.incomplete ? Text(IDS_CRFILES_SIZE_AT_LEAST) + u": " : std::u16string()) +
+        ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(entry.size)));
+  }
   std::u16string RowText(const Entry& entry, size_t column) {
     auto& value = RowDisplay(entry.path).text[column];
     if (!value) {
       switch (column) {
-        case 0: value = EntryName(entry.path); break;
-        case 1: value = entry.directory ? std::u16string() : ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(std::max<int64_t>(0, entry.size)))); break;
-        case 2: value = entry.directory ? Text(IDS_CRFILES_FOLDER) : base::UTF8ToUTF16(entry.mime); break;
+        case 0: value = entry.tag > 0 ? base::UTF8ToUTF16(entry.tag_name) + u" · " + base::NumberToString16(entry.tag_count) + u" " + Text(IDS_CRFILES_ITEMS) : EntryName(entry.path); break;
+        case 1: value = entry.tag > 0 ? TagEntrySize(entry) : entry.directory ? std::u16string() : ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(std::max<int64_t>(0, entry.size)))); break;
+        case 2: value = entry.tag > 0 ? Text(IDS_CRFILES_TAGS) : entry.directory ? Text(IDS_CRFILES_FOLDER) : base::UTF8ToUTF16(entry.mime); break;
         case 3: value = entry.modified.is_null() ? std::u16string() : base::TimeFormatShortDateAndTime(entry.modified); break;
         case 4: value = CreatedText(entry.created); break;
         case 5: value = PermissionsText(entry.permissions); break;
@@ -8603,6 +9182,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       GetWidget()->GetTooltipManager()->UpdateTooltip();
   }
   std::u16string RowTooltip(const Entry& entry) {
+    if (entry.tag > 0) return base::UTF8ToUTF16(entry.tag_name) + u"\n" + base::NumberToString16(entry.tag_count) +
+        u" " + Text(IDS_CRFILES_ITEMS) + u"\n" + TagEntrySize(entry);
     auto& data = RowDisplay(entry.path);
     if (!data.tooltip) {
       const auto size = entry.directory || entry.size < 0 ? std::u16string(u"—") : RowText(entry, 1);
@@ -8610,6 +9191,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
           u"\n" + Text(IDS_CRFILES_SIZE) + u": " + size +
           u"\n" + Text(IDS_CRFILES_PERMISSIONS) + u": " + RowText(entry, 5);
     }
+    if (tag_id_ > 0 && IsTagListing())
+      return *data.tooltip + u"\n" + Text(IDS_CRFILES_LOCATION) + u": " + entry.path.AsUTF16Unsafe();
     return *data.tooltip;
   }
   void RememberRowThumbnail(const base::FilePath& path, const EntryVisuals& visual) {
@@ -8826,6 +9409,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   ui::ImageModel FileImage(const Entry& entry) {
     const auto& options = Current().options;
     const int edge = kFileIconSizes[options.icon_index];
+    if (entry.tag > 0) return ui::ImageModel::FromVectorIcon(kTagFolderIcon, ui::kColorSysPrimary, edge);
     const float display_scale = files_->layer() ? files_->layer()->device_scale_factor() : 1.f;
 #if BUILDFLAG(IS_WIN)
     if (IsDrivesLocation(Current().path) && IsDriveRoot(entry.path)) {
@@ -8873,6 +9457,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         ui::kColorSysOnSurfaceVariant, edge);
   }
   void QueueFileVisual(size_t position) {
+    if (tag_id_ == 0) return;
     if (!visual_queue_state_ || position >= displayed_entries_.size() ||
         position < visual_queue_state_->rows.first || position >= visual_queue_state_->rows.last) return;
     const auto& entry = Current().entries[displayed_entries_[position]];
@@ -9218,8 +9803,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void UpdateStatus() {
     auto& tab = Current();
     const auto root = TrashRoot();
-    new_folder_button_->SetEnabled(!IsDrivesLocation(tab.path) && tab.path != root && !root.IsParent(tab.path) && !tab.loading);
-    search_action_->SetEnabled(!tab.loading && tab.path.IsAbsolute() && tab.path != root);
+    const bool tag_results = tag_id_ > 0 && IsTagListing();
+    new_folder_button_->SetVisible(!tag_results);
+    more_button_->SetVisible(!tag_results);
+    new_folder_button_->SetTooltipText(Text(tag_id_ == 0 ? IDS_CRFILES_TAG_CREATE : IDS_CRFILES_NEW_FOLDER));
+    new_folder_button_->SetAccessibleName(Text(tag_id_ == 0 ? IDS_CRFILES_TAG_CREATE : IDS_CRFILES_NEW_FOLDER));
+    new_folder_button_->SetEnabled((tag_id_ == 0 || !IsTagListing()) && !IsDrivesLocation(tab.path) && tab.path != root && !root.IsParent(tab.path) && !tab.loading);
+    search_action_->SetEnabled(!tab.loading && !tab.error &&
+        ((tag_id_ > 0 && IsTagListing()) || (tab.path.IsAbsolute() && tab.path != root)));
     const bool trash = tab.path == root;
     const bool toolbar_changed = trash_footer_actions_->GetVisible() != trash;
     normal_footer_actions_->SetVisible(!trash);
@@ -9236,7 +9827,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         footer_->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, 24));
         footer_->SetBorder(views::CreateRoundedRectBorder(1, 24, ui::kColorSysOutline));
       } else {
-        footer_->SetBackground(std::make_unique<FooterBackground>(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+        footer_->SetBackground(std::make_unique<FooterBackground>((history_page_ && tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor));
         footer_->SetBorder(std::make_unique<FooterGlowBorder>(false));
       }
       if (pane_border_active_ && pane_border_style_ == SplitSelectionStyle::kCorners)
@@ -9277,6 +9868,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (found != Current().entries.end()) Open(path, found->directory);
   }
   void Open(base::FilePath path, bool directory) {
+    if (tag_id_ == 0) { Navigate(std::move(path)); return; }
 #if BUILDFLAG(IS_MAC)
     if (directory) {
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock()},
@@ -9349,11 +9941,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::optional<gfx::Rect> area;
     const auto shared = std::ranges::find(shared_directories_, target, &NearbySharing::SharedTarget::id);
     if (shared != shared_directories_.end() && !tabs_.empty()) VisitPanes(Current().pane_host,
-        base::BindRepeating([](const base::FilePath& directory, std::optional<gfx::Rect>* bounds, FilesView* pane) {
+        base::BindRepeating([](const base::FilePath& directory, int64_t tag, std::optional<gfx::Rect>* bounds, FilesView* pane) {
           if (!pane->history_page_ && !pane->search_page_ && !pane->tabs_.empty() &&
-              ShareDirectoryKey(pane->Current().path) == directory && pane->IsDrawn())
+              (tag > 0 ? pane->tag_id_ == tag && pane->IsTagListing() : ShareDirectoryKey(pane->Current().path) == directory) && pane->IsDrawn())
             *bounds = pane->GetBoundsInScreen();
-        }, shared->directory, &area));
+        }, shared->directory, shared->tag_id, &area));
     return area;
   }
   ShareBubbleAnchor SessionBubbleAnchor(const NearbySharing::Snapshot& state, bool use_share_dialog = true) {
@@ -9466,6 +10058,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (visible) UpdateWindowsDrives();
 #endif
     if (auto* pane = ActivePane(); visible && pane && pane->history_page_ && pane->history_version_ != FileHistoryVersion()) pane->LoadHistory();
+    if (visible) VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
+      if (pane->IsTagListing() && (pane->tag_version_ != FileTagsVersion() ||
+          (pane->Current().loading && !pane->tag_loading_))) pane->LoadTagFiles();
+    }));
     auto s = sharing_->GetSnapshot();
     RevealReceivedTarget(s);
     sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetBreathing(
@@ -9521,6 +10117,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool restoring_workspace_ = false;
   bool local_operation_busy_ = false, local_operation_error_ = false;
   bool local_sources_retained_ = false;
+  SearchScope search_scope_;
+  int64_t tag_id_ = -1;
+  std::string tag_name_;
+  base::FilePath tag_directory_root_;
+  std::vector<TagLocation> tag_history_;
+  int tag_history_index_ = 0;
+  std::map<int64_t, TagSize> tag_sizes_;
+  bool tag_loading_ = false;
+  bool tag_sizes_pending_ = false;
+  uint64_t tag_version_ = 0;
   bool history_page_ = false;
   base::FilePath pending_search_selection_;
   bool search_page_ = false;

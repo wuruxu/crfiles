@@ -5,6 +5,8 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <set>
+#include <optional>
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
@@ -40,16 +42,23 @@ bool Linked(const base::FilePath& path) {
   return base::IsLink(path);
 #endif
 }
+struct SearchEntry {
+  base::FilePath path;
+  bool directory = false, hidden = false, regular = true;
+  int64_t size = 0;
+};
 struct SearchJob {
   explicit SearchJob(mojom::SearchOptionsPtr value) : options(std::move(value)) {}
   mojom::SearchOptionsPtr options;
   base::ScopedClosureRunner access_grant;
+  std::vector<base::ScopedClosureRunner> scope_grants;
+  std::deque<base::FilePath> roots;
   SearchControl control;
   bool initialized = false, failed = false, done = false, limited = false;
   std::u16string query;
   std::deque<std::pair<base::FilePath, bool>> directories;
   std::unique_ptr<base::FileEnumerator> enumerator;
-  base::FilePath pending;
+  std::optional<SearchEntry> pending;
   bool enumerating_root = false, inherited_hidden = false;
   uint64_t scanned = 0, skipped = 0, matches = 0;
 };
@@ -61,83 +70,130 @@ mojom::SearchBatchPtr ReadBatch(const std::shared_ptr<SearchJob>& job) {
     job->access_grant = ResolveFileAccessBookmark(job->options->access_bookmark);
     auto root = base::FilePath::FromUTF8Unsafe(job->options->root);
     job->query = base::i18n::ToLower(base::UTF8ToUTF16(job->options->query));
-    job->failed = !root.IsAbsolute() || root.ReferencesParent() || Linked(root) || !base::DirectoryExists(root) ||
-        job->options->query.size() > 4096 || job->options->extensions.size() > 32 ||
+    job->failed = (!job->options->scoped && (!root.IsAbsolute() || root.ReferencesParent() || Linked(root) || !base::DirectoryExists(root))) ||
+        job->options->roots.size() > 10000 || job->options->query.size() > 4096 || job->options->extensions.size() > 32 ||
         (job->options->mode == mojom::SearchMode::kContent && job->query.empty());
     for (auto& extension : job->options->extensions) {
       extension = base::ToLowerASCII(extension);
       if (extension.size() < 2 || extension.size() > 32 || extension.front() != '.' ||
           extension.find_first_not_of(".abcdefghijklmnopqrstuvwxyz0123456789_-") != std::string::npos) job->failed = true;
     }
-    if (!job->failed) job->directories.emplace_back(root, false);
-    else job->done = true;
+    if (!job->failed && job->options->scoped) {
+      // Normalize and prune nested roots before walking, so a tagged folder
+      // and its separately tagged children never produce duplicate results.
+      auto less = [](const base::FilePath& first, const base::FilePath& second) {
+#if BUILDFLAG(IS_WIN)
+        return base::FilePath::CompareIgnoreCase(first.value(), second.value()) < 0;
+#else
+        return first < second;
+#endif
+      };
+      std::set<base::FilePath, decltype(less)> roots(less);
+      for (const auto& scope : job->options->roots) {
+        if (job->control.canceled.load()) { job->done = true; break; }
+        auto path = base::FilePath::FromUTF8Unsafe(scope->path).NormalizePathSeparators().StripTrailingSeparators();
+        if (!path.IsAbsolute() || path.ReferencesParent()) { job->failed = true; break; }
+        job->scope_grants.push_back(ResolveFileAccessBookmark(scope->access_bookmark));
+        roots.insert(std::move(path));
+      }
+      for (const auto& path : roots) {
+        bool covered = false;
+        for (auto parent = path.DirName(); parent != path; parent = parent.DirName()) {
+          if (roots.contains(parent)) { covered = true; break; }
+          if (parent == parent.DirName()) break;
+        }
+        if (!covered) job->roots.push_back(path);
+      }
+    } else if (!job->failed) job->directories.emplace_back(root, false);
+    if (job->failed) job->done = true;
   }
   const auto deadline = base::TimeTicks::Now() + base::Milliseconds(40);
   size_t visited = 0;
   while (!job->done && !job->control.Interrupted() && result->hits.size() < 48 && visited < 256 && base::TimeTicks::Now() < deadline) {
     if (job->scanned >= 1000000 || job->matches >= 10000) { job->limited = true; job->done = true; break; }
-    if (!job->enumerator) {
-      if (job->directories.empty()) { job->done = true; break; }
-      auto [directory, hidden_directory] = job->directories.front(); job->directories.pop_front();
-      job->inherited_hidden = hidden_directory;
-      if (Linked(directory)) { ++job->skipped; continue; }
-      job->enumerating_root = directory == base::FilePath::FromUTF8Unsafe(job->options->root);
-      int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
-#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
-      types |= base::FileEnumerator::SHOW_SYM_LINKS;
-#endif
-      // Windows reports reparse points without a separate enumeration flag;
-      // Linked() rejects them before content reads or directory traversal.
-      job->enumerator = std::make_unique<base::FileEnumerator>(directory, false, types,
-          base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
-          base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
-    }
-    auto path = job->pending.empty() ? job->enumerator->Next() : job->pending;
-    if (path.empty()) {
-      if (job->enumerator->GetError() != base::File::FILE_OK) {
-        ++job->skipped;
-        if (job->enumerating_root) { job->failed = true; job->done = true; }
+    SearchEntry entry;
+    if (job->pending) {
+      entry = *job->pending;
+    } else if (!job->roots.empty()) {
+      entry.path = job->roots.front(); job->roots.pop_front();
+      base::File::Info info;
+      if (Linked(entry.path) || !base::GetFileInfo(entry.path, &info)) {
+        ++job->scanned; ++job->skipped; ++visited; continue;
       }
-      job->enumerator.reset(); continue;
+      entry.directory = info.is_directory; entry.size = info.size;
+#if BUILDFLAG(IS_WIN)
+      entry.hidden = (GetFileAttributesW(entry.path.value().c_str()) & FILE_ATTRIBUTE_HIDDEN) != 0;
+#elif BUILDFLAG(IS_POSIX)
+      struct stat st;
+      entry.regular = stat(entry.path.value().c_str(), &st) == 0 && S_ISREG(st.st_mode);
+#endif
+    } else {
+      if (!job->enumerator) {
+        if (job->directories.empty()) { job->done = true; break; }
+        auto [directory, hidden_directory] = job->directories.front(); job->directories.pop_front();
+        job->inherited_hidden = hidden_directory;
+        if (Linked(directory)) { ++job->skipped; ++visited; continue; }
+        job->enumerating_root = !job->options->scoped && directory == base::FilePath::FromUTF8Unsafe(job->options->root);
+        int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+        types |= base::FileEnumerator::SHOW_SYM_LINKS;
+#endif
+        job->enumerator = std::make_unique<base::FileEnumerator>(directory, false, types,
+            base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
+            base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
+      }
+      entry.path = job->enumerator->Next();
+      if (entry.path.empty()) {
+        if (job->enumerator->GetError() != base::File::FILE_OK) {
+          ++job->skipped;
+          if (job->enumerating_root) { job->failed = true; job->done = true; }
+        }
+        job->enumerator.reset(); ++visited; continue;
+      }
+      const auto info = job->enumerator->GetInfo();
+      entry.directory = info.IsDirectory(); entry.size = info.GetSize();
+      entry.hidden = job->inherited_hidden;
+#if BUILDFLAG(IS_WIN)
+      entry.hidden |= (info.find_data().dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+#elif BUILDFLAG(IS_POSIX)
+      entry.regular = S_ISREG(info.stat().st_mode);
+#endif
     }
-    const auto info = job->enumerator->GetInfo();
-    if (Linked(path)) { job->pending.clear(); ++job->scanned; ++job->skipped; ++visited; continue; }
+    const auto& path = entry.path;
+    if (Linked(path)) { job->pending.reset(); ++job->scanned; ++job->skipped; ++visited; continue; }
     std::string match;
     const auto filename = base::ToLowerASCII(path.BaseName().AsUTF8Unsafe());
-    bool hidden = job->inherited_hidden || filename.starts_with(".");
-#if BUILDFLAG(IS_WIN)
-    hidden |= (info.find_data().dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
-#endif
+    bool hidden = entry.hidden || filename.starts_with(".");
     if (hidden && !job->options->show_hidden) {
-      job->pending.clear(); ++job->scanned; ++visited; continue;
+      job->pending.reset(); ++job->scanned; ++visited; continue;
     }
     bool type_matches = job->options->extensions.empty();
     for (const auto& type : job->options->extensions)
-      if (!info.IsDirectory() && filename.ends_with(type)) type_matches = true;
+      if (!entry.directory && filename.ends_with(type)) type_matches = true;
     bool skipped = false;
 #if BUILDFLAG(IS_POSIX)
     // Never open named pipes, devices or sockets while searching content.
-    if (!info.IsDirectory() && !S_ISREG(info.stat().st_mode)) {
-      job->pending.clear(); ++job->scanned; ++job->skipped; ++visited; continue;
+    if (!entry.directory && !entry.regular) {
+      job->pending.reset(); ++job->scanned; ++job->skipped; ++visited; continue;
     }
 #endif
     if (type_matches && (!job->options->hidden_only || hidden)) {
       if (job->options->mode == mojom::SearchMode::kPath) {
         if (job->query.empty()) match = path.AsUTF8Unsafe();
         else match = SearchFragment(path.AsUTF8Unsafe(), job->query);
-      } else if (!info.IsDirectory()) match = SearchFileContent(path, job->query, job->control, &skipped);
+      } else if (!entry.directory) match = SearchFileContent(path, job->query, job->control, &skipped);
     }
-    if (job->control.Interrupted()) { job->pending = path; break; }
-    job->pending.clear(); ++job->scanned; ++visited;
+    if (job->control.Interrupted()) { job->pending = entry; break; }
+    job->pending.reset(); ++job->scanned; ++visited;
     if (skipped) ++job->skipped;
-    if (info.IsDirectory()) {
+    if (entry.directory) {
       if (job->directories.size() < 10000) job->directories.emplace_back(path, hidden);
       else { job->limited = true; ++job->skipped; }
     }
     if (!match.empty()) {
       auto hit = mojom::SearchHit::New();
       hit->hidden = hidden;
-      hit->path = path.AsUTF8Unsafe(); hit->directory = info.IsDirectory(); hit->size = info.GetSize();
+      hit->path = path.AsUTF8Unsafe(); hit->directory = entry.directory; hit->size = entry.size;
       hit->detail = std::move(match); result->hits.push_back(std::move(hit)); ++job->matches;
     }
   }

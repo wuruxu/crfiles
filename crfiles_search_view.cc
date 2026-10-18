@@ -1,10 +1,13 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_search_view.h"
 #include "crFiles/crfiles_search.h"
+#include "crFiles/crfiles_tags.h"
+#include "base/task/thread_pool.h"
 #include "crFiles/crfiles_theme.h"
 #include <algorithm>
 #include <set>
 #include <map>
+#include <optional>
 #include <vector>
 #include "base/functional/bind.h"
 #include "base/callback_list.h"
@@ -195,8 +198,8 @@ class SearchPage : public views::View, public views::TextfieldController, public
   METADATA_HEADER(SearchPage, views::View)
  public:
   SearchPage(base::FilePath root, base::RepeatingCallback<void(base::FilePath, bool)> open,
-             base::RepeatingCallback<void(base::FilePath)> reveal, base::RepeatingClosure state_changed)
-      : root_(std::move(root)), open_(std::move(open)), reveal_(std::move(reveal)), state_changed_(std::move(state_changed)) {
+             base::RepeatingCallback<void(base::FilePath)> reveal, base::RepeatingClosure state_changed, SearchScope scope)
+      : root_(std::move(root)), scope_(std::move(scope)), open_(std::move(open)), reveal_(std::move(reveal)), state_changed_(std::move(state_changed)) {
     // The pane receives focus before OnFocus forwards it to the search field.
     // It must expose valid accessibility semantics even during that transition.
     GetViewAccessibility().SetRole(ax::mojom::Role::kPane);
@@ -248,10 +251,11 @@ class SearchPage : public views::View, public views::TextfieldController, public
     path_separator_ = path_group_->AddChildView(std::make_unique<views::Separator>());
     path_separator_->SetOrientation(views::Separator::Orientation::kVertical);
     path_separator_->SetPreferredSize(gfx::Size(1, 18));
-    auto* path = path_group_->AddChildView(std::make_unique<views::Label>(root_.AsUTF16Unsafe()));
+    const auto scope_title = scope_.title.empty() ? root_.AsUTF16Unsafe() : scope_.title;
+    auto* path = path_group_->AddChildView(std::make_unique<views::Label>(scope_title));
     // The 1px divider plus 7px label inset leaves 8px after the button.
     path->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(0, 7, 0, 12)));
-    path->SetHorizontalAlignment(gfx::ALIGN_LEFT); path->SetElideBehavior(gfx::ELIDE_MIDDLE); path->SetTooltipText(root_.AsUTF16Unsafe());
+    path->SetHorizontalAlignment(gfx::ALIGN_LEFT); path->SetElideBehavior(gfx::ELIDE_MIDDLE); path->SetTooltipText(scope_title);
     path_layout->SetFlexForView(path, 1);
     status_ = AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_SEARCH_READY)));
     status_->SetHorizontalAlignment(gfx::ALIGN_LEFT); status_->SetMultiLine(true);
@@ -273,7 +277,7 @@ class SearchPage : public views::View, public views::TextfieldController, public
   void Stop() {
     pump_.Stop(); results_timer_.Stop(); status_timer_.Stop();
     if (connection_ && job_) connection_->Cancel(job_);
-    job_ = 0; pending_ = false; paused_ = false; ++generation_;
+    job_ = 0; pending_ = false; scope_pending_ = false; paused_ = false; ++generation_;
   }
   void Restart() { Start(); }
   SearchPageState state() const {
@@ -414,7 +418,7 @@ class SearchPage : public views::View, public views::TextfieldController, public
   void Start() {
     ParseTypes(true);
     RunSearch();
-    if (job_ && !query_.empty()) {
+    if ((job_ || scope_pending_) && !query_.empty()) {
       committed_query_ = query_;
       updating_ = true; input_->SetText(u""); updating_ = false;
       RebuildChips();
@@ -429,7 +433,26 @@ class SearchPage : public views::View, public views::TextfieldController, public
     hits_.clear(); visible_hits_.clear(); scanned_ = 0; skipped_ = 0; limited_ = false; RenderResults();
     if ((query_.empty() && extensions_.empty()) || (content_ && query_.empty())) { SetStatus(IDS_CRFILES_SEARCH_READY); UpdateControls(); return; }
     if (query_.size() > 4096) { SetStatus(IDS_CRFILES_SEARCH_FAILED); UpdateControls(); return; }
-    StartPass(false);
+    if (scope_.tag_id > 0) {
+      scope_pending_ = true;
+      SetStatus(IDS_CRFILES_SEARCH_RUNNING); UpdateControls();
+      base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+          base::BindOnce([](int64_t id) -> std::optional<std::vector<base::FilePath>> {
+            auto snapshot = ReadFileTags();
+            if (!snapshot.ok) return std::nullopt;
+            auto tag = std::ranges::find(snapshot.tags, id, &FileTag::id);
+            if (tag == snapshot.tags.end()) return std::nullopt;
+            return std::move(tag->paths);
+          }, scope_.tag_id),
+          base::BindOnce([](base::WeakPtr<SearchPage> page, uint64_t generation,
+                            std::optional<std::vector<base::FilePath>> paths) {
+            if (!page || page->generation_ != generation) return;
+            page->scope_pending_ = false;
+            if (!paths) { page->SetStatus(IDS_CRFILES_SEARCH_FAILED); page->UpdateControls(); return; }
+            page->scope_.multiple = true; page->scope_.paths = std::move(*paths);
+            page->StartPass(false);
+          }, weak_.GetWeakPtr(), generation_));
+    } else StartPass(false);
   }
   void StartPass(bool hidden_only) {
     scanned_base_ = scanned_; skipped_base_ = skipped_;
@@ -437,6 +460,11 @@ class SearchPage : public views::View, public views::TextfieldController, public
     if (hidden_only) hidden_started_ = true;
     connection_ = SearchConnection::Get();
     auto options = mojom::SearchOptions::New(); options->root = root_.AsUTF8Unsafe(); options->query = query_;
+    options->scoped = scope_.multiple || !scope_.paths.empty();
+    for (const auto& path : scope_.paths) {
+      auto root = mojom::SearchRoot::New(); root->path = path.AsUTF8Unsafe();
+      options->roots.push_back(std::move(root));
+    }
     options->show_hidden = hidden_only; options->hidden_only = hidden_only;
     options->extensions.assign(extensions_.begin(), extensions_.end());
     options->mode = content_ ? mojom::SearchMode::kContent : mojom::SearchMode::kPath;
@@ -592,6 +620,8 @@ class SearchPage : public views::View, public views::TextfieldController, public
     }
   }
   base::FilePath root_;
+  SearchScope scope_;
+  bool scope_pending_ = false;
   base::RepeatingCallback<void(base::FilePath, bool)> open_;
   base::RepeatingCallback<void(base::FilePath)> reveal_;
   base::RepeatingClosure state_changed_;
@@ -624,8 +654,8 @@ BEGIN_METADATA(SearchPage)
 END_METADATA
 }
 std::unique_ptr<views::View> CreateSearchPage(const base::FilePath& root, base::RepeatingCallback<void(base::FilePath, bool)> open,
-    base::RepeatingCallback<void(base::FilePath)> reveal, base::RepeatingClosure state_changed) {
-  return std::make_unique<SearchPage>(root, std::move(open), std::move(reveal), std::move(state_changed));
+    base::RepeatingCallback<void(base::FilePath)> reveal, base::RepeatingClosure state_changed, SearchScope scope) {
+  return std::make_unique<SearchPage>(root, std::move(open), std::move(reveal), std::move(state_changed), std::move(scope));
 }
 SearchPageState GetSearchPageState(views::View* page) {
   if (auto* search = views::AsViewClass<SearchPage>(page)) return search->state();

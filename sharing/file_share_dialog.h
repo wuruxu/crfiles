@@ -22,8 +22,8 @@ std::optional<gfx::Rect> FileShareSessionBounds(views::View* view);
 views::View* ShowTrustedDevicesDialog(views::Widget* parent, std::shared_ptr<ShareService> service);
 views::View* ShowSharingFoldersDialog(views::Widget* parent,
     base::RepeatingCallback<std::vector<NearbySharing::SharedTarget>()> folders,
-    base::RepeatingCallback<void(base::FilePath)> open,
-    base::RepeatingCallback<void(base::FilePath)> remove);
+    base::RepeatingCallback<void(NearbySharing::SharedTarget)> open,
+    base::RepeatingCallback<void(NearbySharing::SharedTarget)> remove);
 void SetFileShareSelection(views::View* view, std::vector<base::FilePath> paths);
 views::View* ShowFileShareDialog(views::Widget* parent, std::shared_ptr<ShareService> service,
                          std::vector<base::FilePath> paths);

@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
+#include "crFiles/crfiles_tags.h"
 #include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_trash.h"
@@ -57,6 +58,7 @@ bool MoveToTrash(const base::FilePath& path) {
   if (!base::ImportantFileWriter::WriteFileAtomically(item.AppendASCII("origin"), path.AsUTF8Unsafe())) return false;
   log.SetDestination(files.Append(path.BaseName()).AsUTF8Unsafe());
   if (!base::Move(path, files.Append(path.BaseName()))) return false;
+  RemoveFileTagsUnderPath(path);
   log.Succeed(); return true;
 }
 bool EmptyTrash() {
@@ -76,6 +78,7 @@ bool EmptyTrash() {
     // Never delete the trash root or unrelated files outside its UUID entries.
     if (!base::Uuid::ParseLowercase(entry.BaseName().AsUTF8Unsafe()).is_valid()) { ok = false; continue; }
     if (!base::DeletePathRecursively(entry)) ok = false;
+    else RemoveFileTagsUnderPath(entry);
   }
   ok &= entries.GetError() == base::File::FILE_OK;
   if (ok) log.Succeed();
@@ -101,6 +104,7 @@ bool RestoreFromTrash(const base::FilePath& path) {
   base::DeleteFile(item.AppendASCII("origin"));
   base::DeleteFile(path.DirName());
   base::DeleteFile(item);
+  RemoveFileTagsUnderPath(path);
   log.Succeed(); return true;
 }
 }

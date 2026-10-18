@@ -49,8 +49,11 @@ void SearchConnection::Disconnected() {
   for (auto& [id, callback] : jobs) callback.Run();
 }
 uint64_t SearchConnection::Start(mojom::SearchOptionsPtr options, base::RepeatingClosure disconnected) {
-  if (!Connect()) return 0;
-  options->access_bookmark = CreateFileAccessBookmark(base::FilePath::FromUTF8Unsafe(options->root));
+  if (options->roots.size() > 10000 || !Connect()) return 0;
+  if (options->scoped) {
+    for (auto& root : options->roots)
+      root->access_bookmark = CreateFileAccessBookmark(base::FilePath::FromUTF8Unsafe(root->path));
+  } else options->access_bookmark = CreateFileAccessBookmark(base::FilePath::FromUTF8Unsafe(options->root));
   const uint64_t id = ++next_job_;
   jobs_.emplace(id, std::move(disconnected)); service_->Start(id, std::move(options));
   return id;

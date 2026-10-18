@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">Alguns itens não puderam ser lidos ou foram ignorados. Links simbólicos não são seguidos.</translation>
   <translation id="5438994243607599033">Borda com luz em movimento</translation>
   <translation id="1317822567862518612">Varredura dos cantos</translation>
+  <translation id="1774246671250453305">Tags</translation>
+  <translation id="5101353843330051800">Crie tags reutilizáveis para arquivos e pastas.</translation>
+  <translation id="3215146029379093621">Selecione tags para adicionar ou remover. Cada caminho pode ter até 6. Tags mistas não alteradas são preservadas.</translation>
+  <translation id="8752025040481372078">Nome da tag</translation>
+  <translation id="4253941650608103900">Criar tag</translation>
+  <translation id="2229162813566390161">Aplicar tags</translation>
+  <translation id="1688748849251095774">Editar tags</translation>
+  <translation id="992283138707894632">Alguns itens selecionados</translation>
+  <translation id="2204473532529500944">Ainda não há tags. Crie uma para começar.</translation>
+  <translation id="8136517861983351086">Use de 1 a 40 caracteres sem caracteres de controle.</translation>
+  <translation id="469386564380447216">Cada caminho pode ter até 6 tags. Nenhuma alteração foi salva.</translation>
+  <translation id="4783446177251788849">Alguns caminhos estão indisponíveis.</translation>
+  <translation id="9047434598939464995">A área dos blocos reflete a quantidade de itens. Tags vazias mantêm um bloco pequeno. Os tamanhos incluem pastas sem contar caminhos aninhados duas vezes.</translation>
+<translation id="7173920236757060434">Os arquivos foram recebidos, mas não foi possível salvar suas etiquetas.</translation>
+  <translation id="8563932996510222464">Adicionar etiquetas</translation>
+  <translation id="787426481015837208">Excluir etiqueta</translation>
+  <translation id="3660848480734478600">Não foi possível excluir as etiquetas.</translation>
+  <translation id="5384113860665892500">Excluir as etiquetas abaixo e removê-las de todos os arquivos e pastas associados? Os arquivos e as pastas serão mantidos.</translation>
 </translationbundle>

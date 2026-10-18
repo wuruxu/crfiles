@@ -1,4 +1,5 @@
 // Copyright 2026 The Chromium Authors
+#include "crFiles/crfiles_tags.h"
 #include "crFiles/crfiles_cache_state.h"
 #include "crFiles/crfiles_file_operations.h"
 #include "crFiles/crfiles_archive.h"
@@ -189,7 +190,7 @@ FileOperationResult TransferLocalFiles(std::vector<base::FilePath> sources,
     // A same-filesystem move is an atomic, no-replace rename. If that fails,
     // copying cannot establish exclusive ownership of the source: another
     // process can still modify files or add children while we copy it.
-    if (move && Publish(source, target)) { result.changed.push_back(target); result.removed.push_back(source); log.Succeed(); continue; }
+    if (move && Publish(source, target)) { result.changed.push_back(target); result.removed.push_back(source); RemoveFileTagsUnderPath(source); log.Succeed(); continue; }
     base::ScopedTempDir staging;
     if (!staging.CreateUniqueTempDirUnderPath(canonical_destination)) { ++result.failed; continue; }
     const auto staged = staging.GetPath().Append(source.BaseName());
@@ -210,7 +211,7 @@ FileOperationResult RenameLocalFile(base::FilePath source, base::FilePath target
   FileOperationLog log("rename", "menu", source.AsUTF8Unsafe(), target.AsUTF8Unsafe());
   ScopedFileCacheMutation mutation({source, target});
   if (!log.valid() || !IsValidEntryName(target.BaseName().AsUTF16Unsafe()) || source.DirName() != target.DirName() || source == target || !RegularEntry(source) || !Publish(source, target)) { result.failed = 1; return result; }
-  log.Succeed(); result.changed.push_back(target); result.removed.push_back(source); return result;
+  log.Succeed(); result.changed.push_back(target); result.removed.push_back(source); RemoveFileTagsUnderPath(source); return result;
 }
 FileOperationResult CompressLocalFiles(std::vector<base::FilePath> sources, base::FilePath target,
     std::shared_ptr<ArchiveProgress> progress) {

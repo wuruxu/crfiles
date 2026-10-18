@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">No se pudieron leer algunos elementos o se omitieron. No se siguen los enlaces simbólicos.</translation>
   <translation id="5438994243607599033">Borde de luz en movimiento</translation>
   <translation id="1317822567862518612">Barrido de esquinas</translation>
+  <translation id="1774246671250453305">Etiquetas</translation>
+  <translation id="5101353843330051800">Crea etiquetas reutilizables para archivos y carpetas.</translation>
+  <translation id="3215146029379093621">Selecciona etiquetas para añadir o quitar. Cada ruta admite hasta 6. Las etiquetas mixtas sin modificar se conservan.</translation>
+  <translation id="8752025040481372078">Nombre de etiqueta</translation>
+  <translation id="4253941650608103900">Crear etiqueta</translation>
+  <translation id="2229162813566390161">Aplicar etiquetas</translation>
+  <translation id="1688748849251095774">Editar etiquetas</translation>
+  <translation id="992283138707894632">Algunos elementos seleccionados</translation>
+  <translation id="2204473532529500944">Aún no hay etiquetas. Crea una para empezar.</translation>
+  <translation id="8136517861983351086">Usa entre 1 y 40 caracteres sin caracteres de control.</translation>
+  <translation id="469386564380447216">Cada ruta admite hasta 6 etiquetas. No se guardaron cambios.</translation>
+  <translation id="4783446177251788849">Algunas rutas no están disponibles.</translation>
+  <translation id="9047434598939464995">El área refleja el número de elementos. Las etiquetas vacías conservan un bloque pequeño. Los tamaños incluyen carpetas sin contar dos veces las rutas anidadas.</translation>
+<translation id="7173920236757060434">Se recibieron los archivos, pero no se pudieron guardar sus etiquetas.</translation>
+  <translation id="8563932996510222464">Añadir etiquetas</translation>
+  <translation id="787426481015837208">Eliminar etiqueta</translation>
+  <translation id="3660848480734478600">No se pudieron eliminar las etiquetas.</translation>
+  <translation id="5384113860665892500">¿Eliminar las etiquetas que se muestran a continuación y quitarlas de todos los archivos y carpetas asociados? Los archivos y las carpetas se conservarán.</translation>
 </translationbundle>

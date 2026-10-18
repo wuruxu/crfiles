@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">Não foi possível ler alguns itens ou estes foram ignorados. As ligações simbólicas não são seguidas.</translation>
   <translation id="5438994243607599033">Contorno com luz em movimento</translation>
   <translation id="1317822567862518612">Varrimento dos cantos</translation>
+  <translation id="1774246671250453305">Etiquetas</translation>
+  <translation id="5101353843330051800">Crie etiquetas reutilizáveis para ficheiros e pastas.</translation>
+  <translation id="3215146029379093621">Selecione etiquetas para adicionar ou remover. Cada caminho pode ter até 6. As etiquetas mistas não alteradas são preservadas.</translation>
+  <translation id="8752025040481372078">Nome da etiqueta</translation>
+  <translation id="4253941650608103900">Criar etiqueta</translation>
+  <translation id="2229162813566390161">Aplicar etiquetas</translation>
+  <translation id="1688748849251095774">Editar etiquetas</translation>
+  <translation id="992283138707894632">Alguns itens selecionados</translation>
+  <translation id="2204473532529500944">Ainda não existem etiquetas. Crie uma para começar.</translation>
+  <translation id="8136517861983351086">Utilize de 1 a 40 carateres sem carateres de controlo.</translation>
+  <translation id="469386564380447216">Cada caminho pode ter até 6 etiquetas. Nenhuma alteração foi guardada.</translation>
+  <translation id="4783446177251788849">Alguns caminhos estão indisponíveis.</translation>
+  <translation id="9047434598939464995">A área dos blocos reflete o número de itens. As etiquetas vazias mantêm um bloco pequeno. Os tamanhos incluem pastas sem contar caminhos aninhados duas vezes.</translation>
+<translation id="7173920236757060434">Os ficheiros foram recebidos, mas não foi possível guardar as suas etiquetas.</translation>
+  <translation id="8563932996510222464">Adicionar etiquetas</translation>
+  <translation id="787426481015837208">Eliminar etiqueta</translation>
+  <translation id="3660848480734478600">Não foi possível eliminar as etiquetas.</translation>
+  <translation id="5384113860665892500">Eliminar as etiquetas abaixo e removê-las de todos os ficheiros e pastas associados? Os ficheiros e as pastas serão mantidos.</translation>
 </translationbundle>

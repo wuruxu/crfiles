@@ -2,8 +2,14 @@
 module crfiles.mojom;
 
 enum SearchMode { kPath, kContent };
+struct SearchRoot {
+  string path;
+  array<uint8> access_bookmark;
+};
 struct SearchOptions {
   string root;
+  bool scoped = false;
+  array<SearchRoot> roots;
   array<uint8> access_bookmark;
   string query;
   array<string> extensions;

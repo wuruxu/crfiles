@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">部分項目無法讀取或已略過。不跟隨符號連結。</translation>
   <translation id="5438994243607599033">流光邊框</translation>
   <translation id="1317822567862518612">四角掃描</translation>
+  <translation id="1774246671250453305">標籤</translation>
+  <translation id="5101353843330051800">建立可重複用於檔案和資料夾的標籤。</translation>
+  <translation id="3215146029379093621">選擇要新增或移除的標籤。每個路徑最多 6 個標籤。未修改的混合標籤將保留。</translation>
+  <translation id="8752025040481372078">標籤名稱</translation>
+  <translation id="4253941650608103900">建立標籤</translation>
+  <translation id="2229162813566390161">套用標籤</translation>
+  <translation id="1688748849251095774">編輯標籤</translation>
+  <translation id="992283138707894632">部分已選項目</translation>
+  <translation id="2204473532529500944">尚無標籤，請先建立一個。</translation>
+  <translation id="8136517861983351086">請輸入 1–40 個字元，不含控制字元。</translation>
+  <translation id="469386564380447216">每個路徑最多 6 個標籤。未儲存任何變更。</translation>
+  <translation id="4783446177251788849">部分路徑無法使用。</translation>
+  <translation id="9047434598939464995">區塊面積按項目數量分配，空標籤保留小區塊。大小包含資料夾內容，同一標籤下的巢狀路徑不重複計算。</translation>
+<translation id="7173920236757060434">檔案已接收，但無法儲存其標籤。</translation>
+  <translation id="8563932996510222464">新增標籤</translation>
+  <translation id="787426481015837208">刪除標籤</translation>
+  <translation id="3660848480734478600">無法刪除標籤。</translation>
+  <translation id="5384113860665892500">刪除下列標籤，並移除所有關聯檔案和資料夾上的這些標籤？檔案和資料夾本身將會保留。</translation>
 </translationbundle>

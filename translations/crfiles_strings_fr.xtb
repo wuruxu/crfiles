@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">Certains éléments sont illisibles ou ont été ignorés. Les liens symboliques ne sont pas suivis.</translation>
   <translation id="5438994243607599033">Bordure lumineuse animée</translation>
   <translation id="1317822567862518612">Balayage des coins</translation>
+  <translation id="1774246671250453305">Étiquettes</translation>
+  <translation id="5101353843330051800">Créez des étiquettes réutilisables pour les fichiers et dossiers.</translation>
+  <translation id="3215146029379093621">Sélectionnez les étiquettes à ajouter ou retirer. Maximum 6 par chemin. Les étiquettes mixtes non modifiées sont conservées.</translation>
+  <translation id="8752025040481372078">Nom de l’étiquette</translation>
+  <translation id="4253941650608103900">Créer une étiquette</translation>
+  <translation id="2229162813566390161">Appliquer les étiquettes</translation>
+  <translation id="1688748849251095774">Modifier les étiquettes</translation>
+  <translation id="992283138707894632">Certains éléments sélectionnés</translation>
+  <translation id="2204473532529500944">Aucune étiquette. Créez-en une pour commencer.</translation>
+  <translation id="8136517861983351086">Utilisez 1 à 40 caractères sans caractères de contrôle.</translation>
+  <translation id="469386564380447216">Maximum 6 étiquettes par chemin. Aucune modification enregistrée.</translation>
+  <translation id="4783446177251788849">Certains chemins sont indisponibles.</translation>
+  <translation id="9047434598939464995">La surface des blocs reflète le nombre d’éléments. Les étiquettes vides gardent un petit bloc. Les tailles incluent le contenu des dossiers sans compter deux fois les chemins imbriqués.</translation>
+<translation id="7173920236757060434">Les fichiers ont été reçus, mais leurs étiquettes n’ont pas pu être enregistrées.</translation>
+  <translation id="8563932996510222464">Ajouter des étiquettes</translation>
+  <translation id="787426481015837208">Supprimer l’étiquette</translation>
+  <translation id="3660848480734478600">Impossible de supprimer les étiquettes.</translation>
+  <translation id="5384113860665892500">Supprimer les étiquettes ci-dessous et les retirer de tous les fichiers et dossiers associés ? Les fichiers et dossiers eux-mêmes seront conservés.</translation>
 </translationbundle>

@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">部分项目无法读取或已跳过。不跟随符号链接。</translation>
   <translation id="5438994243607599033">流光边框</translation>
   <translation id="1317822567862518612">四角扫描</translation>
+  <translation id="1774246671250453305">标签</translation>
+  <translation id="5101353843330051800">创建可重复用于文件和文件夹的标签。</translation>
+  <translation id="3215146029379093621">选择要添加或移除的标签。每个路径最多 6 个标签。未修改的混合标签将保留。</translation>
+  <translation id="8752025040481372078">标签名称</translation>
+  <translation id="4253941650608103900">创建标签</translation>
+  <translation id="2229162813566390161">应用标签</translation>
+  <translation id="1688748849251095774">编辑标签</translation>
+  <translation id="992283138707894632">部分选中项目</translation>
+  <translation id="2204473532529500944">还没有标签，请先创建一个。</translation>
+  <translation id="8136517861983351086">请输入 1–40 个字符，不含控制字符。</translation>
+  <translation id="469386564380447216">每个路径最多 6 个标签。未保存任何修改。</translation>
+  <translation id="4783446177251788849">部分路径不可用。</translation>
+  <translation id="9047434598939464995">块面积按项目数量分配，空标签保留小块。体积包含文件夹内容，同一标签下的嵌套路径不重复统计。</translation>
+<translation id="7173920236757060434">文件已接收，但无法保存其标签。</translation>
+  <translation id="8563932996510222464">添加标签</translation>
+  <translation id="787426481015837208">删除标签</translation>
+  <translation id="3660848480734478600">无法删除标签。</translation>
+  <translation id="5384113860665892500">删除下列标签，并移除所有关联文件和文件夹上的这些标签？文件和文件夹本身将保留。</translation>
 </translationbundle>

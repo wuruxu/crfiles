@@ -346,4 +346,22 @@
   <translation id="5462178630465079387">一部の項目を読み取れなかったか、スキップしました。シンボリックリンクはたどりません。</translation>
   <translation id="5438994243607599033">流れる光の枠線</translation>
   <translation id="1317822567862518612">四隅のスキャン</translation>
+  <translation id="1774246671250453305">タグ</translation>
+  <translation id="5101353843330051800">ファイルやフォルダに再利用できるタグを作成します。</translation>
+  <translation id="3215146029379093621">追加または削除するタグを選択します。各パスに最大6個まで設定できます。変更しない混在タグは保持されます。</translation>
+  <translation id="8752025040481372078">タグ名</translation>
+  <translation id="4253941650608103900">タグを作成</translation>
+  <translation id="2229162813566390161">タグを適用</translation>
+  <translation id="1688748849251095774">タグを編集</translation>
+  <translation id="992283138707894632">選択項目の一部</translation>
+  <translation id="2204473532529500944">タグがありません。タグを作成してください。</translation>
+  <translation id="8136517861983351086">制御文字を含まない1～40文字を入力してください。</translation>
+  <translation id="469386564380447216">各パスのタグは最大6個です。変更は保存されませんでした。</translation>
+  <translation id="4783446177251788849">一部のパスを利用できません。</translation>
+  <translation id="9047434598939464995">ブロック面積は項目数に比例します。空のタグは小さなブロックで表示されます。サイズにはフォルダの内容を含み、入れ子のパスは重複計上しません。</translation>
+<translation id="7173920236757060434">ファイルは受信されましたが、タグを保存できませんでした。</translation>
+  <translation id="8563932996510222464">タグを追加</translation>
+  <translation id="787426481015837208">タグを削除</translation>
+  <translation id="3660848480734478600">タグを削除できませんでした。</translation>
+  <translation id="5384113860665892500">以下のタグを削除し、関連付けられたすべてのファイルとフォルダーからこれらのタグを解除しますか？ファイルとフォルダー自体は保持されます。</translation>
 </translationbundle>
