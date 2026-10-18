@@ -312,6 +312,66 @@ std::optional<uint64_t> FileSelectionSize(std::vector<base::FilePath> paths) {
   }
   return bytes;
 }
+void CalculatePropertiesSize(std::vector<base::FilePath> paths,
+                             std::shared_ptr<PropertiesSizeProgress> progress) {
+  uint64_t bytes = 0;
+  // Avoid counting nested selections twice. Do not resolve links here.
+  std::ranges::sort(paths);
+  paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+  std::vector<base::FilePath> roots;
+  for (const auto& path : paths) {
+    if (progress->canceled.load(std::memory_order_relaxed)) return;
+    if (!std::ranges::any_of(roots, [&](const auto& root) { return root.IsParent(path); }))
+      roots.push_back(path);
+  }
+  std::vector<std::unique_ptr<base::FileEnumerator>> stack;
+  const auto inspect = [&](const base::FilePath& path) {
+#if BUILDFLAG(IS_WIN)
+    const DWORD attributes = GetFileAttributesW(path.value().c_str());
+    const bool link = attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+    const bool link = base::IsLink(path);
+#endif
+    base::File::Info info;
+    if (link || !base::GetFileInfo(path, &info)) {
+      progress->incomplete.store(true, std::memory_order_relaxed);
+      return;
+    }
+    if (!info.is_directory) {
+      if (info.size < 0 || static_cast<uint64_t>(info.size) > std::numeric_limits<uint64_t>::max() - bytes) {
+        progress->incomplete.store(true, std::memory_order_relaxed);
+        return;
+      }
+      bytes += static_cast<uint64_t>(info.size);
+      progress->bytes.store(bytes, std::memory_order_relaxed);
+      return;
+    }
+    int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
+#if BUILDFLAG(IS_POSIX)
+    types |= base::FileEnumerator::SHOW_SYM_LINKS;
+#endif
+    stack.push_back(std::make_unique<base::FileEnumerator>(path, false, types,
+        base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
+        base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION));
+  };
+  for (const auto& root : roots) {
+    if (progress->canceled.load(std::memory_order_relaxed)) return;
+    inspect(root);
+    while (!stack.empty()) {
+      if (progress->canceled.load(std::memory_order_relaxed)) return;
+      const auto child = stack.back()->Next();
+      if (child.empty()) {
+        if (stack.back()->GetError() != base::File::FILE_OK)
+          progress->incomplete.store(true, std::memory_order_relaxed);
+        stack.pop_back();
+      } else {
+        inspect(child);
+      }
+    }
+  }
+  progress->done.store(true, std::memory_order_release);
+}
 bool OpenFolderTerminal(const base::FilePath& path) {
   base::LaunchOptions options; options.current_directory = path;
 #if BUILDFLAG(IS_WIN)

@@ -30,9 +30,12 @@ bool SetQuickSharePreferences(const QuickSharePreferences& preferences);
 inline constexpr std::array<const char*, 6> kHistoryActions = {"move", "trash", "access", "open_file", "send", "receive"};
 inline constexpr std::array<int, 4> kHistoryRetentionDays = {7, 30, 90, 365};
 // Value 1 replaces the former capsule style, preserving saved selections.
-enum class NavigationStyle { kMinimal = 0, kUnderline = 1, kRaised = 2 };
+enum class NavigationStyle { kMinimal = 0, kUnderline = 1, kRaised = 2, kConnected = 3 };
 NavigationStyle GetNavigationStyle();
 bool SetNavigationStyle(NavigationStyle style);
+enum class SplitSelectionStyle { kFlow = 0, kTopBar = 1, kCorners = 2 };
+SplitSelectionStyle GetSplitSelectionStyle();
+bool SetSplitSelectionStyle(SplitSelectionStyle style);
 // macOS titlebar preference, applied when the main window is created.
 bool GetWindowsTitlebarStyleEnabled();
 bool SetWindowsTitlebarStyleEnabled(bool enabled);

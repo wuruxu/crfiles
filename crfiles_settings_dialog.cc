@@ -15,6 +15,7 @@
 #include "base/memory/weak_ptr.h"
 #include "crFiles/crfiles_image_preview.h"
 #include "third_party/skia/include/core/SkPixmap.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "ui/events/event_observer.h"
 #include "ui/events/event.h"
 #include "ui/views/event_monitor.h"
@@ -83,6 +84,10 @@
 #include "ui/color/color_id.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "cc/paint/paint_shader.h"
+#include "ui/gfx/canvas.h"
+#include "ui/color/color_provider.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
@@ -98,6 +103,7 @@
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/proposed_layout.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/view_observer.h"
@@ -504,6 +510,181 @@ class NavigationButton : public views::LabelButton {
 };
 BEGIN_METADATA(NavigationButton)
 END_METADATA
+// Mutually exclusive style cards share the existing persisted settings.
+class StylePreviewButton : public views::LabelButton {
+  METADATA_HEADER(StylePreviewButton, views::LabelButton)
+ public:
+  StylePreviewButton(PressedCallback callback, const std::u16string& text,
+                     bool split, int style)
+      : views::LabelButton(std::move(callback), text), split_(split), style_(style) {
+    SetPreferredSize(gfx::Size(140, 106));
+    SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(58, 8, 8, 8)));
+    SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    label()->SetMultiLine(true);
+    label()->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    label()->SetCanProcessEventsWithinSubtree(false);
+    SetTooltipText(text);
+    GetViewAccessibility().SetRole(ax::mojom::Role::kRadioButton);
+    views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(), 10);
+  }
+  void SetChecked(bool checked) {
+    selected_ = checked;
+    GetViewAccessibility().SetCheckedState(checked ?
+        ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
+    Update();
+  }
+  void OnThemeChanged() override { views::LabelButton::OnThemeChanged(); Update(); }
+  views::ProposedLayout CalculateProposedLayout(const views::SizeBounds& size_bounds) const override {
+    auto layout = views::LabelButton::CalculateProposedLayout(size_bounds);
+    // LabelButton centers text across the full button, ignoring vertical
+    // border insets. Keep the caption below the independently painted preview.
+    for (auto& child : layout.child_layouts) {
+      if (child.child_view != label()) continue;
+      child.bounds = gfx::Rect(8, 58, std::max(0, layout.host_size.width() - 16),
+                               std::max(0, layout.host_size.height() - 66));
+      child.available_size = views::SizeBounds(child.bounds.size());
+    }
+    return layout;
+  }
+ protected:
+  void StateChanged(ButtonState old) override { views::LabelButton::StateChanged(old); Update(); }
+  void PaintButtonContents(gfx::Canvas* canvas) override {
+    views::LabelButton::PaintButtonContents(canvas);
+    const auto* provider = GetColorProvider();
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    const auto primary = provider->GetColor(ui::kColorSysPrimary);
+    const auto muted = provider->GetColor(ui::kColorSysOnSurfaceSecondary);
+    const auto surface = provider->GetColor(ui::kColorSysSurface1);
+    const float x = 14.f, y = 12.f, w = width() - 28.f, h = 40.f;
+    if (w < 24.f) return;
+    const auto box = [&](float left, float top, float wide, float high, SkColor color, float radius) {
+      flags.setColor(color);
+      canvas->DrawRoundRect(gfx::RectF(left, top, wide, high), radius, flags);
+    };
+    box(x, y, w, h, surface, 5.f);
+    if (!split_) {
+      // Render the example /tmp/crFiles with the same root disk, current
+      // segment colors, separators and raised/connected shapes as the path bar.
+      constexpr float kPreviewWidth = 178.f;
+      const float scale = std::min(1.f, (w - 8.f) / kPreviewWidth);
+      canvas->Save();
+      canvas->Translate(gfx::Vector2d(
+          static_cast<int>(x + (w - kPreviewWidth * scale) / 2.f), static_cast<int>(y + 6.f)));
+      canvas->Scale(scale, scale);
+      const auto inactive = provider->GetColor(ui::kColorSysHeaderContainerInactive);
+      const auto active = provider->GetColor(ui::kColorSysPrimaryContainer);
+      const auto text_color = provider->GetColor(ui::kColorSysOnSurface);
+      const auto font = label()->font_list().DeriveWithSizeDelta(-1);
+      constexpr std::array<float, 3> widths = {32.f, 52.f, 78.f};
+      constexpr std::array<std::u16string_view, 3> names = {u"", u"tmp", u"crFiles"};
+      if (style_ == 3) box(0.f, 0.f, kPreviewWidth, 28.f, inactive, 6.f);
+      float left = 0.f;
+      for (size_t i = 0; i < widths.size(); ++i) {
+        const float segment = widths[i];
+        const bool current = i == 2;
+        if (style_ == 2) {
+          SkPathBuilder path;
+          path.moveTo(left + 3.f, 1.f).lineTo(left + segment - 9.f, 1.f)
+              .quadTo(left + segment - 7.f, 1.f, left + segment - 6.f, 3.f)
+              .lineTo(left + segment, 13.f).lineTo(left + segment - 6.f, 24.f)
+              .quadTo(left + segment - 7.f, 26.f, left + segment - 9.f, 26.f)
+              .lineTo(left + 3.f, 26.f)
+              .quadTo(left, 26.f, left + 2.f, 23.f)
+              .lineTo(left + (i == 0 ? 2.f : 7.f), 13.f)
+              .lineTo(left + 2.f, 4.f).quadTo(left, 1.f, left + 3.f, 1.f).close();
+          flags.setColor(current ? active : inactive);
+          canvas->DrawPath(path.detach(), flags);
+        } else if (style_ == 3 && current) {
+          box(left, 1.f, segment, 25.f, active, 5.f);
+        }
+        if ((style_ == 2 || style_ == 3) && !current) {
+          for (int row = 0; row < 3; ++row)
+            box(left + 4.f, 27.f + row, segment - 8.f, 1.f,
+                SkColorSetA(SK_ColorBLACK, 36 / (row + 1)), 0.f);
+        }
+        const auto color = current ? (style_ >= 2 ?
+            provider->GetColor(ui::kColorSysOnPrimaryContainer) : text_color) : muted;
+        if (i == 0) {
+          const float disk = left + 8.f;
+          SkPathBuilder path;
+          path.moveTo(disk + 3.f, 6.f).lineTo(disk + 13.f, 6.f)
+              .lineTo(disk + 16.f, 13.f).lineTo(disk + 16.f, 20.f)
+              .lineTo(disk, 20.f).lineTo(disk, 13.f).close()
+              .moveTo(disk, 13.f).lineTo(disk + 16.f, 13.f)
+              .moveTo(disk + 3.f, 17.f).lineTo(disk + 5.f, 17.f);
+          flags.setColor(color);
+          flags.setStyle(cc::PaintFlags::kStroke_Style);
+          flags.setStrokeWidth(1.2f);
+          canvas->DrawPath(path.detach(), flags);
+          flags.setStyle(cc::PaintFlags::kFill_Style);
+        } else {
+          canvas->DrawStringRectWithFlags(names[i], font, color,
+              gfx::Rect(static_cast<int>(left + 4.f), 1, static_cast<int>(segment - 8.f), 26),
+              gfx::Canvas::TEXT_ALIGN_CENTER);
+        }
+        if (style_ == 1 && current) box(left + 8.f, 28.f, segment - 16.f, 2.f, primary, 1.f);
+        left += segment;
+        if (i != 2) {
+          if (style_ == 3) {
+            box(left + 3.f, 7.f, 1.f, 14.f, SkColorSetA(SK_ColorBLACK, 64), 0.f);
+            box(left + 4.f, 7.f, 1.f, 14.f, SkColorSetA(SK_ColorWHITE, 110), 0.f);
+          } else if (style_ != 2) {
+            canvas->DrawStringRectWithFlags(u"›", font, muted,
+                gfx::Rect(static_cast<int>(left), 1, 8, 26), gfx::Canvas::TEXT_ALIGN_CENTER);
+          }
+          left += 8.f;
+        }
+      }
+      canvas->Restore();
+    } else {
+      const float pane = (w - 12.f) / 2.f;
+      box(x + 4.f, y + 4.f, pane, h - 8.f,
+          provider->GetColor(ui::kColorSysBase), 3.f);
+      const float left = x + 8.f + pane;
+      box(left, y + 4.f, pane, h - 8.f,
+          provider->GetColor(ui::kColorSysBase), 3.f);
+      if (style_ == 0) {
+        const SkPoint points[] = {{left, y}, {left + pane, y + h}};
+        const SkColor4f colors[] = {SkColor4f::FromColor(SkColorSetRGB(66, 165, 245)),
+                                    SkColor4f::FromColor(SkColorSetRGB(156, 100, 255))};
+        flags.setColor(SK_ColorWHITE);
+        flags.setShader(cc::PaintShader::MakeLinearGradient(points, colors, nullptr, 2, SkTileMode::kClamp));
+        flags.setStyle(cc::PaintFlags::kStroke_Style);
+        flags.setStrokeWidth(2.f);
+        canvas->DrawRoundRect(gfx::RectF(left + 1.f, y + 5.f, pane - 2.f, h - 10.f), 3.f, flags);
+        flags.setShader(nullptr);
+        flags.setStyle(cc::PaintFlags::kFill_Style);
+      } else if (style_ == 1) {
+        const float bar = std::min(22.f, pane - 6.f);
+        box(left + (pane - bar) / 2.f, y + 5.f, bar, 3.f, primary, 1.5f);
+      } else {
+        for (int side = 0; side < 2; ++side) {
+          const float corner = side ? left + pane - 3.f : left + 2.f;
+          box(side ? corner - 7.f : corner, y + 6.f, 8.f, 1.5f, primary, 0.f);
+          box(corner, y + 6.f, 1.5f, 8.f, primary, 0.f);
+        }
+      }
+      box(left + 3.f, y + h - 12.f, pane - 6.f, 1.f, muted, 0.f);
+      for (int i = 0; i < 2; ++i)
+        box(left + 6.f + i * (pane - 12.f) / 2.f, y + 19.f,
+            std::max(2.f, (pane - 16.f) / 2.f), 6.f, muted, 1.f);
+    }
+  }
+ private:
+  void Update() {
+    SetEnabledTextColors(selected_ ? ui::kColorSysPrimary : ui::kColorSysOnSurface);
+    SetBackground(views::CreateRoundedRectBackground(selected_ ? ui::kColorSysSecondaryContainer :
+        GetState() == STATE_HOVERED || GetState() == STATE_PRESSED ?
+            ui::kColorSysStateHoverOnSubtle : ui::kColorSysSurface1, 10));
+    SchedulePaint();
+  }
+  const bool split_;
+  const int style_;
+  bool selected_ = false;
+};
+BEGIN_METADATA(StylePreviewButton)
+END_METADATA
 class Settings : public views::DialogDelegate, public ui::SelectFileDialog::Listener, public views::ViewObserver, public ui::EventObserver, public views::TextfieldController {
  public:
   Settings() {
@@ -585,6 +766,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     pages_.fill(nullptr);
     navigation_.fill(nullptr);
     navigation_styles_.fill(nullptr);
+    split_selection_styles_.fill(nullptr);
     checks_.fill(nullptr);
     themes_.clear();
     language_ = nullptr;
@@ -712,17 +894,45 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     Label(page.get(), Text(IDS_CRFILES_TITLEBAR_RESTART));
 #endif
     Label(page.get(), Text(IDS_CRFILES_NAVIGATION_STYLE));
-    constexpr std::array labels = {IDS_CRFILES_NAVIGATION_MINIMAL, IDS_CRFILES_NAVIGATION_UNDERLINE, IDS_CRFILES_NAVIGATION_RAISED};
+    constexpr std::array labels = {IDS_CRFILES_NAVIGATION_MINIMAL, IDS_CRFILES_NAVIGATION_UNDERLINE, IDS_CRFILES_NAVIGATION_RAISED, IDS_CRFILES_NAVIGATION_CONNECTED};
     const auto selected = GetNavigationStyle();
-    for (size_t i = 0; i < labels.size(); ++i) {
-      auto* radio = page->AddChildView(std::make_unique<views::RadioButton>(Text(labels[i]), 1));
-      navigation_styles_[i] = radio;
-      radio->SetPreferredSize(gfx::Size(0, 44));
-      radio->SetFocusBehavior(views::View::FocusBehavior::NEVER);
-      radio->SetChecked(static_cast<NavigationStyle>(i) == selected);
-      radio->SetCallback(base::BindRepeating(&Settings::NavigationStyleChanged, base::Unretained(this), static_cast<NavigationStyle>(i)));
+    for (size_t row = 0; row < 2; ++row) {
+      auto* group = page->AddChildView(std::make_unique<views::View>());
+      auto* layout = group->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+      for (size_t column = 0; column < 2; ++column) {
+        const size_t i = row * 2 + column;
+        auto* button = group->AddChildView(std::make_unique<StylePreviewButton>(
+            base::BindRepeating(&Settings::NavigationStyleChanged, base::Unretained(this),
+                static_cast<NavigationStyle>(i)), Text(labels[i]), false, static_cast<int>(i)));
+        navigation_styles_[i] = button;
+        button->SetChecked(static_cast<NavigationStyle>(i) == selected);
+        layout->SetFlexForView(button, 1);
+      }
+    }
+    Label(page.get(), Text(IDS_CRFILES_SPLIT_SELECTION_STYLE));
+    constexpr std::array split_labels = {IDS_CRFILES_SPLIT_SELECTION_FLOW, IDS_CRFILES_SPLIT_SELECTION_TOP_BAR, IDS_CRFILES_SPLIT_SELECTION_CORNERS};
+    const auto split_style = GetSplitSelectionStyle();
+    auto* group = page->AddChildView(std::make_unique<views::View>());
+    auto* layout = group->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+    for (size_t i = 0; i < split_labels.size(); ++i) {
+      auto* button = group->AddChildView(std::make_unique<StylePreviewButton>(
+          base::BindRepeating(&Settings::SplitSelectionStyleChanged, base::Unretained(this),
+              static_cast<SplitSelectionStyle>(i)), Text(split_labels[i]), true, static_cast<int>(i)));
+      split_selection_styles_[i] = button;
+      button->SetChecked(static_cast<SplitSelectionStyle>(i) == split_style);
+      layout->SetFlexForView(button, 1);
     }
     return page;
+  }
+  void SplitSelectionStyleChanged(SplitSelectionStyle style) {
+    const bool saved = SetSplitSelectionStyle(style);
+    error_->SetVisible(!saved);
+    const auto selected = GetSplitSelectionStyle();
+    for (size_t i = 0; i < split_selection_styles_.size(); ++i)
+      split_selection_styles_[i]->SetChecked(static_cast<SplitSelectionStyle>(i) == selected);
+    if (saved) ApplyCrFilesViewSettings();
   }
   void NavigationStyleChanged(NavigationStyle style) {
     const bool saved = SetNavigationStyle(style);
@@ -1268,7 +1478,8 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
 #endif
   std::array<raw_ptr<views::View>, kPageCount> pages_ = {};
   std::array<raw_ptr<NavigationButton>, kPageCount> navigation_ = {};
-  std::array<raw_ptr<views::RadioButton>, 3> navigation_styles_ = {};
+  std::array<raw_ptr<StylePreviewButton>, 4> navigation_styles_ = {};
+  std::array<raw_ptr<StylePreviewButton>, 3> split_selection_styles_ = {};
   std::array<raw_ptr<views::Checkbox>, 6> checks_ = {};
   std::vector<raw_ptr<libcr::ThemeToggleButton>> themes_;
   raw_ptr<views::Combobox> language_ = nullptr, retention_ = nullptr;

@@ -120,11 +120,17 @@ std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool q
   if (state.warning_message_id) status += u"\n" + Text(state.warning_message_id);
   return status;
 }
-ui::ImageModel QuickShareAvatar() {
+ui::ImageModel QuickShareAvatar(int edge = 64) {
   static base::NoDestructor<libcr::SvgIconCache> icon(
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(IDR_CRFILES_QUICK_SHARE_ICON),
       gfx::SizeF(150, 150));
-  return icon->GetImageModel(gfx::Size(64, 64));
+  return icon->GetImageModel(gfx::Size(edge, edge));
+}
+ui::ImageModel QuickShareDeviceAvatar(uint8_t type) {
+  const gfx::VectorIcon* icon = &vector_icons::kDevicesIcon;
+  if (type == 3) icon = &kComputerCustomIcon;
+  else if (type == 1 || type == 2 || type == 5) icon = &kHardwareSmartphoneOldIcon;
+  return ui::ImageModel::FromVectorIcon(*icon, ui::kColorSysOnSurface, 54);
 }
 std::u16string QuickShareDeviceType(uint8_t type) {
   static constexpr std::array ids = {IDS_CRFILES_QS_TYPE_UNKNOWN, IDS_CRFILES_QS_TYPE_PHONE,
@@ -391,12 +397,17 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     identity->SetVisible(!code_notice);
     auto* identity_layout = identity->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 12));
     identity_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* avatar = identity->AddChildView(std::make_unique<views::ImageView>(service_->IsQuickShare() ? QuickShareAvatar() : PeerAvatar(state)));
-    avatar->SetImageSize(gfx::Size(64, 64));
+    auto* avatar = identity->AddChildView(std::make_unique<views::ImageView>(service_->IsQuickShare() ? QuickShareDeviceAvatar(state.peer_device_type) : PeerAvatar(state)));
+    avatar->SetImageSize(service_->IsQuickShare() ? gfx::Size(54, 54) : gfx::Size(64, 64));
     auto* identity_text = identity->AddChildView(std::make_unique<views::View>());
     identity_text->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 4));
-    auto* name = Label(identity_text, base::UTF8ToUTF16(state.peer_name)); name->SetMaximumWidth(248);
-    if (service_->IsQuickShare()) Label(identity_text, QuickShareDeviceType(state.peer_device_type));
+    auto* name_row = identity_text->AddChildView(std::make_unique<views::View>());
+    auto* name_layout = name_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+    name_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+    if (service_->IsQuickShare())
+      name_row->AddChildView(std::make_unique<views::ImageView>(QuickShareAvatar(16)));
+    auto* name = Label(name_row, base::UTF8ToUTF16(state.peer_name)); name->SetMaximumWidth(248);
     if (!code_notice) Label(contents.get(), Text(state.receiving ? IDS_CRFILES_HISTORY_RECEIVE : IDS_CRFILES_HISTORY_SEND));
     if (transfer) {
       filename_ = Label(contents.get(), std::u16string());
@@ -653,22 +664,24 @@ class DeviceButton : public views::Button {
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
     name_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     name_row->SetCanProcessEventsWithinSubtree(false);
+    quick_share_icon_ = name_row->AddChildView(std::make_unique<views::ImageView>());
+    quick_share_icon_->SetImage(QuickShareAvatar(16));
+    quick_share_icon_->SetVisible(false);
     label_ = name_row->AddChildView(std::make_unique<views::Label>()); label_->SetMaximumWidthSingleLine(112);
     trust_icon_ = name_row->AddChildView(std::make_unique<views::ImageView>());
     trust_icon_->SetImage(ui::ImageModel::FromVectorIcon(kAndroidSecurityPrivacySafeFilledIcon,
         gfx::kGoogleGreen600, label_->font_list().GetHeight()));
     trust_icon_->SetVisible(false);
     label_->SetCanProcessEventsWithinSubtree(false); SetIdentity(std::move(avatar), std::move(name));
-    type_label_ = AddChildView(std::make_unique<views::Label>());
-    type_label_->SetMaximumWidthSingleLine(112);
-    type_label_->SetCanProcessEventsWithinSubtree(false); type_label_->SetVisible(false);
   }
   void SetDeviceType(const std::u16string& type) {
-    type_label_->SetText(type); type_label_->SetVisible(!type.empty());
+    quick_share_icon_->SetVisible(true);
     SetAccessibleName(std::u16string(label_->GetText()) + (type.empty() ? std::u16string() : u" · " + type));
   }
   void SetIdentity(ui::ImageModel avatar, std::u16string name) {
-    avatar_ = std::move(avatar); UpdateAvatar();
+    avatar_ = std::move(avatar);
+    image_->SetImageSize(avatar_.IsVectorIcon() ? gfx::Size(54, 54) : gfx::Size(64, 64));
+    UpdateAvatar();
     label_->SetText(name); SetAccessibleName(name); SetDeviceTooltip(std::move(name));
   }
   void SetDeviceTooltip(std::u16string tooltip) {
@@ -712,7 +725,7 @@ class DeviceButton : public views::Button {
     if (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) {
       flags.setStyle(cc::PaintFlags::kFill_Style);
       flags.setColor(GetColorProvider()->GetColor(ui::kColorSysSurface));
-      canvas->DrawCircle(center, image_->width() / 2.0f, flags);
+      if (!avatar_.IsVectorIcon()) canvas->DrawCircle(center, image_->width() / 2.0f, flags);
       const auto icon = gfx::CreateVectorIcon(vector_icons::kCloseIcon, 48,
           GetColorProvider()->GetColor(ui::kColorSysError));
       canvas->DrawImageInt(icon, static_cast<int>(center.x()) - 24, static_cast<int>(center.y()) - 24);
@@ -724,20 +737,23 @@ class DeviceButton : public views::Button {
   void StateChanged(ButtonState old) override {
     views::Button::StateChanged(old);
     UpdateAvatar();
-    image_->SetBackground(!transfer_ && (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) ?
+    image_->SetBackground(!avatar_.IsVectorIcon() && !transfer_ && (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) ?
         views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant, 32) : nullptr);
   }
  private:
   void UpdateAvatar() {
     if (transfer_) image_->SetBackground(nullptr);
+    auto avatar = avatar_;
+    if (avatar.IsVectorIcon() && (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED))
+      avatar = ui::ImageModel::FromVectorIcon(*avatar.GetVectorIcon().vector_icon(), ui::kColorSysPrimary, 54);
     image_->SetImage(transfer_ && (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) ?
-        ui::ImageModel() : avatar_);
+        ui::ImageModel() : avatar);
   }
   std::u16string device_tooltip_;
   std::u16string transfer_tooltip_;
   ui::ImageModel avatar_;
-  raw_ptr<views::ImageView> image_ = nullptr, trust_icon_ = nullptr;
-  raw_ptr<views::Label> label_ = nullptr, type_label_ = nullptr;
+  raw_ptr<views::ImageView> image_ = nullptr, trust_icon_ = nullptr, quick_share_icon_ = nullptr;
+  raw_ptr<views::Label> label_ = nullptr;
   bool transfer_ = false, indeterminate_ = false;
   double progress_ = 0;
   base::RepeatingClosure cancel_;
@@ -958,7 +974,7 @@ class FileShareView : public views::View, public ui::EventObserver {
     peers_ = devices->AddChildView(std::make_unique<views::View>());
     peers_->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 6));
     layout->SetFlexForView(peers_, 1);
-    session_device_ = devices->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareAvatar() : Avatar(0), Text(IDS_CRFILES_TRANSFERRING)));
+    session_device_ = devices->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareDeviceAvatar(0) : Avatar(0), Text(IDS_CRFILES_TRANSFERRING)));
     session_device_->SetVisible(false);
     if (service_->GetSnapshot().busy) {
       if (!paths_.empty()) base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -1150,7 +1166,17 @@ class FileShareView : public views::View, public ui::EventObserver {
   }
   void Cancel(uint64_t session) { service_->CancelSession(session); }
   void Refresh() {
-    const auto state = service_->GetSnapshot();
+    auto state = service_->GetSnapshot();
+    if (service_->IsQuickShare()) {
+      // Discovery ranks routes by freshness, not presentation order. Retain
+      // existing endpoint positions and append new endpoints in discovery order.
+      const auto rank = [&](const auto& peer) {
+        return std::ranges::find(known_peers_, peer.id, &NearbySharing::Peer::id) - known_peers_.begin();
+      };
+      std::ranges::stable_sort(state.peers, [&](const auto& left, const auto& right) {
+        return rank(left) < rank(right);
+      });
+    }
     if (dismiss_compose_) { dismiss_compose_ = false; CloseToast(); }
     if (service_->IsQuickShare() && !state.busy && composing_ &&
         !SelectedPeerAvailable(state)) {
@@ -1206,7 +1232,10 @@ class FileShareView : public views::View, public ui::EventObserver {
     const bool can_send = state.enabled && transport_ready && !state.busy && !discovery_paused && !paths_.empty() &&
         (!service_->IsQuickShare() || selection_ready_);
     manual_->SetEnabled(can_send || (state.busy && active_device_ == manual_));
-    const bool same_devices = std::ranges::equal(known_peers_, state.peers, [](const auto& left, const auto& right) {
+    const bool same_devices = std::ranges::equal(known_peers_, state.peers, [&](const auto& left, const auto& right) {
+      if (service_->IsQuickShare())
+        return left.id == right.id &&
+            (left.ble_only && !left.bluetooth_connectable) == (right.ble_only && !right.bluetooth_connectable);
       return left.id == right.id && left.address == right.address && left.name == right.name &&
           left.avatar == right.avatar && left.device_type == right.device_type && left.bluetooth_address == right.bluetooth_address && left.ble_only == right.ble_only && left.bluetooth_connectable == right.bluetooth_connectable && left.phone.has_value() == right.phone.has_value();
     });
@@ -1219,7 +1248,7 @@ class FileShareView : public views::View, public ui::EventObserver {
           row = peers_->AddChildView(std::make_unique<views::View>());
           row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
         }
-        auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareAvatar() : Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
+        auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareDeviceAvatar(peer.device_type) : Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
         if (service_->IsQuickShare()) button->SetDeviceType(QuickShareDeviceType(peer.device_type));
         button->SetTrusted(peer.trusted);
         if (peer.ble_only && !peer.bluetooth_connectable) {
@@ -1247,10 +1276,26 @@ class FileShareView : public views::View, public ui::EventObserver {
       if (peer_index >= known_peers_.size()) break;
       const auto& displayed = known_peers_[peer_index++];
       const auto latest = std::ranges::find_if(state.peers, [&](const auto& peer) {
-        return peer.id == displayed.id && peer.address == displayed.address &&
-            peer.phone.has_value() == displayed.phone.has_value();
+        return peer.id == displayed.id && (service_->IsQuickShare() ||
+            (peer.address == displayed.address && peer.phone.has_value() == displayed.phone.has_value()));
       });
       auto* button = static_cast<DeviceButton*>(child.get());
+      if (service_->IsQuickShare() && !state.busy && !discovery_paused && !toast_widget_ &&
+          latest != state.peers.end() &&
+          (displayed.name != latest->name || displayed.device_type != latest->device_type ||
+           displayed.address != latest->address || displayed.bluetooth_address != latest->bluetooth_address ||
+           displayed.ble_only != latest->ble_only || displayed.bluetooth_connectable != latest->bluetooth_connectable)) {
+        // Update the existing card and its send route without replacing its view.
+        if (displayed.name != latest->name || displayed.device_type != latest->device_type)
+          button->SetIdentity(QuickShareDeviceAvatar(latest->device_type), base::UTF8ToUTF16(latest->name));
+        if (displayed.name != latest->name || displayed.device_type != latest->device_type)
+          button->SetDeviceType(QuickShareDeviceType(latest->device_type));
+        auto tooltip = base::UTF8ToUTF16(latest->name) + u"\n" + QuickShareDeviceType(latest->device_type);
+        if (!latest->bluetooth_address.empty()) tooltip += u"\n" + base::UTF8ToUTF16(latest->bluetooth_address);
+        if (latest->ble_only && !latest->bluetooth_connectable) tooltip += u"\n" + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT);
+        button->SetDeviceTooltip(std::move(tooltip));
+        button->SetCallback(base::BindRepeating(&FileShareView::SelectPeer, weak_.GetWeakPtr(), base::Unretained(button), *latest));
+      }
       // A composing bubble pins the list, but must not keep lost peers visible.
       // Active transfers own their avatar independently of discovery broadcasts.
       if (service_->IsQuickShare() && !discovery_paused) button->SetVisible(state.busy || latest != state.peers.end());
@@ -1258,6 +1303,9 @@ class FileShareView : public views::View, public ui::EventObserver {
       button->SetTrusted(state.busy && button == active_device_ && !state.code.empty() ? state.peer_trusted :
           latest != state.peers.end() && latest->trusted);
     }
+
+    if (service_->IsQuickShare() && !state.busy && !discovery_paused && !toast_widget_)
+      known_peers_ = state.peers;
 
     const bool session = state.busy || (!composing_ &&
         (!service_->IsQuickShare() || state.session != selection_session_) &&
@@ -1272,7 +1320,7 @@ class FileShareView : public views::View, public ui::EventObserver {
     peers_->SetVisible(!fallback);
     session_device_->SetTrusted(state.peer_trusted);
     if (session) {
-      session_device_->SetIdentity(service_->IsQuickShare() ? QuickShareAvatar() : PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
+      session_device_->SetIdentity(service_->IsQuickShare() ? QuickShareDeviceAvatar(state.peer_device_type) : PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
       if (service_->IsQuickShare()) session_device_->SetDeviceType(QuickShareDeviceType(state.peer_device_type));
     }
     // The direction is retained with completed/canceled/failed sessions.

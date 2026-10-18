@@ -19,6 +19,7 @@
 #include "libcr/linux_desktop_application.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/separator.h"
 
 #include "base/functional/bind.h"
@@ -235,9 +236,15 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
   METADATA_HEADER(FilesFrameView, views::FrameView)
  public:
   explicit FilesFrameView(views::Widget* widget) : widget_(widget) {
-    icon_ = AddChildView(std::make_unique<views::ImageView>(
-        CreateCrFilesIconModel(gfx::Size(20, 20))));
-    icon_->SetCanProcessEventsWithinSubtree(false);
+    icon_ = AddChildView(std::make_unique<views::ImageButton>(
+        base::BindRepeating(&ToggleCrFilesSidebar)));
+    icon_->SetImageModel(views::Button::STATE_NORMAL, CreateCrFilesIconModel(gfx::Size(20, 20)));
+    icon_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
+    icon_->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
+    icon_->SetTooltipText(l10n_util::GetStringUTF16(IDS_CRFILES_TOGGLE_SIDEBAR));
+    icon_->SetAccessibleName(l10n_util::GetStringUTF16(IDS_CRFILES_TOGGLE_SIDEBAR));
+    icon_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+    views::SetHitTestComponent(icon_, HTCLIENT);
     options_button_ = AddChildView(std::make_unique<libcr::TitlebarIconButton>(
         base::BindRepeating(&FilesFrameView::ShowOptionsMenu, weak_factory_.GetWeakPtr()),
         kBrowserToolsTouchOldIcon));
@@ -323,6 +330,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     if (!surface.Contains(point)) return HTNOWHERE;
     if (widget_->IsFullscreen()) return HTCLIENT;
     if (options_menu_overlay_ || options_button_->bounds().Contains(point)) return HTCLIENT;
+    if (icon_->GetVisible() && icon_->bounds().Contains(point)) return HTCLIENT;
     for (auto* button : {minimize_.get(), maximize_.get(), restore_.get(), close_.get()})
       if (button->GetVisible() && button->bounds().Contains(point)) return HTCLIENT;
     if (windows_titlebar_style_ && !widget_->IsMaximized()) {
@@ -370,7 +378,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     icon_->SetVisible(show && windows_titlebar_style_);
     const bool show_caption = show && windows_titlebar_style_;
     separator_->SetVisible(show_caption);
-    icon_->SetBounds(14, 8, 20, 20);
+    icon_->SetBounds(8, 2, 32, 32);
     options_button_->SetBounds(frame_width - (windows_titlebar_style_ ? 161 : 44), 0, 36, kTitlebarHeight);
     separator_->SetBounds(frame_width - 117, 8, 1, 20);
     title_->SetVisible(false);
@@ -523,7 +531,7 @@ void ShowInstallResult(bool success) {
   raw_ptr<libcr::TitlebarIconButton> options_button_ = nullptr;
   raw_ptr<views::View> options_menu_overlay_ = nullptr;
   raw_ptr<views::View> options_menu_view_ = nullptr;
-  raw_ptr<views::ImageView> icon_ = nullptr;
+  raw_ptr<views::ImageButton> icon_ = nullptr;
   raw_ptr<views::Separator> separator_ = nullptr;
 #if BUILDFLAG(IS_LINUX)
   libcr::InstallResultBubbleController install_result_bubble_;

@@ -192,14 +192,29 @@ bool SetQuickSharePreferences(const QuickSharePreferences& p) {
 NavigationStyle GetNavigationStyle() {
   base::AutoLock lock(SettingsLock());
   const int style = Settings().FindInt("navigation_style").value_or(0);
-  return style >= 0 && style <= 2 ? static_cast<NavigationStyle>(style) : NavigationStyle::kMinimal;
+  return style >= 0 && style <= 3 ? static_cast<NavigationStyle>(style) : NavigationStyle::kMinimal;
 }
 bool SetNavigationStyle(NavigationStyle style) {
+  const int value = static_cast<int>(style);
+  if (value < 0 || value > 3) return false;
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().Clone();
+  Settings().Set("navigation_style", value);
+  if (Save()) return true;
+  Settings() = std::move(previous); return false;
+}
+SplitSelectionStyle GetSplitSelectionStyle() {
+  base::AutoLock lock(SettingsLock());
+  const int value = Settings().FindInt("split_selection_style").value_or(0);
+  return value >= 0 && value <= 2 ? static_cast<SplitSelectionStyle>(value) :
+      SplitSelectionStyle::kFlow;
+}
+bool SetSplitSelectionStyle(SplitSelectionStyle style) {
   const int value = static_cast<int>(style);
   if (value < 0 || value > 2) return false;
   base::AutoLock lock(SettingsLock());
   auto previous = Settings().Clone();
-  Settings().Set("navigation_style", value);
+  Settings().Set("split_selection_style", value);
   if (Save()) return true;
   Settings() = std::move(previous); return false;
 }

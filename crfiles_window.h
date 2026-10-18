@@ -15,6 +15,7 @@ void QuitCrFiles();
 std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget* widget);
 void ApplyCrFilesSharingSettings();
 void ApplyCrFilesViewSettings();
+void ToggleCrFilesSidebar();
 void ApplyCrFilesTraySettings();
 bool IsCrFilesSharingBusy();
 bool IsCrFilesQuickShareBusy();

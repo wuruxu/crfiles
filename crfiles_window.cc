@@ -26,6 +26,7 @@
 #include <numeric>
 #include <limits>
 #include "base/callback_list.h"
+#include "base/scoped_observation.h"
 #include "base/logging.h"
 #include <array>
 #include <cmath>
@@ -168,6 +169,8 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/flex_layout.h"
+#include "ui/views/widget/tooltip_manager.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/metrics.h"
 #include "ui/views/widget/widget.h"
@@ -263,28 +266,56 @@ class FolderEdgeFade : public views::View {
 BEGIN_METADATA(FolderEdgeFade)
 END_METADATA
 
-// Paint the outline and fill together so both have square bottom corners.
+// Match the pane surface so the toolbar reads as part of the folder view.
 class FooterBackground : public views::Background {
  public:
-  FooterBackground()
-      : outline_(views::CreateRoundedRectBackground(
-            ui::kColorSysOutline, gfx::RoundedCornersF(12, 12, 0, 0))),
-        fill_(views::CreateRoundedRectBackground(
-            ui::kColorSysBaseContainerElevated,
-            gfx::RoundedCornersF(11, 11, 0, 0), gfx::Insets(1))) {}
-
+  explicit FooterBackground(ui::ColorId surface) : surface_(surface) {}
   void Paint(gfx::Canvas* canvas, views::View* view) const override {
-    outline_->Paint(canvas, view);
-    fill_->Paint(canvas, view);
+    canvas->FillRect(view->GetLocalBounds(), view->GetColorProvider()->GetColor(surface_));
   }
-
-  void OnViewThemeChanged(views::View* view) override {
-    view->SchedulePaint();
-  }
-
+  void OnViewThemeChanged(views::View* view) override { view->SchedulePaint(); }
  private:
-  std::unique_ptr<views::Background> outline_;
-  std::unique_ptr<views::Background> fill_;
+  const ui::ColorId surface_;
+};
+
+class FooterGlowBorder : public views::Border {
+ public:
+  explicit FooterGlowBorder(bool trash) : trash_(trash) {}
+  gfx::Insets GetInsets() const override { return gfx::Insets(1); }
+  gfx::Size GetMinimumSize() const override { return gfx::Size(2, 2); }
+  void Paint(const views::View& view, gfx::Canvas* canvas) override {
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kStroke_Style);
+    flags.setStrokeWidth(1.f);
+    flags.setColor(view.GetColorProvider()->GetColor(
+        trash_ ? ui::kColorSysPrimary : ui::kColorSysOutline));
+    for (int i = 0; i < (trash_ ? 3 : 1); ++i) {
+      const float inset = i + 0.5f;
+      if (view.width() <= 2.f * inset || view.height() <= 2.f * inset) break;
+      if (trash_) flags.setAlphaf(0.18f * (3 - i));
+      const gfx::RectF bounds(inset, inset, view.width() - 2.f * inset,
+                              view.height() - 2.f * inset);
+      if (trash_) {
+        canvas->DrawRoundRect(bounds, 24.f - inset, flags);
+      } else {
+        const float radius = std::min(12.f - inset,
+            std::min(bounds.width() / 2.f, bounds.height()));
+        constexpr float kArcControl = 0.55228475f;
+        const float control = radius * kArcControl;
+        const float left = bounds.x(), right = bounds.right(), top = bounds.y();
+        SkPathBuilder path;
+        path.moveTo(left, view.height()).lineTo(left, top + radius)
+            .cubicTo(left, top + radius - control, left + radius - control, top, left + radius, top)
+            .lineTo(right - radius, top)
+            .cubicTo(right - radius + control, top, right, top + radius - control, right, top + radius)
+            .lineTo(right, view.height());
+        canvas->DrawPath(path.detach(), flags);
+      }
+    }
+  }
+ private:
+  const bool trash_;
 };
 
 constexpr int kFullscreenExitSize = 44;
@@ -314,6 +345,19 @@ constexpr gfx::PathElement kQuickShareAndroidIconPath[] = {
 const gfx::VectorIconRep kQuickShareAndroidIconReps[] = {{kQuickShareAndroidIconPath}};
 const gfx::VectorIcon kQuickShareAndroidIcon = {kQuickShareAndroidIconReps, 1, "quick_share_android"};
 // A zipped document, drawn in the same theme color as other menu icons.
+constexpr gfx::PathElement kBreadcrumbDiskIconPath[] = {
+    gfx::CANVAS_DIMENSIONS, 20,
+    gfx::STROKE, 1.5f,
+    gfx::MOVE_TO, 5, 4, gfx::LINE_TO, 15, 4,
+    gfx::LINE_TO, 18, 11, gfx::LINE_TO, 18, 16,
+    gfx::LINE_TO, 2, 16, gfx::LINE_TO, 2, 11, gfx::CLOSE,
+    gfx::MOVE_TO, 2, 11, gfx::LINE_TO, 18, 11,
+    gfx::MOVE_TO, 5, 13.5f, gfx::LINE_TO, 6, 13.5f,
+    gfx::MOVE_TO, 9, 13.5f, gfx::LINE_TO, 10, 13.5f,
+};
+const gfx::VectorIconRep kBreadcrumbDiskIconReps[] = {{kBreadcrumbDiskIconPath}};
+const gfx::VectorIcon kBreadcrumbDiskIcon(kBreadcrumbDiskIconReps, 1, "crfiles_breadcrumb_disk");
+
 constexpr gfx::PathElement kCompressIconPath[] = {
     gfx::CANVAS_DIMENSIONS, 20,
     gfx::STROKE, 1.5f,
@@ -421,7 +465,7 @@ constexpr std::array kSortMenuLabels = {
 struct FileViewOptions {
   bool icons = true;
   int icon_index = 1;
-  FileSort sort = FileSort::kNameAscending;
+  FileSort sort = FileSort::kModifiedDescending;
   bool show_hidden = false;
   bool size_column = true;
   bool type_column = true;
@@ -1093,6 +1137,60 @@ class SidebarButton : public views::LabelButton {
 };
 BEGIN_METADATA(SidebarButton)
 END_METADATA
+class PropertiesSizeLabel : public views::Label, public views::WidgetObserver {
+  METADATA_HEADER(PropertiesSizeLabel, views::Label)
+ public:
+  explicit PropertiesSizeLabel(std::vector<base::FilePath> paths)
+      : progress_(std::make_shared<PropertiesSizeProgress>()) {
+    SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    SetSelectable(true);
+    SetMultiLine(true);
+    Refresh();
+    timer_.Start(FROM_HERE, base::Milliseconds(200), this, &PropertiesSizeLabel::Refresh);
+    base::ThreadPool::PostTask(FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::USER_VISIBLE, base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
+        base::BindOnce(&CalculatePropertiesSize, std::move(paths), progress_));
+  }
+  ~PropertiesSizeLabel() override { Cancel(); }
+  void AddedToWidget() override {
+    views::Label::AddedToWidget();
+    observation_.Observe(GetWidget());
+  }
+  void RemovedFromWidget() override {
+    Cancel();
+    observation_.Reset();
+    views::Label::RemovedFromWidget();
+  }
+  void OnWidgetClosing(views::Widget*) override { Cancel(); }
+  void OnWidgetDestroying(views::Widget*) override {
+    Cancel();
+    observation_.Reset();
+  }
+ private:
+  void Cancel() {
+    progress_->canceled.store(true, std::memory_order_relaxed);
+    timer_.Stop();
+  }
+  void Refresh() {
+    const bool done = progress_->done.load(std::memory_order_acquire);
+    const bool incomplete = progress_->incomplete.load(std::memory_order_relaxed);
+    auto text = Text(incomplete ? IDS_CRFILES_SIZE_AT_LEAST : IDS_CRFILES_SIZE) + u": " +
+        ui::FormatBytes(base::ByteSize(progress_->bytes.load(std::memory_order_relaxed)));
+    if (!done) text += u" · " + Text(IDS_CRFILES_CALCULATING_SIZE);
+    if (GetText() != text) SetText(text);
+    if (incomplete && !incomplete_shown_) {
+      SetTooltipText(Text(IDS_CRFILES_SIZE_INCOMPLETE_DETAIL));
+      incomplete_shown_ = true;
+    }
+    if (done) timer_.Stop();
+  }
+  std::shared_ptr<PropertiesSizeProgress> progress_;
+  bool incomplete_shown_ = false;
+  base::RepeatingTimer timer_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+BEGIN_METADATA(PropertiesSizeLabel)
+END_METADATA
 void ShowFileProperties(views::Widget* parent,
                         const std::vector<base::FilePath>& paths,
                         const std::vector<Entry>& entries,
@@ -1121,15 +1219,13 @@ void ShowFileProperties(views::Widget* parent,
       add(Text(IDS_CRFILES_PERMISSIONS) + u": " + PermissionsText(entry->permissions));
     }
   }
-  auto* size_label = contents->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_SIZE) + u": " +
+  if (has_directory && calculate_directory_size) {
+    contents->AddChildView(std::make_unique<PropertiesSizeLabel>(paths));
+  } else {
+    auto* size_label = contents->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_SIZE) + u": " +
       ((has_directory || entries.empty()) ? std::u16string(u"—") : ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(bytes))))));
-  size_label->SetHorizontalAlignment(gfx::ALIGN_LEFT); size_label->SetSelectable(true);
-  if (has_directory && calculate_directory_size) base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&FileSelectionSize, paths),
-      base::BindOnce([](std::unique_ptr<views::ViewTracker> tracker, std::optional<uint64_t> total) {
-        if (tracker->view() && total) static_cast<views::Label*>(tracker->view())->SetText(
-            Text(IDS_CRFILES_SIZE) + u": " + ui::FormatBytes(base::ByteSize(*total)));
-      }, std::make_unique<views::ViewTracker>(size_label)));
+    size_label->SetHorizontalAlignment(gfx::ALIGN_LEFT); size_label->SetSelectable(true);
+  }
   dialog->SetContentsView(std::move(contents));
   ShowCrFilesDialog(std::move(dialog), parent);
 }
@@ -2076,22 +2172,46 @@ class NavigationScrollView : public views::ScrollView {
 };
 BEGIN_METADATA(NavigationScrollView)
 END_METADATA
+class BreadcrumbDivider : public views::View {
+  METADATA_HEADER(BreadcrumbDivider, views::View)
+ public:
+  BreadcrumbDivider() {
+    SetPreferredSize(gfx::Size(8, 16));
+    SetCanProcessEventsWithinSubtree(false);
+  }
+  void OnPaint(gfx::Canvas* canvas) override {
+    const bool dark = GetWidget()->GetColorMode() == ui::ColorProviderKey::ColorMode::kDark;
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    // Adjacent dark and light faces make a recessed separator.
+    flags.setColor(SkColorSetA(SK_ColorBLACK, dark ? 100 : 64));
+    canvas->DrawRoundRect(gfx::RectF(3, 0, 1, height()), 0.5f, flags);
+    flags.setColor(SkColorSetA(SK_ColorWHITE, dark ? 38 : 190));
+    canvas->DrawRoundRect(gfx::RectF(4, 0, 1, height()), 0.5f, flags);
+  }
+};
+BEGIN_METADATA(BreadcrumbDivider)
+END_METADATA
 class BreadcrumbButton : public views::LabelButton {
   METADATA_HEADER(BreadcrumbButton, views::LabelButton)
  public:
-  BreadcrumbButton(base::RepeatingClosure callback, std::u16string title, bool current, bool first, NavigationStyle style)
+  BreadcrumbButton(base::RepeatingClosure callback, std::u16string title, bool current, bool first, NavigationStyle style, bool animate_current)
       : views::LabelButton(std::move(callback), title), current_(current), first_(first), style_(style) {
     // Breadcrumbs are painted into a transparent layer for path transitions.
     label()->SetSubpixelRenderingEnabled(false);
     AnimateButton(this);
     views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
     SetAnimationDuration(base::Milliseconds(120));
-    SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(4, style == NavigationStyle::kRaised ? 13 : 8)));
-    SetEnabledTextColors(style == NavigationStyle::kRaised ?
+    SetBorder(views::CreateEmptyBorder(style == NavigationStyle::kRaised ?
+        gfx::Insets::TLBR(4, 15, 4, 13) : gfx::Insets::VH(4, 8)));
+    SetEnabledTextColors((style == NavigationStyle::kRaised || style == NavigationStyle::kConnected) ?
         (current ? ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface) :
         (current ? ui::kColorSysOnSurface : ui::kColorSysOnSurfaceSecondary));
     underline_animation_.SetSlideDuration(base::Milliseconds(140));
-    if (style == NavigationStyle::kUnderline && current) underline_animation_.Show();
+    if (style == NavigationStyle::kUnderline && current) {
+      if (animate_current) underline_animation_.Show();
+      else underline_animation_.Reset(1.0);
+    }
   }
   gfx::Size CalculatePreferredSize(const views::SizeBounds& available) const override {
     auto size = views::LabelButton::CalculatePreferredSize(available);
@@ -2102,6 +2222,34 @@ class BreadcrumbButton : public views::LabelButton {
   void OnPaintBackground(gfx::Canvas* canvas) override {
     const float w = width(), h = height();
     if (w < 12 || h < 12) return;
+    if (style_ == NavigationStyle::kConnected) {
+      cc::PaintFlags flags;
+      flags.setAntiAlias(true);
+      const gfx::RectF bounds(0, 0, w, h - 3);
+      if (current_) {
+        flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimaryContainer));
+        canvas->DrawRoundRect(bounds, 6.f, flags);
+      } else {
+        const bool dark = GetWidget()->GetColorMode() == ui::ColorProviderKey::ColorMode::kDark;
+        const SkPoint points[] = {{3, h - 3}, {w - 3, h - 3}};
+        const SkScalar positions[] = {0, 0.18f, 0.82f, 1};
+        for (int row = 0; row < 3; ++row) {
+          const float strength = row == 0 ? 1.f : (row == 1 ? 0.5f : 0.2f);
+          const float alpha = (dark ? 0.12f : 0.18f) * strength;
+          const SkColor4f colors[] = {{0, 0, 0, 0}, {0, 0, 0, alpha},
+                                      {0, 0, 0, alpha}, {0, 0, 0, 0}};
+          flags.setShader(cc::PaintShader::MakeLinearGradient(
+              points, colors, positions, 4, SkTileMode::kClamp));
+          canvas->DrawRect(gfx::RectF(3, h - 3 + row, w - 6, 1), flags);
+        }
+        flags.setShader(nullptr);
+      }
+      flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
+      flags.setAlphaf(GetState() == STATE_PRESSED ? 0.12f :
+          0.06f * static_cast<float>(hover_animation().GetCurrentValue()));
+      canvas->DrawRoundRect(bounds, 6.f, flags);
+      return;
+    }
     if (style_ != NavigationStyle::kRaised) {
       cc::PaintFlags flags; flags.setAntiAlias(true);
       const auto bounds = GetLocalBounds();
@@ -2119,34 +2267,62 @@ class BreadcrumbButton : public views::LabelButton {
       canvas->DrawRoundRect(bounds, 7, flags);
       return;
     }
-    const float top = GetState() == STATE_PRESSED ? 3 : 1;
+    // Rounded chevrons keep the path hierarchy without sharp bevels. Geometry
+    // stays fixed while pressing; only the surface color changes.
+    const float top = 2, bottom = h - 3, middle = (top + bottom) / 2;
     SkPathBuilder builder;
-    builder.moveTo(1, top).lineTo(w - 11, top).lineTo(w - 1, h / 2)
-        .lineTo(w - 11, h - 4).lineTo(1, h - 4);
-    if (!first_) builder.lineTo(10, h / 2);
+    builder.moveTo(6, top).lineTo(w - 12, top)
+        .quadTo(w - 10, top, w - 9, top + 2)
+        .lineTo(w - 3, middle - 2)
+        .quadTo(w - 1, middle, w - 3, middle + 2)
+        .lineTo(w - 9, bottom - 2)
+        .quadTo(w - 10, bottom, w - 12, bottom)
+        .lineTo(6, bottom);
+    if (first_) {
+      builder.quadTo(2, bottom, 2, bottom - 4).lineTo(2, top + 4)
+          .quadTo(2, top, 6, top);
+    } else {
+      builder.quadTo(3, bottom, 5, bottom - 3)
+          .lineTo(10, middle + 2).quadTo(12, middle, 10, middle - 2)
+          .lineTo(5, top + 3).quadTo(3, top, 6, top);
+    }
     builder.close();
     const auto path = builder.detach();
+    const bool dark = GetWidget()->GetColorMode() == ui::ColorProviderKey::ColorMode::kDark;
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
-    flags.setColor(SkColorSetA(SK_ColorBLACK, 36));
-    canvas->Save();
-    canvas->Translate(gfx::Vector2d(0, 2));
-    canvas->DrawPath(path, flags);
-    canvas->Restore();
+    if (current_) {
+      flags.setColor(SkColorSetA(SK_ColorBLACK, dark ? 24 : 20));
+      canvas->Save();
+      canvas->Translate(gfx::Vector2d(0, 1));
+      canvas->DrawPath(path, flags);
+      canvas->Restore();
+    } else {
+      // Fade the two-pixel bottom shadow vertically and at both ends.
+      const float shadow_left = 6, shadow_right = w - 12;
+      if (shadow_right > shadow_left) {
+        const SkPoint points[] = {{shadow_left, bottom}, {shadow_right, bottom}};
+        const SkScalar positions[] = {0, 0.15f, 0.85f, 1};
+        for (int row = 0; row < 2; ++row) {
+          const float alpha = (dark ? (row == 0 ? 18.f : 6.f) :
+                                     (row == 0 ? 28.f : 10.f)) / 255.f;
+          const SkColor4f colors[] = {{0, 0, 0, 0}, {0, 0, 0, alpha},
+                                      {0, 0, 0, alpha}, {0, 0, 0, 0}};
+          flags.setShader(cc::PaintShader::MakeLinearGradient(
+              points, colors, positions, 4, SkTileMode::kClamp));
+          canvas->DrawRect(gfx::RectF(shadow_left, bottom + row,
+                                    shadow_right - shadow_left, 1), flags);
+        }
+        flags.setShader(nullptr);
+      }
+    }
     flags.setColor(GetColorProvider()->GetColor(current_ ?
-        ui::kColorSysPrimaryContainer : ui::kColorSysSurface));
+        ui::kColorSysPrimaryContainer : ui::kColorSysHeaderContainerInactive));
     canvas->DrawPath(path, flags);
     flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
-    flags.setAlphaf(GetState() == STATE_PRESSED ? 0.18f :
-        0.09f * static_cast<float>(hover_animation().GetCurrentValue()));
+    flags.setAlphaf(GetState() == STATE_PRESSED ? 0.12f :
+        0.06f * static_cast<float>(hover_animation().GetCurrentValue()));
     canvas->DrawPath(path, flags);
-    flags.setStyle(cc::PaintFlags::kStroke_Style);
-    flags.setStrokeWidth(1);
-    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysDivider));
-    canvas->DrawPath(path, flags);
-    // A bright upper bevel and the lower shadow lift each joined segment.
-    canvas->DrawLine(gfx::PointF(3, top + 1), gfx::PointF(w - 12, top + 1),
-                     SkColorSetA(SK_ColorWHITE, 90));
   }
  private:
   bool current_;
@@ -2159,6 +2335,14 @@ END_METADATA
 class FileRow : public views::Button {
   METADATA_HEADER(FileRow, views::Button)
  public:
+  void SetPointerMotionCallback(base::RepeatingClosure callback) {
+    pointer_motion_ = std::move(callback);
+  }
+  void OnMouseMoved(const ui::MouseEvent& event) override {
+    views::Button::OnMouseMoved(event);
+    if (!event.IsSynthesized() && pointer_motion_) pointer_motion_.Run();
+  }
+
   explicit FileRow(bool icons) : views::Button(PressedCallback()), icons_(icons) {
     AnimateButton(this);
     SetNotifyEnterExitOnChild(true);
@@ -2168,6 +2352,63 @@ class FileRow : public views::Button {
     if (icons) views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(), 16);
     else views::InstallRectHighlightPathGenerator(this);
     views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
+  }
+  bool ReflowAnimating() const { return reflow_timer_.IsRunning(); }
+  bool CanAnimateReflow() const {
+    return GetState() != STATE_PRESSED && (!layer() || ReflowAnimating() ||
+        (layer()->transform().IsIdentity() && layer()->opacity() == 1.f));
+  }
+  void StopReflowAnimation() {
+    if (!ReflowAnimating()) return;
+    reflow_timer_.Stop();
+    if (layer()) {
+      layer()->GetAnimator()->StopAnimating();
+      layer()->SetTransform(gfx::Transform());
+      layer()->SetOpacity(1.f);
+      if (reflow_owns_layer_) DestroyLayer();
+    }
+    reflow_owns_layer_ = false;
+  }
+  void AnimateReflow(const gfx::Vector2dF& offset, float opacity) {
+    if (!CanAnimateReflow()) return;
+    if (offset.IsZero() && opacity == 1.f) {
+      StopReflowAnimation();
+      return;
+    }
+    const bool continuing = ReflowAnimating();
+    const auto now = base::TimeTicks::Now();
+    if (!continuing) reflow_fade_end_ = now + base::Milliseconds(110);
+    reflow_timer_.Stop();
+    // Keep the existing layer when retargeting. Finishing the old animation
+    // would snap to its destination and destroy the layer before recreating it.
+    if (!layer()) {
+      reflow_owns_layer_ = true;
+      SetPaintToLayer();
+    }
+    layer()->SetFillsBoundsOpaquely(false);
+    layer()->GetAnimator()->AbortAllAnimations();
+    gfx::Transform transform;
+    transform.Translate(offset.x(), offset.y());
+    layer()->SetTransform(transform);
+    const auto fade_duration = std::max(base::TimeDelta(), reflow_fade_end_ - now);
+    layer()->SetOpacity(fade_duration.is_zero() ? 1.f : opacity);
+    {
+      ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
+      settings.SetTransitionDuration(base::Milliseconds(160));
+      settings.SetTweenType(gfx::Tween::EASE_OUT);
+      settings.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
+      layer()->SetTransform(gfx::Transform());
+    }
+    {
+      ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
+      settings.SetTransitionDuration(fade_duration);
+      settings.SetTweenType(gfx::Tween::EASE_OUT);
+      settings.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
+      layer()->SetOpacity(1.f);
+    }
+    const auto duration = offset.IsZero() ? fade_duration : base::Milliseconds(160);
+    reflow_timer_.Start(FROM_HERE, duration + base::Milliseconds(20),
+                        this, &FileRow::FinishReflowAnimation);
   }
   void SetTooltipCallback(base::RepeatingCallback<std::u16string()> callback) {
     tooltip_callback_ = std::move(callback);
@@ -2214,6 +2455,20 @@ class FileRow : public views::Button {
     }
   }
  private:
+  base::RepeatingClosure pointer_motion_;
+  void FinishReflowAnimation() {
+    // The one-shot timer is no longer running when its callback is entered.
+    if (layer()) {
+      layer()->GetAnimator()->StopAnimating();
+      layer()->SetTransform(gfx::Transform());
+      layer()->SetOpacity(1.f);
+      if (reflow_owns_layer_) DestroyLayer();
+    }
+    reflow_owns_layer_ = false;
+  }
+  base::OneShotTimer reflow_timer_;
+  base::TimeTicks reflow_fade_end_;
+  bool reflow_owns_layer_ = false;
   base::RepeatingCallback<std::u16string()> tooltip_callback_;
   base::RepeatingClosure drag_done_;
   size_t position_ = std::numeric_limits<size_t>::max(), count_ = 0;
@@ -2238,6 +2493,48 @@ class SidebarViewport : public views::View {
 };
 BEGIN_METADATA(SidebarViewport)
 END_METADATA
+// Enlarge input targeting without changing the visible divider or pane sizes.
+class ResizeGripTargeter : public views::ViewTargeterDelegate {
+ public:
+  ResizeGripTargeter(views::View* grip, bool vertical, base::RepeatingCallback<bool()> dragging)
+      : grip_(grip), vertical_(vertical), dragging_(std::move(dragging)) {}
+  views::View* TargetForRect(views::View* root, const gfx::Rect& rect) override {
+    auto* grip = grip_.view();
+    if (grip && root == grip->parent() && grip->GetVisible() && grip->GetEnabled()) {
+      auto bounds = grip->GetMirroredBounds();
+      bounds.Inset(vertical_ ? gfx::Insets::VH(-4, 0) : gfx::Insets::VH(0, -4));
+      if (dragging_.Run() || bounds.Intersects(rect)) return grip;
+    }
+    return views::ViewTargeterDelegate::TargetForRect(root, rect);
+  }
+ private:
+  views::ViewTracker grip_;
+  bool vertical_;
+  base::RepeatingCallback<bool()> dragging_;
+};
+void RestoreCursorAfterResize(views::View* grip) {
+  auto* widget = grip->GetWidget();
+  if (!widget || widget->IsClosed()) return;
+  auto* root = widget->GetRootView();
+  auto point = display::Screen::Get()->GetCursorScreenPoint();
+  views::View::ConvertPointFromScreen(root, &point);
+  ui::Cursor cursor(ui::mojom::CursorType::kPointer);
+  if (root->HitTestPoint(point)) {
+    if (auto* target = root->GetEventHandlerForPoint(point)) {
+      auto local = point;
+      views::View::ConvertPointToTarget(root, target, &local);
+      ui::MouseEvent event(ui::EventType::kMouseMoved, local, point, base::TimeTicks::Now(), 0, 0);
+      cursor = target->GetCursor(event);
+      if (cursor.type() == ui::mojom::CursorType::kNull)
+        cursor = ui::Cursor(ui::mojom::CursorType::kPointer);
+    }
+  }
+  widget->SetCursor(cursor);
+}
+int SnapResizePosition(int position, int target, bool& snapped) {
+  snapped = std::abs(position - target) <= (snapped ? 16 : 8);
+  return snapped ? target : position;
+}
 constexpr int kPaneOuterInset = 4;
 class SidebarResizeGrip : public views::ResizeArea {
   METADATA_HEADER(SidebarResizeGrip, views::ResizeArea)
@@ -2245,6 +2542,7 @@ class SidebarResizeGrip : public views::ResizeArea {
   SidebarResizeGrip(views::ResizeAreaDelegate* delegate, base::RepeatingClosure restore)
       : views::ResizeArea(delegate), delegate_(delegate), restore_(std::move(restore)) {}
   void SetCollapsed(bool collapsed) { collapsed_ = collapsed; SchedulePaint(); }
+  bool IsDragging() const { return pressed_; }
   void OnMouseEntered(const ui::MouseEvent&) override { hovered_ = true; SchedulePaint(); }
   void OnMouseExited(const ui::MouseEvent&) override { hovered_ = false; SchedulePaint(); }
   bool OnMousePressed(const ui::MouseEvent& event) override {
@@ -2259,6 +2557,7 @@ class SidebarResizeGrip : public views::ResizeArea {
   bool OnMouseDragged(const ui::MouseEvent& event) override {
     if (!pressed_ || !event.IsLeftMouseButton()) return false;
     UpdateAmount(event); delegate_->OnResize(amount_, false);
+    if (GetWidget()) GetWidget()->SetCursor(GetCursor(event));
     return true;
   }
   void OnMouseReleased(const ui::MouseEvent& event) override {
@@ -2281,6 +2580,7 @@ class SidebarResizeGrip : public views::ResizeArea {
   void Finish() {
     pressed_ = false;
     delegate_->OnResize(amount_, true); SchedulePaint();
+    RestoreCursorAfterResize(this);
   }
   raw_ptr<views::ResizeAreaDelegate> delegate_;
   base::RepeatingClosure restore_;
@@ -2293,6 +2593,7 @@ class ColumnResizeGrip : public views::ResizeArea {
   METADATA_HEADER(ColumnResizeGrip, views::ResizeArea)
  public:
   explicit ColumnResizeGrip(views::ResizeAreaDelegate* delegate) : views::ResizeArea(delegate) {}
+  bool IsDragging() const { return pressed_; }
   void OnMouseEntered(const ui::MouseEvent&) override { hovered_ = true; SchedulePaint(); }
   void OnMouseExited(const ui::MouseEvent&) override { hovered_ = false; SchedulePaint(); }
   bool OnMousePressed(const ui::MouseEvent& event) override {
@@ -2300,15 +2601,22 @@ class ColumnResizeGrip : public views::ResizeArea {
     SchedulePaint();
     return pressed_;
   }
+  bool OnMouseDragged(const ui::MouseEvent& event) override {
+    const bool handled = views::ResizeArea::OnMouseDragged(event);
+    if (handled && GetWidget()) GetWidget()->SetCursor(GetCursor(event));
+    return handled;
+  }
   void OnMouseReleased(const ui::MouseEvent& event) override {
     pressed_ = false;
     views::ResizeArea::OnMouseReleased(event);
     SchedulePaint();
+    RestoreCursorAfterResize(this);
   }
   void OnMouseCaptureLost() override {
     pressed_ = false;
     views::ResizeArea::OnMouseCaptureLost();
     SchedulePaint();
+    RestoreCursorAfterResize(this);
   }
   void OnPaintBackground(gfx::Canvas* canvas) override {
     // Keep an eight-DIP drag target, but match the thin sidebar divider.
@@ -2416,6 +2724,14 @@ constexpr int kListHeaderHeight = 28;
 class FileLayout : public views::View {
   METADATA_HEADER(FileLayout, views::View)
  public:
+  void SetPointerMotionCallback(base::RepeatingClosure callback) {
+    pointer_motion_ = std::move(callback);
+  }
+  void OnMouseMoved(const ui::MouseEvent& event) override {
+    views::View::OnMouseMoved(event);
+    if (!event.IsSynthesized() && pointer_motion_) pointer_motion_.Run();
+  }
+
   explicit FileLayout(bool icons, int icon_size, int min_width)
       : drag_handler_(this), icons_(icons), row_height_(icons ? std::max(96, icon_size + 51) + 12 : std::max(36, icon_size + 12)), min_width_(min_width) {
     AddPreTargetHandler(&drag_handler_);
@@ -2423,6 +2739,20 @@ class FileLayout : public views::View {
     SetEventTargeter(std::make_unique<views::ViewTargeter>(std::make_unique<FileEventTargeter>(this)));
   }
   ~FileLayout() override { RemovePreTargetHandler(&drag_handler_); }
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override {
+    views::View::VisibilityChanged(starting_from, is_visible);
+    // Page restoration can pass through temporary widths (for example while
+    // restoring the sidebar). Those are not user-requested column changes.
+    restoring_columns_ = true;
+    column_restore_timer_.Stop();
+    column_transition_pending_ = false;
+    column_snapshots_.clear();
+    column_fade_deadline_ = base::TimeTicks();
+    animation_viewport_ = gfx::Rect();
+    last_layout_columns_.reset();
+    for (const auto& [index, view] : slots_)
+      if (auto* row = views::AsViewClass<FileRow>(view.get())) row->StopReflowAnimation();
+  }
   void SetSelectionCallback(base::RepeatingCallback<void(gfx::Rect, bool, bool, bool)> callback) {
     selection_ = std::move(callback);
     marquee_ = AddChildView(std::make_unique<views::View>());
@@ -2441,8 +2771,9 @@ class FileLayout : public views::View {
       return this;
     }
     if (auto* row = FileAtPoint(point)) {
-      const auto bounds = row->GetMirroredBounds();
-      return row->GetTooltipHandlerForPoint(gfx::Point(point.x() - bounds.x(), point.y() - bounds.y()));
+      auto local = point;
+      views::View::ConvertPointToTarget(this, row, &local);
+      return row->GetTooltipHandlerForPoint(local);
     }
     return this;
   }
@@ -2450,11 +2781,31 @@ class FileLayout : public views::View {
   bool OnMouseDragged(const ui::MouseEvent&) override { return true; }
   void OnMouseCaptureLost() override { FinishDrag(); }
   void SetItemCount(size_t count) {
+    for (const auto& [index, view] : slots_)
+      if (auto* row = views::AsViewClass<FileRow>(view.get())) row->StopReflowAnimation();
+    column_snapshots_.clear();
+    column_transition_pending_ = false;
+    last_layout_columns_.reset();
+    column_fade_deadline_ = base::TimeTicks();
     item_count_ = count; slots_.clear(); PreferredSizeChanged(); InvalidateLayout();
   }
   void SetHeader(views::View* header) { header_ = header; }
   void SetViewportCallback(base::RepeatingClosure callback) { viewport_changed_ = std::move(callback); }
-  int Columns() const { return icons_ ? std::max(1, width() / row_height_) : 1; }
+  void SetResizing(bool resizing) {
+    resize_columns_ = resizing ? std::make_optional(Columns()) : std::nullopt;
+    PreferredSizeChanged();
+    InvalidateLayout();
+  }
+  int ColumnsForWidth(int available) const {
+    if (!icons_) return 1;
+    const int natural = std::max(1, available / row_height_);
+    if (!resize_columns_) return natural;
+    // Require 16 extra DIPs before adding a column; removing still happens
+    // as soon as the current columns no longer fit.
+    const int retained = std::min(*resize_columns_, natural);
+    return std::max(retained, std::max(1, (available - 16) / row_height_));
+  }
+  int Columns() const { return ColumnsForWidth(width()); }
   int RowHeight() const { return row_height_; }
   bool BoundaryRowReached(double offset, int viewport_height, bool bottom) const {
     if (!item_count_) return false;
@@ -2482,6 +2833,66 @@ class FileLayout : public views::View {
     const size_t first = static_cast<size_t>(std::max(0, rect.y() - header) / row_height_) * Columns();
     const size_t last = (static_cast<size_t>(std::max(0, rect.bottom() - 1 - header) / row_height_) + 1) * Columns();
     return {std::min(first, item_count_), std::min(last, item_count_)};
+  }
+  void CaptureColumnTransition(int columns) {
+    const bool changed = last_layout_columns_ && *last_layout_columns_ != columns;
+    last_layout_columns_ = columns;
+    if (!IsDrawn()) return;
+    if (restoring_columns_) {
+      // Resume only after the restore layout has been quiet for a short time.
+      column_restore_timer_.Start(FROM_HERE, base::Milliseconds(80), this,
+                                  &FileLayout::FinishColumnRestore);
+      return;
+    }
+    if (!icons_ || !GetFileViewPreferences().animate_folders || animation_viewport_.IsEmpty()) return;
+    const bool moving = std::ranges::any_of(slots_, [&](const auto& slot) {
+      const auto* row = views::AsViewClass<FileRow>(slot.second.get());
+      return row && row->ReflowAnimating() && row->bounds() != ItemBounds(slot.first);
+    });
+    if ((!changed && !moving) || column_transition_pending_) return;
+    column_transition_pending_ = true;
+    column_snapshots_.clear();
+    for (const auto& [index, view] : slots_) {
+      auto* row = views::AsViewClass<FileRow>(view.get());
+      if (!row || !row->CanAnimateReflow()) continue;
+      gfx::RectF displayed(row->GetMirroredBounds());
+      if (row->layer()) displayed.Offset(row->layer()->transform().To2dTranslation());
+      if (!displayed.Intersects(gfx::RectF(animation_viewport_))) continue;
+      column_snapshots_.emplace(index, ColumnSnapshot{
+          row->GetWeakPtr(), gfx::PointF(displayed.x() - animation_viewport_.x(),
+                                       displayed.y() - animation_viewport_.y()),
+          row->layer() ? row->layer()->opacity() : 1.f});
+    }
+  }
+  void CommitColumnTransition(const gfx::Rect& viewport) {
+    animation_viewport_ = viewport;
+    if (!IsDrawn() || restoring_columns_) return;
+    if (!column_transition_pending_) return;
+    column_transition_pending_ = false;
+    column_fade_deadline_ = base::TimeTicks::Now() + base::Milliseconds(180);
+    for (const auto& [index, view] : slots_) {
+      auto* row = views::AsViewClass<FileRow>(view.get());
+      if (!row) continue;
+      if (!viewport.Intersects(row->bounds())) {
+        row->StopReflowAnimation();
+        continue;
+      }
+      const auto old = column_snapshots_.find(index);
+      if (old == column_snapshots_.end() || old->second.view.get() != row) {
+        row->AnimateReflow(gfx::Vector2dF(), 0.f);
+      } else {
+        const auto target = row->GetMirroredBounds();
+        row->AnimateReflow(gfx::Vector2dF(
+            old->second.origin.x() - (target.x() - viewport.x()),
+            old->second.origin.y() - (target.y() - viewport.y())), old->second.opacity);
+      }
+    }
+    column_snapshots_.clear();
+  }
+  void AnimateNewColumnItem(FileRow* row) {
+    if (!restoring_columns_ && IsDrawn() && base::TimeTicks::Now() < column_fade_deadline_ &&
+        animation_viewport_.Intersects(row->bounds()))
+      row->AnimateReflow(gfx::Vector2dF(), 0.f);
   }
   void ResetItemPositions() { slots_.clear(); }
   void PlaceItem(size_t index, views::View* view) {
@@ -2568,6 +2979,7 @@ class FileLayout : public views::View {
     return row;
   }
   void RecycleRow(FileRow* row) {
+    row->StopReflowAnimation();
     if (recycled_rows_.size() >= 32) { RemoveChildViewT(row); return; }
     row->SetVisible(false);
     recycled_rows_.push_back(row);
@@ -2588,7 +3000,7 @@ class FileLayout : public views::View {
     int w = available.width().is_bounded() ? available.width().value() : 760;
     if (parent() && parent()->width() > 0) w = std::min(w, parent()->width());
     w = std::max(min_width_, w);
-    const int columns = icons_ ? std::max(1, w / row_height_) : 1;
+    const int columns = ColumnsForWidth(w);
     // Geometry describes the entire model, independently of instantiated views.
     const size_t height = ((item_count_ + columns - 1) / columns) * row_height_ + (icons_ ? 0 : kListHeaderHeight) + bottom_padding_;
     return gfx::Size(w, static_cast<int>(std::min<size_t>(height, std::numeric_limits<int>::max() - row_height_ - 56)));
@@ -2599,11 +3011,30 @@ class FileLayout : public views::View {
     if (viewport_changed_) viewport_changed_.Run();
   }
  private:
-  // Shared by tooltip and point-event targeting. File rows have fixed geometry
-  // and no interactive descendants; their outer button owns all input.
+  base::RepeatingClosure pointer_motion_;
+  void FinishColumnRestore() {
+    if (!IsDrawn()) return;
+    last_layout_columns_ = Columns();
+    restoring_columns_ = false;
+  }
+  bool HasColumnAnimation() const {
+    return base::TimeTicks::Now() < column_fade_deadline_;
+  }
+  // Use the slot index normally, and transformed bounds during a short reflow.
+  // The outer file button continues to own input while its layer is moving.
   views::View* FileAtPoint(const gfx::Point& point) const {
     const int header = icons_ ? 0 : kListHeaderHeight;
     if (!GetLocalBounds().Contains(point) || point.y() < header || width() <= 0) return nullptr;
+    if (HasColumnAnimation()) {
+      for (auto slot = slots_.rbegin(); slot != slots_.rend(); ++slot) {
+        auto* row = slot->second.get();
+        if (!row->GetVisible() || !row->GetCanProcessEventsWithinSubtree()) continue;
+        auto local = point;
+        views::View::ConvertPointToTarget(this, row, &local);
+        if (row->HitTestPoint(local)) return row;
+      }
+      return nullptr;
+    }
     const int columns = Columns();
     int column = 0;
     if (icons_) {
@@ -2673,22 +3104,25 @@ class FileLayout : public views::View {
         first_column = std::clamp(x / (edge + 12), 0, columns - 1);
         last_column = std::clamp((x + clipped.width() - 1) / (edge + 12), 0, columns - 1);
       }
-      const auto begin = owner_->slots_.lower_bound(first);
-      auto end = owner_->slots_.lower_bound(last);
+      const bool animated = owner_->HasColumnAnimation();
+      const auto begin = animated ? owner_->slots_.begin() : owner_->slots_.lower_bound(first);
+      auto end = animated ? owner_->slots_.end() : owner_->slots_.lower_bound(last);
       // Active child order follows the index; reverse it to retain Z-order
       // tie breaking. Hidden pooled rows and the marquee are not candidates.
       while (end != begin) {
         --end;
         const int column = static_cast<int>(end->first % columns);
-        if (column < first_column || column > last_column) continue;
+        if (!animated && (column < first_column || column > last_column)) continue;
         auto* row = end->second.get();
         if (!row->GetVisible() || !row->GetCanProcessEventsWithinSubtree()) continue;
-        const auto bounds = row->GetMirroredBounds();
+        gfx::RectF bounds_f(row->GetLocalBounds());
+        views::View::ConvertRectToTarget(row, owner_, &bounds_f);
+        const auto bounds = gfx::ToEnclosingRect(bounds_f);
         if (!bounds.Intersects(rect)) continue;
-        auto local = rect;
-        local.Offset(-bounds.x(), -bounds.y());
+        gfx::RectF local_f(rect);
+        views::View::ConvertRectToTarget(owner_, row, &local_f);
+        const auto local = gfx::ToEnclosingRect(local_f);
         if (!row->HitTestRect(local)) continue;
-        // File rows have no interactive descendants or local transforms.
         consider(row, bounds);
         if (!area_target && !point_target && row->HitTestPoint(local.CenterPoint())) point_target = row;
       }
@@ -2717,6 +3151,8 @@ class FileLayout : public views::View {
    public:
     void Layout(views::View* host) override {
       auto* files = static_cast<FileLayout*>(host);
+      files->CaptureColumnTransition(files->Columns());
+      if (files->resize_columns_) files->resize_columns_ = files->Columns();
       if (files->header_) files->header_->SetBounds(0, 0, files->width(), kListHeaderHeight);
       for (const auto& [index, row] : files->slots_) {
         const auto bounds = files->ItemBounds(index);
@@ -2787,6 +3223,19 @@ class FileLayout : public views::View {
   int row_height_;
   int min_width_;
   int bottom_padding_ = 56;
+  std::optional<int> resize_columns_;
+  struct ColumnSnapshot {
+    base::WeakPtr<views::View> view;
+    gfx::PointF origin;
+    float opacity;
+  };
+  std::optional<int> last_layout_columns_;
+  bool restoring_columns_ = false;
+  base::OneShotTimer column_restore_timer_;
+  gfx::Rect animation_viewport_;
+  bool column_transition_pending_ = false;
+  std::map<size_t, ColumnSnapshot> column_snapshots_;
+  base::TimeTicks column_fade_deadline_;
 };
 BEGIN_METADATA(FileLayout)
 END_METADATA
@@ -3041,11 +3490,11 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
           ui::kColorSysStateHeaderHover : ui::kColorSysStateHeaderHoverInactive));
       hover.setAlphaf(hover.getAlphaf() * (GetState() == STATE_PRESSED ? 1.f :
           static_cast<float>(hover_animation().GetCurrentValue())));
-      canvas->DrawRoundRect(gfx::Rect(8, 4, std::max(0, width() - 16), height() - 8), 8, hover);
+      canvas->DrawRoundRect(gfx::Rect(6, 3, std::max(0, width() - 12), height() - 6), 8, hover);
       if (HasFocus()) {
         hover.setStyle(cc::PaintFlags::kStroke_Style); hover.setStrokeWidth(2);
         hover.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
-        canvas->DrawRoundRect(gfx::Rect(8, 4, std::max(0, width() - 16), height() - 8), 8, hover);
+        canvas->DrawRoundRect(gfx::Rect(6, 3, std::max(0, width() - 12), height() - 6), 8, hover);
       }
       canvas->DrawLine(gfx::Point(width() - 1, 10), gfx::Point(width() - 1, height() - 10),
           GetColorProvider()->GetColor(ui::kColorSysOnHeaderDivider));
@@ -3539,6 +3988,9 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
     first_ = AddChildView(std::move(first)); second_ = AddChildView(std::move(second));
     divider_ = AddChildView(std::make_unique<SplitResizeGrip>(this, vertical));
     divider_->SetAccessibleName(Text(IDS_CRFILES_RESIZE_SPLIT));
+    SetEventTargeter(std::make_unique<views::ViewTargeter>(std::make_unique<ResizeGripTargeter>(
+        divider_, vertical_, base::BindRepeating(&ColumnResizeGrip::IsDragging,
+            base::Unretained(static_cast<SplitResizeGrip*>(divider_.get()))))));
   }
   bool vertical() const { return vertical_; }
   double ratio() const { return ratio_; }
@@ -3546,17 +3998,37 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
   views::View* first() const { return first_; }
   views::View* second() const { return second_; }
   void SetChangedCallback(base::RepeatingClosure callback) { changed_ = std::move(callback); }
+  void SetResizeCallback(base::RepeatingCallback<void(bool)> callback) { resizing_ = std::move(callback); }
   views::View* Sibling(views::View* child) { return child == first_ ? second_.get() : first_.get(); }
   void Replace(views::View* old, views::View* replacement) {
     if (first_ == old) first_ = replacement; else second_ = replacement;
   }
   void OnResize(int amount, bool done) override {
     const int available = std::max(1, (vertical_ ? height() : width()) - kSplitResizeWidth);
-    if (!drag_start_) drag_start_ = ratio_ * available;
+    if (!drag_start_) {
+      drag_start_ = ratio_ * available;
+      if (resizing_) resizing_.Run(true);
+    }
     const int minimum = std::min(vertical_ ? 100 : 180, available / 2);
-    ratio_ = static_cast<float>(std::clamp(*drag_start_ + amount, minimum, available - minimum)) / available;
-    if (done) { drag_start_.reset(); if (changed_) changed_.Run(); }
-    InvalidateLayout();
+    const int position = std::clamp(*drag_start_ + amount, minimum, available - minimum);
+    const int snapped_position = SnapResizePosition(position, available / 2, snapped_);
+    pending_ratio_ = static_cast<float>(snapped_position) / available;
+    if (done) {
+      resize_timer_.Stop();
+      FlushResize();
+      drag_start_.reset();
+      snapped_ = false;
+      if (resizing_) resizing_.Run(false);
+      if (changed_) changed_.Run();
+    } else if (!resize_timer_.IsRunning()) {
+      resize_timer_.Start(FROM_HERE, base::Milliseconds(16), this, &PaneSplit::FlushResize);
+    }
+  }
+  void FlushResize() {
+    const int available = std::max(0, (vertical_ ? height() : width()) - kSplitResizeWidth);
+    const bool moved = static_cast<int>(available * ratio_) != static_cast<int>(available * pending_ratio_);
+    ratio_ = pending_ratio_;
+    if (moved) InvalidateLayout();
   }
   void Layout(PassKey) override {
     const int available = std::max(0, (vertical_ ? height() : width()) - kSplitResizeWidth);
@@ -3572,6 +4044,10 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
   }
  private:
   base::RepeatingClosure changed_;
+  base::RepeatingCallback<void(bool)> resizing_;
+  base::OneShotTimer resize_timer_;
+  float pending_ratio_ = 0.5f;
+  bool snapped_ = false;
   bool vertical_;
   float ratio_ = 0.5f;
   std::optional<int> drag_start_;
@@ -3847,13 +4323,142 @@ class HistoryHeader : public views::View {
 };
 BEGIN_METADATA(HistoryHeader)
 END_METADATA
+class ActivePaneBorder : public views::Border, public views::AnimationDelegateViews {
+ public:
+  ActivePaneBorder(views::View* view, ui::ColorId surface, SplitSelectionStyle style)
+      : views::AnimationDelegateViews(view), view_(view), surface_(surface), style_(style) {}
+  gfx::Insets GetInsets() const override { return gfx::Insets(4); }
+  gfx::Size GetMinimumSize() const override { return gfx::Size(8, 8); }
+  void Paint(const views::View& view, gfx::Canvas* canvas) override {
+    if (!started_ && gfx::Animation::ShouldRenderRichAnimation() && view.IsDrawn()) {
+      started_ = true;
+      animation_.SetDuration(base::Milliseconds(style_ == SplitSelectionStyle::kFlow ? 900 :
+          style_ == SplitSelectionStyle::kCorners ? 740 : 618));
+      animation_.Start();
+    }
+    const int w = view.width(), h = view.height();
+    if (w <= 0 || h <= 0) return;
+    const auto surface = view.GetColorProvider()->GetColor(surface_);
+    canvas->FillRect(gfx::Rect(0, 0, w, 4), surface);
+    canvas->FillRect(gfx::Rect(0, std::max(0, h - 4), w, 4), surface);
+    canvas->FillRect(gfx::Rect(0, 0, 4, h), surface);
+    canvas->FillRect(gfx::Rect(std::max(0, w - 4), 0, 4, h), surface);
+    constexpr double kOneCycle = 6.283185307179586;
+    const float pulse = animation_.is_animating() ?
+        0.725f + 0.275f * static_cast<float>(std::cos(kOneCycle * animation_.GetCurrentValue())) : 1.f;
+    cc::PaintFlags flags;
+    flags.setColor(view.GetColorProvider()->GetColor(ui::kColorSysOnSurface));
+    flags.setAlphaf(0.18f * (style_ == SplitSelectionStyle::kTopBar ? pulse : 1.f));
+    const auto draw_ring = [&](int inset) {
+      if (w <= 2 * inset || h <= 2 * inset) return;
+      canvas->DrawRect(gfx::Rect(inset, inset, w - 2 * inset, 1), flags);
+      canvas->DrawRect(gfx::Rect(inset, h - inset - 1, w - 2 * inset, 1), flags);
+      canvas->DrawRect(gfx::Rect(inset, inset + 1, 1, std::max(0, h - 2 * inset - 2)), flags);
+      canvas->DrawRect(gfx::Rect(w - inset - 1, inset + 1, 1, std::max(0, h - 2 * inset - 2)), flags);
+    };
+    draw_ring(0);
+    flags.setColor(view.GetColorProvider()->GetColor(ui::kColorSysPrimary));
+    const bool moving = animation_.is_animating();
+    const float progress = moving ? static_cast<float>(animation_.GetCurrentValue()) : 1.f;
+    if (style_ == SplitSelectionStyle::kFlow) {
+      const SkPoint points[] = {{0.f, 0.f},
+                                {static_cast<float>(w), static_cast<float>(h)}};
+      const SkColor4f colors[] = {
+          SkColor4f::FromColor(SkColorSetRGB(66, 165, 245)),
+          SkColor4f::FromColor(SkColorSetRGB(156, 100, 255))};
+      flags.setShader(cc::PaintShader::MakeLinearGradient(
+          points, colors, nullptr, 2, SkTileMode::kClamp));
+      for (int inset = 1; inset <= 3; ++inset) {
+        flags.setAlphaf(0.12f * (4 - inset));
+        draw_ring(inset);
+      }
+      // Intersect each fading trail segment with the four edges so corners
+      // remain on the border and never cut across the pane contents.
+      const float right = w - 2.f, bottom = h - 2.f;
+      const float horizontal = right - 2.f, vertical = bottom - 2.f;
+      const float perimeter = 2.f * (horizontal + vertical);
+      if (moving && horizontal > 0.f && vertical > 0.f) {
+        flags.setAntiAlias(true);
+        flags.setStrokeWidth(2.f);
+        const std::array<float, 5> edges = {0.f, horizontal, horizontal + vertical,
+                                           2.f * horizontal + vertical, perimeter};
+        const auto point = [&](int edge, float distance) {
+          const float d = distance - edges[edge];
+          switch (edge) {
+            case 0: return gfx::PointF(2.f + d, 2.f);
+            case 1: return gfx::PointF(right, 2.f + d);
+            case 2: return gfx::PointF(right - d, bottom);
+            default: return gfx::PointF(2.f, bottom - d);
+          }
+        };
+        const float trail = std::min(240.f, perimeter * 0.22f);
+        const float fade = std::min(1.f, (1.f - progress) * 10.f);
+        for (int i = 0; i < 48; ++i) {
+          const float start = progress * perimeter - trail + trail * i / 48.f;
+          const float end = start + trail / 48.f;
+          flags.setAlphaf(0.85f * (i + 1) / 48.f * fade);
+          for (int wrap = 0; wrap <= 1; ++wrap) {
+            for (int edge = 0; edge < 4; ++edge) {
+              const float from = std::max(start + wrap * perimeter, edges[edge]);
+              const float to = std::min(end + wrap * perimeter, edges[edge + 1]);
+              if (to > from) canvas->DrawLine(point(edge, from), point(edge, to), flags);
+            }
+          }
+        }
+      }
+    } else if (style_ == SplitSelectionStyle::kCorners) {
+      const float arrival = std::min(1.f, progress * 740.f / 240.f);
+      const float inset = 3.f * (1.f - (1.f - arrival) * (1.f - arrival));
+      const float length = std::min(20.f, std::min(w, h) * 0.25f);
+      flags.setAntiAlias(true);
+      flags.setAlphaf(0.45f + 0.45f * arrival);
+      for (int side = 0; side < 2; ++side) {
+        const float x = side ? w - inset - 1.f : inset;
+        canvas->DrawRect(gfx::RectF(side ? x - length + 1.f : x, inset, length, 1.f), flags);
+        canvas->DrawRect(gfx::RectF(x, inset, 1.f, length), flags);
+      }
+      if (moving && arrival >= 1.f) {
+        const float scan = (progress * 740.f - 240.f) / 500.f;
+        const float scan_length = std::min(80.f, w * 0.2f);
+        flags.setAlphaf(0.7f * std::sin(3.14159265f * scan));
+        canvas->DrawRect(gfx::RectF(3.f + (w - 6.f - scan_length) * scan, 2.f, scan_length, 1.f), flags);
+      }
+    } else {
+      flags.setAntiAlias(true);
+      flags.setAlphaf(pulse);
+      const int bar_width = std::min(36, std::max(0, w - 8));
+      canvas->DrawRoundRect(gfx::RectF((w - bar_width) / 2.f, 1.f, bar_width, 3.f), 1.5f, flags);
+    }
+  }
+  void AnimationProgressed(const gfx::Animation*) override {
+    auto* view = view_.view();
+    if (!view || !view->IsDrawn()) return;
+    const int w = view->width(), h = view->height();
+    if (w <= 0 || h <= 0) return;
+    // Repaint only the border strips; selection animations never invalidate layout.
+    view->SchedulePaintInRect(gfx::Rect(0, 0, w, 4));
+    view->SchedulePaintInRect(gfx::Rect(0, std::max(0, h - 4), w, 4));
+    view->SchedulePaintInRect(gfx::Rect(0, 0, 4, h));
+    view->SchedulePaintInRect(gfx::Rect(std::max(0, w - 4), 0, 4, h));
+  }
+  void OnViewVisibilityChanged(views::View*, views::View*, bool visible) override {
+    if (!visible) animation_.Stop();
+  }
+  void AnimationEnded(const gfx::Animation* animation) override { AnimationProgressed(animation); }
+ private:
+  bool started_ = false;
+  views::ViewTracker view_;
+  const ui::ColorId surface_;
+  const SplitSelectionStyle style_;
+  gfx::LinearAnimation animation_{base::Milliseconds(618), gfx::LinearAnimation::kDefaultFrameRate, this};
+};
 class PaneActivation : public ui::EventHandler {
  public:
-  PaneActivation(views::View* view, base::RepeatingClosure activate) : view_(view), activate_(std::move(activate)) { view_->AddPreTargetHandler(this); }
+  PaneActivation(views::View* view, base::RepeatingCallback<void(bool)> activate) : view_(view), activate_(std::move(activate)) { view_->AddPreTargetHandler(this); }
   ~PaneActivation() override { view_->RemovePreTargetHandler(this); }
   void SetFileKeys(base::RepeatingCallback<bool(const ui::KeyEvent&)> callback) { file_keys_ = std::move(callback); }
   void OnMouseEvent(ui::MouseEvent* event) override {
-    if (event->type() == ui::EventType::kMousePressed) activate_.Run();
+    if (event->type() == ui::EventType::kMousePressed) activate_.Run(true);
   }
   void OnKeyEvent(ui::KeyEvent* event) override {
     if (event->type() == ui::EventType::kKeyPressed && PrimaryModifierDown(*event) &&
@@ -3875,14 +4480,14 @@ class PaneActivation : public ui::EventHandler {
       case ui::VKEY_LCONTROL: case ui::VKEY_RCONTROL: case ui::VKEY_LSHIFT: case ui::VKEY_RSHIFT:
       case ui::VKEY_LMENU: case ui::VKEY_RMENU:
       case ui::VKEY_LWIN: case ui::VKEY_RWIN: return;
-      default: activate_.Run();
+      default: activate_.Run(false);
     }
     if (file_keys_ && file_keys_.Run(*event)) { event->SetHandled(); event->StopPropagation(); }
   }
  private:
   base::RepeatingCallback<bool(const ui::KeyEvent&)> file_keys_;
   raw_ptr<views::View> view_;
-  base::RepeatingClosure activate_;
+  base::RepeatingCallback<void(bool)> activate_;
 };
 enum ContextCommand {
   kContextOpen = 10000, kContextCut, kContextCopy, kContextMoveTo, kContextCopyTo,
@@ -4085,6 +4690,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto* resize = body->AddChildView(std::make_unique<SidebarResizeGrip>(this,
         base::BindRepeating(&FilesView::RestoreSidebar, base::Unretained(this))));
     sidebar_resize_ = resize;
+    body->SetEventTargeter(std::make_unique<views::ViewTargeter>(std::make_unique<ResizeGripTargeter>(
+        resize, false, base::BindRepeating(&SidebarResizeGrip::IsDragging, base::Unretained(resize)))));
     // Two-DIP divider without horizontal padding.
     resize->SetPreferredSize(gfx::Size(2, 0));
     resize->SetAccessibleName(Text(IDS_CRFILES_SIDEBAR_WIDTH));
@@ -4148,8 +4755,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     footer->SetProperty(views::kViewIgnoredByLayoutKey, true);
     footer->SetPaintToLayer(); footer->layer()->SetFillsBoundsOpaquely(false);
     footer->layer()->SetOpacity(0.f); footer->SetCanProcessEventsWithinSubtree(false);
-    footer->SetBackground(std::make_unique<FooterBackground>());
-    footer->SetBorder(views::CreateEmptyBorder(1));
+    footer->SetBackground(std::make_unique<FooterBackground>(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+    footer->SetBorder(std::make_unique<FooterGlowBorder>(false));
     auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(4, 8), 4));
     // Layer scrolling sizes the plain contents view from its preferred size.
@@ -4182,7 +4789,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_button_ = action(vector_icons::kFolderOpenIcon, IDS_CRFILES_NEW_FOLDER,
         base::BindRepeating(&FilesView::ShowNewFolder, base::Unretained(this)));
     trash_footer_actions_ = footer->AddChildView(std::make_unique<views::View>());
-    trash_footer_actions_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+    footer_layout->SetFlexForView(trash_footer_actions_, 1);
+    auto* trash_actions_layout = trash_footer_actions_->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
     restore_action_ = AddButton(trash_footer_actions_, Text(IDS_CRFILES_RESTORE),
         base::BindRepeating(&FilesView::ChangeTrash, base::Unretained(this), true));
@@ -4197,6 +4805,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     views::InkDrop::Get(empty_trash_action_->ink_drop_view())->SetBaseColor(ui::kColorSysError);
     views::HighlightPathGenerator::Install(empty_trash_action_, std::make_unique<SplitButtonHighlightPath>(false));
     for (auto* button : {restore_action_.get(), empty_trash_action_.get()}) {
+      trash_actions_layout->SetFlexForView(button, 1);
       button->SetAnimationDuration(base::Milliseconds(120));
       auto* ink = views::InkDrop::Get(button->ink_drop_view());
       ink->SetHighlightOpacity(0.24f);
@@ -4212,11 +4821,24 @@ class FilesView : public views::View, public views::TextfieldController, public 
         Deferred(base::BindRepeating(&FilesView::ShowSearchTab, weak_.GetWeakPtr())));
     more_button_ = action(vector_icons::kExpandMoreOldIcon, IDS_CRFILES_MORE,
         base::BindRepeating(&FilesView::ShowMoreMenu, base::Unretained(this)));
-    status_ = footer->AddChildView(std::make_unique<views::Label>());
-    status_->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
+    footer_status_ = footer->AddChildView(std::make_unique<views::View>());
+    footer_layout->SetFlexForView(footer_status_, 2);
+    auto* status_layout = footer_status_->SetLayoutManager(std::make_unique<views::FlexLayout>());
+    status_layout->SetOrientation(views::LayoutOrientation::kHorizontal)
+        .SetMainAxisAlignment(views::LayoutAlignment::kEnd)
+        .SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
+    const views::FlexSpecification text_flex(views::MinimumFlexSizeRule::kScaleToZero,
+                                            views::MaximumFlexSizeRule::kPreferred);
+    footer_folder_name_ = footer_status_->AddChildView(std::make_unique<views::Label>());
+    footer_folder_name_->SetEnabledColor(ui::kColorSysPrimary);
+    footer_folder_name_->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
+    footer_folder_name_->SetElideBehavior(gfx::ELIDE_TAIL);
+    footer_folder_name_->SetProperty(views::kFlexBehaviorKey, text_flex);
+    status_ = footer_status_->AddChildView(std::make_unique<views::Label>());
+    status_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     status_->SetElideBehavior(gfx::ELIDE_TAIL);
-    status_->SetPreferredSize(gfx::Size(120, 26));
-    footer_layout->SetFlexForView(status_, 1);
+    status_->SetProperty(views::kFlexBehaviorKey, text_flex);
+    status_->SetProperty(views::kMarginsKey, gfx::Insets::TLBR(0, 4, 0, 0));
     if (!root_) for (auto accelerator : {ui::Accelerator(ui::VKEY_T, kPrimaryModifier),
              ui::Accelerator(ui::VKEY_Q, kPrimaryModifier),
              ui::Accelerator(ui::VKEY_C, kPrimaryModifier),
@@ -4255,7 +4877,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     fullscreen_exit_->SetVisible(false);
     }
     if (root_) {
-      activation_ = std::make_unique<PaneActivation>(this, base::BindRepeating(&FilesView::ActivateSelf, base::Unretained(this)));
+      activation_ = std::make_unique<PaneActivation>(this, base::BindRepeating(&FilesView::ActivateFromInput, base::Unretained(this)));
       activation_->SetFileKeys(base::BindRepeating(&FilesView::FileKeyPressed, base::Unretained(this)));
       if (search_page_) {
         tabs_.push_back(Tab{.id = next_id_++}); Current().path = initial_path;
@@ -4414,11 +5036,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
       sidebar_animation_timer_.Stop();
       sidebar_drag_start_ = sidebar_display_width_;
     }
-    sidebar_display_width_ = std::clamp(*sidebar_drag_start_ + amount, 0, 360);
+    sidebar_display_width_ = SnapResizePosition(
+        std::clamp(*sidebar_drag_start_ + amount, 0, 360), 240, sidebar_snapped_);
     UpdateSidebarPresentation();
     if (done) {
       const int target = sidebar_display_width_ < 110 ? 0 : std::clamp(sidebar_display_width_, 220, 360);
       sidebar_drag_start_.reset();
+      sidebar_snapped_ = false;
       AnimateSidebarTo(target);
       if (target == 0) ActivePane()->DefaultFocusView()->RequestFocus();
     }
@@ -4460,9 +5084,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     LayoutSuperclass<views::View>(this);
     if (root_ && footer_) {
       const auto area = footer_->parent()->GetContentsBounds();
-      const int footer_width = Current().path == TrashRoot() ?
-          std::min(std::max(0, area.width() - 8), footer_->GetPreferredSize({}).width()) : std::max(0, area.width());
-      const int footer_height = footer_->GetPreferredSize({}).height();
+      const bool trash = Current().path == TrashRoot();
+      const auto preferred = footer_->GetPreferredSize({});
+      const int footer_width = trash ?
+          std::min(std::max(0, area.width() - 8), static_cast<int>(std::lround(preferred.width() * 1.12))) : std::max(0, area.width());
+      const int footer_height = trash ? static_cast<int>(std::lround(preferred.height() * 1.08)) : preferred.height();
       if (auto* layout = views::AsViewClass<FileLayout>(files_->contents()))
         layout->SetBottomPadding(footer_height + 10);
       footer_->SetBounds(area.x() + (area.width() - footer_width) / 2,
@@ -4773,8 +5399,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (!enabled) pane->ResetDirectoryAnimation();
       pane->UpdateFooterVisibility();
     }, animate));
+    UpdatePaneControls();
     SyncNavigation();
   }
+  void ToggleSidebarFromTitlebar() { ToggleSidebar(); }
   void ShowMoreMenu() {
     if (!root_ || (more_menu_runner_ && more_menu_runner_->IsRunning())) return;
     more_menu_runner_.reset();
@@ -5839,6 +6467,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     for (const auto& path : Current().selected) {
       auto found = row_views_.find(path); if (found == row_views_.end()) continue;
       auto* row = found->second.get();
+      row->StopReflowAnimation();
       row->SetPaintToLayer(); row->layer()->SetFillsBoundsOpaquely(false);
       dragging_rows_.push_back(row->GetWeakPtr());
       auto* layer = row->layer(); layer->GetAnimator()->StopAnimating();
@@ -5941,6 +6570,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       const double ratio = data.FindDouble("ratio").value_or(0.5);
       split->SetRatio(std::isfinite(ratio) ? ratio : 0.5);
       split->SetChangedCallback(base::BindRepeating(&FilesView::ScheduleWorkspaceSave, weak_.GetWeakPtr()));
+      split->SetResizeCallback(base::BindRepeating(&FilesView::SplitResizeChanged, weak_.GetWeakPtr()));
       return split;
     }
     if (data.FindBool("search_page").value_or(false)) {
@@ -5962,7 +6592,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto& options = pane->Current().options;
     options.icons = data.FindBool("icons").value_or(true);
     options.icon_index = std::clamp(data.FindInt("icon_index").value_or(1), 0, static_cast<int>(kFileIconSizes.size()) - 1);
-    options.sort = static_cast<FileSort>(std::clamp(data.FindInt("sort").value_or(0), 0, 11));
+    options.sort = static_cast<FileSort>(std::clamp(
+        data.FindInt("sort").value_or(static_cast<int>(options.sort)), 0, 11));
     options.show_hidden = data.FindBool("hidden").value_or(false);
     options.size_column = data.FindBool("size_column").value_or(true);
     options.type_column = data.FindBool("type_column").value_or(true);
@@ -6244,9 +6875,34 @@ class FilesView : public views::View, public views::TextfieldController, public 
     VisitPanes(host, base::BindRepeating([](FilesView* active, bool multiple, FilesView* pane) {
       pane->pane_can_close_ = multiple;
       pane->UpdateFooterVisibility();
-      pane->SetBorder(views::CreateSolidBorder(1, pane == active && multiple ? ui::kColorSysPrimary :
-          pane->history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+      const bool selected = pane == active && multiple;
+      pane->footer_folder_name_->SetEnabledColor(!multiple || selected ?
+          ui::kColorSysPrimary : ui::kColorSysOnSurfaceSecondary);
+      const auto surface = pane->history_page_ ? ui::kColorSysBase : kFolderSurfaceColor;
+      if (selected) {
+        const auto style = GetSplitSelectionStyle();
+        if (!pane->pane_border_active_ || pane->pane_border_style_ != style)
+          pane->SetBorder(std::make_unique<ActivePaneBorder>(pane, surface, style));
+        pane->pane_border_style_ = style;
+      } else {
+        pane->SetBorder(views::CreateSolidBorder(multiple ? 4 : 1, surface));
+      }
+      pane->pane_border_active_ = selected;
+      const bool trash = pane->trash_footer_actions_->GetVisible();
+      if (selected && pane->pane_border_style_ == SplitSelectionStyle::kCorners) {
+        pane->footer_->SetBorder(std::make_unique<FooterGlowBorder>(trash));
+      } else if (trash) {
+        pane->footer_->SetBorder(views::CreateRoundedRectBorder(1, 24, ui::kColorSysOutline));
+      } else {
+        pane->footer_->SetBorder(std::make_unique<FooterGlowBorder>(false));
+      }
     }, base::Unretained(ActivePane()), count > 1));
+  }
+  void ActivateFromInput(bool mouse_press) {
+    // Preserve the state before activation: the button callback runs later,
+    // after this pane has already become active.
+    if (mouse_press) mouse_press_activated_pane_ = root_ && root_->ActivePane() != this;
+    ActivateSelf();
   }
   void ActivateSelf() {
     UpdateFooterVisibility();
@@ -6288,6 +6944,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void SelectPaneTab(int id) {
     const auto target = std::ranges::find(tabs_, id, &Tab::id);
     if (target == tabs_.end()) return;
+    const bool first_activation = target->deferred_tree.has_value();
+    const gfx::Rect previous_bounds = Current().pane_host->bounds();
+    // Workspace restoration also selects a tab from the constructor, before
+    // this view belongs to a widget or has a usable viewport.
+    const bool prepare_first_viewport =
+        first_activation && GetWidget() && !previous_bounds.IsEmpty();
     SuspendPanePopups();
     for (size_t i = 0; i < tabs_.size(); ++i) {
       const bool selected = tabs_[i].id == id;
@@ -6302,7 +6964,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
       pane->UpdateFooterVisibility();
       pane->InvalidateLayout();
     }));
-    Current().pane_host->SetVisible(true);
+    // A restored tab has no geometry yet. Give its hidden tree the current
+    // viewport before RenderFiles prepares rows from the directory cache.
+    // Otherwise the first viewport can be populated at a temporary 1px width.
+    if (prepare_first_viewport) {
+      Current().pane_host->SetBoundsRect(previous_bounds);
+      Current().pane_host->DeprecatedLayoutImmediately();
+    } else Current().pane_host->SetVisible(true);
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
       if (pane->history_page_) return;
       if (pane->pending_navigation_) {
@@ -6311,6 +6979,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       } else if (pane->Current().sorted_mode != pane->Current().options.sort ||
                  pane->Current().sorted_hidden != pane->Current().options.show_hidden) pane->RenderFiles();
     }));
+    if (prepare_first_viewport) Current().pane_host->SetVisible(true);
     if (auto* pane = ActivePane(); pane->history_page_ && !pane->history_loading_ &&
         (!pane->history_cache_valid_ || pane->history_version_ != FileHistoryVersion() ||
          pane->history_loaded_query_ != pane->history_query_ || pane->history_loaded_filter_ != pane->history_filter_))
@@ -6318,6 +6987,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (auto* list = views::AsViewClass<HistoryList>(ActivePane()->files_->contents()))
       list->ScheduleUpdate();
     UpdatePaneControls(); SyncNavigation(); ScheduleWorkspaceSave();
+    if (prepare_first_viewport) {
+      // Navigation chrome and scrollbars can change the final viewport. Fill
+      // that range synchronously before painting, without waiting for disk IO.
+      GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
+      VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
+        pane->UpdateFileViewport();
+      }));
+    }
     ActivePane()->DefaultFocusView()->RequestFocus();
     SyncLiveDirectories();
   }
@@ -6353,6 +7030,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::unique_ptr<views::View> second = before ? std::move(original) : std::move(pane);
     auto split = std::make_unique<PaneSplit>(direction >= 2, std::move(first), std::move(second));
     split->SetChangedCallback(base::BindRepeating(&FilesView::ScheduleWorkspaceSave, weak_.GetWeakPtr()));
+    split->SetResizeCallback(base::BindRepeating(&FilesView::SplitResizeChanged, weak_.GetWeakPtr()));
     if (outer) outer->Replace(target, split.get());
     parent->AddChildView(std::move(split));
     Current().active_pane = added;
@@ -6698,6 +7376,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         event.AsMouseEvent()->GetClickCount() == 1 && !event.IsControlDown() &&
         !event.IsCommandDown() &&
         !event.IsShiftDown() && !event.IsAltDown();
+    if (single_click_folder && mouse_press_activated_pane_) return;
     if (single_click_folder ||
         (event.IsMouseEvent() && event.AsMouseEvent()->GetClickCount() == 2) ||
         (event.IsKeyEvent() && event.AsKeyEvent()->key_code() == ui::VKEY_RETURN)) {
@@ -7242,12 +7921,18 @@ class FilesView : public views::View, public views::TextfieldController, public 
     forward_->SetEnabled(pane->Current().history_index + 1 < static_cast<int>(pane->Current().history.size()));
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* leaf) { leaf->FileViewportChanged(); }));
     const auto navigation_style = GetNavigationStyle();
-    if (rendered_crumb_pane_ != pane->pane_id_ || rendered_crumb_path_ != pane->Current().path || rendered_navigation_style_ != navigation_style) {
+    const bool path_changed = rendered_crumb_path_ != pane->Current().path;
+    if (!crumbs_scroll_->contents() || path_changed || rendered_navigation_style_ != navigation_style) {
+      const bool animate_current = !rendered_crumb_path_.empty() && path_changed;
+      rendered_crumb_buttons_.clear();
       rendered_navigation_style_ = navigation_style;
       rendered_crumb_pane_ = pane->pane_id_; rendered_crumb_path_ = pane->Current().path;
     auto crumbs = std::make_unique<views::View>();
     auto* crumb_layout = crumbs->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(2, 0), 0));
+        views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets::VH(2, navigation_style == NavigationStyle::kConnected ? 2 : 0), 0));
+    if (navigation_style == NavigationStyle::kConnected)
+      crumbs->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysHeaderContainerInactive, 8));
     crumb_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     std::vector<base::FilePath> parents;
     for (auto path = pane->Current().path; !path.empty();) {
@@ -7263,7 +7948,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (TrashRoot() == pane->Current().path) parents = {pane->Current().path};
     std::ranges::reverse(parents);
     for (const auto& path : parents) {
-      if (navigation_style != NavigationStyle::kRaised && path != parents.front()) {
+      if (navigation_style == NavigationStyle::kConnected && path != parents.front()) {
+        crumbs->AddChildView(std::make_unique<BreadcrumbDivider>());
+      } else if (navigation_style != NavigationStyle::kRaised && path != parents.front()) {
         auto* divider = crumbs->AddChildView(std::make_unique<views::Label>(base::i18n::IsRTL() ? u"‹" : u"›"));
         divider->SetSubpixelRenderingEnabled(false);
         divider->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
@@ -7272,10 +7959,31 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       auto* crumb = crumbs->AddChildView(std::make_unique<BreadcrumbButton>(
           Deferred(base::BindRepeating(&FilesView::Navigate, pane->weak_.GetWeakPtr(), path, -1, false)),
-          (path == TrashRoot() ? Text(IDS_CRFILES_TRASH) : BreadcrumbName(path)), path == pane->Current().path, path == parents.front(), navigation_style));
+          (path == TrashRoot() ? Text(IDS_CRFILES_TRASH) : BreadcrumbName(path)), path == pane->Current().path, path == parents.front(), navigation_style, animate_current));
+      rendered_crumb_buttons_.emplace_back(path, crumb->GetWeakPtr());
+      if (path != TrashRoot() && BreadcrumbName(path) == u"/") {
+        crumb->SetText(std::u16string());
+        crumb->SetAccessibleName(NavigationPath(path));
+        const auto color = (navigation_style == NavigationStyle::kRaised ||
+                            navigation_style == NavigationStyle::kConnected) && path == pane->Current().path ?
+            ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface;
+        for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+                           views::Button::STATE_PRESSED, views::Button::STATE_DISABLED}) {
+          crumb->SetImageModel(state, ui::ImageModel::FromVectorIcon(kBreadcrumbDiskIcon,
+              state == views::Button::STATE_DISABLED ? ui::kColorSysStateDisabled : color, 20));
+        }
+      }
       crumb->SetTooltipText(NavigationPath(path));
     }
     crumbs_scroll_->SetContents(std::move(crumbs));
+    } else if (rendered_crumb_pane_ != pane->pane_id_) {
+      // Keep the visual state and scroll position for identical paths, but
+      // route subsequent clicks to the newly active pane.
+      for (const auto& [path, button] : rendered_crumb_buttons_) {
+        if (button) static_cast<BreadcrumbButton*>(button.get())->SetCallback(
+            Deferred(base::BindRepeating(&FilesView::Navigate, pane->weak_.GetWeakPtr(), path, -1, false)));
+      }
+      rendered_crumb_pane_ = pane->pane_id_;
     }
     const bool icons = pane->Current().options.icons;
     view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
@@ -7283,14 +7991,44 @@ class FilesView : public views::View, public views::TextfieldController, public 
     view_toggle_->SetTooltipText(Text(icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
     view_toggle_->SetAccessibleName(Text(icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
   }
+  void SplitResizeChanged(bool resizing) {
+    split_resize_active_ = resizing;
+    VisitPanes(Current().pane_host, base::BindRepeating([](bool active, FilesView* pane) {
+      if (pane->history_page_ || !pane->files_->contents()) return;
+      auto* layout = views::AsViewClass<FileLayout>(pane->files_->contents());
+      if (!layout) return;
+      if (active) {
+        const auto viewport = pane->files_->GetVisibleRect();
+        const auto [first, last] = layout->ItemsInRect(viewport);
+        if (first < last)
+          pane->resize_anchor_ = std::make_pair(first, viewport.y() - layout->ItemBounds(first).y());
+        pane->row_details_timer_.Stop();
+      }
+      pane->split_resize_active_ = active;
+      layout->SetResizing(active);
+      pane->files_->InvalidateLayout();
+      pane->FileViewportChanged();
+    }, resizing));
+  }
   void SaveScroll() {
     if (!pending_scroll_ && files_->contents()) Current().scroll = files_->GetVisibleRect().y();
   }
   void RestoreScroll(views::ScrollView* scroll) {
+    if (resize_anchor_ && !pending_scroll_) {
+      if (auto* layout = views::AsViewClass<FileLayout>(scroll->contents())) {
+        const auto [index, offset] = *resize_anchor_;
+        scroll->ScrollToPosition(scroll->vertical_scroll_bar(),
+            std::max(0, layout->ItemBounds(index).y() + offset));
+      }
+      if (!split_resize_active_) resize_anchor_.reset();
+    }
     if (pending_scroll_) {
+      resize_anchor_.reset();
       const int position = *pending_scroll_; pending_scroll_.reset();
       scroll->ScrollToPosition(scroll->vertical_scroll_bar(), position);
     }
+    if (auto* layout = views::AsViewClass<FileLayout>(scroll->contents()))
+      layout->CommitColumnTransition(scroll->GetVisibleRect());
     if (directory_animation_pending_) {
       directory_animation_pending_ = false;
       // Keep directory contents visible throughout the transition. Fading the
@@ -7493,6 +8231,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr(), canceled, Current().request, options.sort, options.show_hidden));
   }
   void RebuildDisplayedEntries(const DirectoryDelta* delta = nullptr) {
+    // An index anchor is valid only while the displayed model is unchanged.
+    resize_anchor_.reset();
     ++virtual_model_generation_;
     keyboard_position_.reset(); keyboard_anchor_.reset();
     auto& tab = Current();
@@ -7627,9 +8367,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
         })) return;
     const auto deadline = base::TimeTicks::Now() + base::Milliseconds(4);
     bool changed = false;
-    if (!stable_geometry) {
-      // Model/geometry changes rebind the index once. Ordinary scrolling never
-      // repositions or rewrites accessibility metadata for overlapping rows.
+    const bool index_changed = !previous || previous->model_generation != range.model_generation ||
+        previous->row_generation != range.row_generation;
+    if (index_changed) {
+      // Only model/index changes rebind slots and accessibility metadata.
+      // RowLayout already handles size changes for retained rows.
       layout->ResetItemPositions();
       std::vector<base::FilePath> invalid;
       for (const auto& [path, row] : row_views_) {
@@ -7651,6 +8393,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     bool complete = true;
     // The ordered slot index visits only rows beyond the retention boundaries.
     for (size_t index : layout->ItemsOutside(keep_first, keep_last)) {
+      if (split_resize_active_) break;
       const auto& path = Current().entries[displayed_entries_[index]].path;
       auto* row = row_views_.at(path).get();
       if (IsFileRowPinned(path, row, focused)) {
@@ -7686,7 +8429,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
           complete = false;
           return;
         }
-        layout->PlaceItem(index, CreateFileRow(index, layout));
+        auto* row = CreateFileRow(index, layout);
+        layout->PlaceItem(index, row);
+        layout->AnimateNewColumnItem(row);
         ++created;
         changed = true;
       }
@@ -7694,21 +8439,24 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // Visible placeholders are never deferred. Prefetch the nearest rows in
     // the direction of travel first, then spend any remaining budget behind.
     populate(visible_first, visible_last, false, false);
-    if (virtual_scroll_down_) {
+    if (split_resize_active_) {
+      // Keep visible rows complete; prefetch resumes after the drag.
+      complete = false;
+    } else if (virtual_scroll_down_) {
       populate(visible_last, last, true, false);
       populate(first, visible_first, true, true);
     } else {
       populate(first, visible_first, true, true);
       populate(visible_last, last, true, false);
     }
-    if (changed || !stable_geometry) {
+    if (changed || index_changed) {
       layout->OrderItems();
       layout->InvalidateLayout();
     }
     range.row_generation = materialized_rows_generation_;
     virtual_rows_range_ = range;
     virtual_rows_complete_ = complete;
-    if (!complete && !virtual_rows_timer_.IsRunning())
+    if (!complete && !split_resize_active_ && !virtual_rows_timer_.IsRunning())
       virtual_rows_timer_.Start(FROM_HERE, base::Milliseconds(16), this, &FilesView::UpdateFileViewport);
     RequestFileVisuals();
   }
@@ -7797,6 +8545,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // Retain decoded images for the prepared rows; release offscreen images
     // so rebuilding a view does not defeat the bounded visual cache.
     std::erase_if(tab.visuals, [&](const auto& item) { return !row_views_.contains(item.first); });
+    contents->SetPointerMotionCallback(base::BindRepeating(&FilesView::EnableFileTooltips, weak_.GetWeakPtr()));
     contents->SetViewportCallback(base::BindRepeating(&FilesView::FileViewportChanged, weak_.GetWeakPtr()));
     pending_scroll_ = tab.scroll;
     files_->SetContents(std::move(contents));
@@ -7847,6 +8596,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     return *value;
   }
+  void EnableFileTooltips() {
+    if (file_tooltips_enabled_) return;
+    file_tooltips_enabled_ = true;
+    if (GetWidget() && GetWidget()->GetTooltipManager())
+      GetWidget()->GetTooltipManager()->UpdateTooltip();
+  }
   std::u16string RowTooltip(const Entry& entry) {
     auto& data = RowDisplay(entry.path);
     if (!data.tooltip) {
@@ -7876,10 +8631,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     TrimRowDisplayCache();
   }
   void ScheduleRowDetails() {
+    if (split_resize_active_) return;
     if (!pending_row_details_.empty() && !row_details_timer_.IsRunning())
       row_details_timer_.Start(FROM_HERE, base::Milliseconds(16), this, &FilesView::FlushRowDetails);
   }
   void FlushRowDetails() {
+    if (split_resize_active_) return;
     if (!root_ || history_page_ || tabs_.empty() || !IsDrawn() || Current().loading || order_pending_) return;
     auto* layout = views::AsViewClass<FileLayout>(files_->contents());
     if (!layout) return;
@@ -7960,9 +8717,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
       tile->SetAccessibleName(name);
       // Query current metadata only when a tooltip is requested. Rebinding a
       // recycled row must not trigger a root-wide tooltip lookup per cell.
+      tile->SetPointerMotionCallback(base::BindRepeating(&FilesView::EnableFileTooltips, weak_.GetWeakPtr()));
       tile->SetTooltipCallback(base::BindRepeating(
           [](base::WeakPtr<FilesView> pane, base::FilePath path) -> std::u16string {
             if (!pane || pane->tabs_.empty()) return {};
+            // This is pane state, so recycled or newly visible rows retain the
+            // same tooltip eligibility instead of requiring another movement.
+            if (!pane->file_tooltips_enabled_) return {};
             const auto position = pane->materialized_positions_.find(path);
             if (position == pane->materialized_positions_.end() || position->second >= pane->displayed_entries_.size()) return {};
             const auto& entry = pane->Current().entries[pane->displayed_entries_[position->second]];
@@ -8043,6 +8804,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void RequestFileVisuals() {
     auto* shell = root_ ? root_.get() : this;
+    if (shell->split_resize_active_) return;
     if (shell->visual_stopped_ || shell->visual_pump_pending_) return;
     shell->visual_pump_pending_ = true;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
@@ -8258,6 +9020,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     return batch;
   }
   void PumpFileVisuals() {
+    if (split_resize_active_) return;
     if (visual_stopped_ || root_ || tabs_.empty()) return;
     std::vector<FilesView*> panes;
     VisitPanes(Current().pane_host, base::BindRepeating([](std::vector<FilesView*>* list, FilesView* pane) {
@@ -8461,7 +9224,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const bool toolbar_changed = trash_footer_actions_->GetVisible() != trash;
     normal_footer_actions_->SetVisible(!trash);
     trash_footer_actions_->SetVisible(trash);
-    status_->SetVisible(!trash);
+    footer_status_->SetVisible(!trash);
     restore_action_->SetEnabled(!trash_busy_ && !tab.loading && !root_->local_operation_busy_ && !tab.selected.empty());
     empty_trash_action_->SetEnabled(!trash_busy_ && !tab.loading && !root_->local_operation_busy_ &&
         std::ranges::any_of(tab.entries, [&tab](const Entry& entry) { return !tab.removed.contains(entry.path); }));
@@ -8473,9 +9236,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
         footer_->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainerElevated, 24));
         footer_->SetBorder(views::CreateRoundedRectBorder(1, 24, ui::kColorSysOutline));
       } else {
-        footer_->SetBackground(std::make_unique<FooterBackground>());
-        footer_->SetBorder(views::CreateEmptyBorder(1));
+        footer_->SetBackground(std::make_unique<FooterBackground>(history_page_ ? ui::kColorSysBase : kFolderSurfaceColor));
+        footer_->SetBorder(std::make_unique<FooterGlowBorder>(false));
       }
+      if (pane_border_active_ && pane_border_style_ == SplitSelectionStyle::kCorners)
+        footer_->SetBorder(std::make_unique<FooterGlowBorder>(trash));
       InvalidateLayout();
     }
     const size_t visible_count = displayed_entries_.size();
@@ -8498,8 +9263,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (trash_error_) status_->SetText(Text(IDS_CRFILES_TRASH_ERROR));
     if (local_operation_error_) status_->SetText(Text(local_sources_retained_ ?
         IDS_CRFILES_MOVE_SOURCE_RETAINED : IDS_CRFILES_FILE_OPERATION_ERROR));
-    status_->SetText(base::UTF8ToUTF16(PaneName()) + u" · " + std::u16string(status_->GetText()));
-    status_->SetTooltipText(std::u16string(status_->GetText()) + u"\n" + NavigationPath(tab.path));
+    footer_folder_name_->SetText(base::UTF8ToUTF16(PaneName()));
+    footer_folder_name_->SetTooltipText(NavigationPath(tab.path));
+    status_->SetText(u"· " + std::u16string(status_->GetText()));
+    status_->SetTooltipText(base::UTF8ToUTF16(PaneName()) + u" " +
+        std::u16string(status_->GetText()) + u"\n" + NavigationPath(tab.path));
     UpdateShareButton(); UpdateFooterVisibility();
   }
   void OpenSelected() {
@@ -8785,10 +9553,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
   raw_ptr<views::View> split_host_ = nullptr;
   bool pane_can_close_ = false;
   raw_ptr<views::LabelButton> more_button_ = nullptr;
+  raw_ptr<views::View> footer_status_ = nullptr;
+  raw_ptr<views::Label> footer_folder_name_ = nullptr;
   std::unique_ptr<ui::SimpleMenuModel> more_menu_model_;
   std::unique_ptr<views::MenuRunner> more_menu_runner_;
   bool more_menu_open_ = false;
+  bool file_tooltips_enabled_ = false;
   std::unique_ptr<PaneActivation> activation_;
+  bool mouse_press_activated_pane_ = false;
+  bool pane_border_active_ = false;
+  SplitSelectionStyle pane_border_style_ = SplitSelectionStyle::kFlow;
   std::vector<Tab> tabs_;
   size_t active_ = 0;
   int next_id_ = 1;
@@ -8816,6 +9590,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   uint64_t virtual_model_generation_ = 0;
   uint64_t materialized_rows_generation_ = 0;
   std::optional<FileRowRange> virtual_rows_range_;
+  bool split_resize_active_ = false;
+  std::optional<std::pair<size_t, int>> resize_anchor_;
   bool virtual_rows_complete_ = false;
   bool virtual_scroll_down_ = true;
   std::optional<int> virtual_viewport_y_;
@@ -8855,6 +9631,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool sidebar_visible_ = true;
   int sidebar_width_ = 240;
   int sidebar_display_width_ = 240;
+  bool sidebar_snapped_ = false;
   int sidebar_animation_from_ = 240, sidebar_animation_target_ = 240;
   base::TimeTicks sidebar_animation_start_;
   base::RepeatingTimer sidebar_animation_timer_;
@@ -8919,6 +9696,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   int rendered_tab_id_ = -1;
   std::vector<std::pair<int, std::u16string>> rendered_tab_titles_;
   std::string rendered_crumb_pane_;
+  std::vector<std::pair<base::FilePath, base::WeakPtr<views::View>>> rendered_crumb_buttons_;
   base::FilePath rendered_crumb_path_;
   base::RepeatingTimer timer_;
   std::unique_ptr<AddressOutsideClickHandler> outside_click_handler_;
@@ -8964,6 +9742,10 @@ void ShowCrFilesHistory() { if (g_contents) g_contents->ShowHistoryTab(); }
 bool IsCrFilesQuickShareBusy() { return g_contents && g_contents->QuickShareBusy(); }
 bool IsCrFilesSharingBusy() { return g_contents && g_contents->SharingBusy(); }
 void ApplyCrFilesViewSettings() { if (g_contents) g_contents->ApplyViewSettings(); }
+void ToggleCrFilesSidebar() {
+  if (g_contents && !IsCrFilesWindowBlockedByModal(g_contents->GetWidget()))
+    g_contents->ToggleSidebarFromTitlebar();
+}
 void ApplyCrFilesSharingSettings() { if (g_contents) g_contents->ApplySharing(); }
 void HideCrFilesWindow() {
   if (g_quitting || !Window() || Window()->IsClosed() || !Window()->IsVisible()) return;
