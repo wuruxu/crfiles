@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "crFiles/crfiles_file_access.h"
+#include "crFiles/crfiles_process_singleton.h"
 #include <clocale>
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #if BUILDFLAG(IS_WIN)
+#include "crQuickShare/bluetooth_peripheral_win.h"
 #include <roapi.h>
 #endif
 #if BUILDFLAG(IS_LINUX)
@@ -248,6 +250,19 @@ class CrFilesOzoneGpuConnection {
 };
 #endif
 
+// IPC can arrive while startup is pumping native UI events. Defer activation
+// until the main window is fully initialized, and ignore it during teardown.
+struct SingletonActivation {
+  bool ready = false;
+  bool pending = false;
+  bool shutting_down = false;
+  void Request() {
+    if (shutting_down) return;
+    if (!ready) { pending = true; return; }
+    crfiles::RestoreCrFilesWindow();
+  }
+};
+
 int RunApplication() {
 #if BUILDFLAG(IS_MAC)
   crfiles::InitializeCrFilesApplicationMac();
@@ -257,7 +272,11 @@ int RunApplication() {
   // BLE/GATT WinRT calls share the existing STA UI apartment.
   const HRESULT winrt_result = RoInitialize(RO_INIT_SINGLETHREADED);
   base::ScopedClosureRunner winrt_cleanup(base::BindOnce([](HRESULT result) {
-    if (SUCCEEDED(result)) RoUninitialize();
+    if (SUCCEEDED(result)) {
+      LOG(INFO) << "crFiles shutdown: stage=winrt; event=started";
+      RoUninitialize();
+      LOG(INFO) << "crFiles shutdown: stage=winrt; event=finished";
+    }
   }, winrt_result));
   if (FAILED(winrt_result)) LOG(WARNING) << "Windows Runtime initialization failed; hr=" << winrt_result;
 #endif
@@ -278,10 +297,25 @@ int RunApplication() {
   partition_alloc->ReconfigureAfterFeatureListInit(process_type);
   base::SingleThreadTaskExecutor executor(base::MessagePumpType::UI);
   LogStartupStage("main_scheduler_ready");
+  auto singleton_activation = std::make_shared<SingletonActivation>();
+  crfiles::CrFilesProcessSingleton process_singleton(base::BindRepeating(
+      [](std::shared_ptr<SingletonActivation> activation) { activation->Request(); },
+      singleton_activation));
+  const auto singleton_result = process_singleton.NotifyOtherProcessOrCreate();
+  if (singleton_result == crfiles::CrFilesProcessSingleton::Result::kNotifiedExistingInstance) {
+    LOG(INFO) << "crFiles singleton: existing instance notified";
+    return 0;
+  }
+  if (singleton_result == crfiles::CrFilesProcessSingleton::Result::kError) return 1;
+  LOG(INFO) << "crFiles singleton: primary instance";
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("crFiles");
   partition_alloc->ReconfigureAfterTaskRunnerInit(process_type);
   base::ScopedClosureRunner thread_pool_shutdown(base::BindOnce([] {
+    const auto started = base::TimeTicks::Now();
+    LOG(INFO) << "crFiles shutdown: stage=thread_pool; event=started";
     base::ThreadPoolInstance::Get()->Shutdown();
+    LOG(INFO) << "crFiles shutdown: stage=thread_pool; event=finished; elapsed_ms="
+              << (base::TimeTicks::Now() - started).InMilliseconds();
   }));
 #if BUILDFLAG(IS_LINUX)
   bluez::DBusBluezManagerWrapperLinux::Initialize();
@@ -370,12 +404,25 @@ int RunApplication() {
   CrFilesViewsDelegate views_delegate;
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   crfiles::ShowCrFilesWindow(run_loop.QuitClosure());
+  singleton_activation->ready = true;
+  if (singleton_activation->pending) singleton_activation->Request();
   LogStartupStage("window_shown");
   run_loop.Run();
+  singleton_activation->shutting_down = true;
+  LOG(INFO) << "crFiles shutdown: stage=main_loop; event=exited";
+  const auto window_destroy_started = base::TimeTicks::Now();
+  LOG(INFO) << "crFiles shutdown: stage=destroy_window; event=started";
   crfiles::DestroyCrFilesWindow();
+  LOG(INFO) << "crFiles shutdown: stage=destroy_window; event=finished; elapsed_ms="
+            << (base::TimeTicks::Now() - window_destroy_started).InMilliseconds();
+#if BUILDFLAG(IS_WIN)
+  crquickshare::BluetoothPeripheralWin::DrainPendingStops();
+#endif
   // Native close notifications defer client-owned bubble destruction. Finish
   // those UI tasks while the Views delegate and Viz service are still alive.
+  LOG(INFO) << "crFiles shutdown: stage=drain_ui_tasks; event=started";
   base::RunLoop().RunUntilIdle();
+  LOG(INFO) << "crFiles shutdown: stage=drain_ui_tasks; event=finished";
 #if BUILDFLAG(IS_LINUX)
   ui::LinuxUi::SetInstance(previous_linux_ui);
 #endif
@@ -448,6 +495,7 @@ int CrFilesEntry(int argc, char** argv) {
   InitializeResources(locale);
   LogStartupStage("resources_ready");
   const int result = RunApplication();
+  LOG(INFO) << "crFiles shutdown: stage=application; event=returned";
   ui::ResourceBundle::CleanupSharedInstance();
   return result;
 }
@@ -456,7 +504,9 @@ int CrFilesEntry(int argc, char** argv) {
 
 #if BUILDFLAG(IS_WIN)
 int APIENTRY WinMain(HINSTANCE, HINSTANCE, char*, int) {
-  return CrFilesEntry(0, nullptr);
+  const int result = CrFilesEntry(0, nullptr);
+  LOG(INFO) << "crFiles shutdown: stage=winmain; event=returning; exit_code=" << result;
+  return result;
 }
 #else
 int main(int argc, char** argv) {

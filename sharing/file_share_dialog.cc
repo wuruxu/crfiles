@@ -190,15 +190,17 @@ class ShareSessionBubbleDelegate : public views::BubbleDialogDelegate {
   base::WeakPtr<views::Widget> bounds_owner_;
 };
 constexpr base::TimeDelta kReceiveResultDuration = base::Seconds(8);
+constexpr base::TimeDelta kSendResultDuration = base::Seconds(5);
 
 class CountdownCloseButton : public views::MdTextButton {
   METADATA_HEADER(CountdownCloseButton, views::MdTextButton)
  public:
   CountdownCloseButton(PressedCallback callback, const std::u16string& text)
       : views::MdTextButton(std::move(callback), text) {}
-  void SetDeadline(base::TimeTicks deadline) {
-    if (deadline_ == deadline) return;
+  void SetDeadline(base::TimeTicks deadline, base::TimeDelta duration) {
+    if (deadline_ == deadline && duration_ == duration) return;
     deadline_ = deadline;
+    duration_ = duration;
     repaint_timer_.Stop();
     SetStrokeColorOverrideDeprecated(deadline.is_null() ? std::nullopt : std::optional<SkColor>(SK_ColorTRANSPARENT));
     if (!deadline.is_null()) {
@@ -214,7 +216,7 @@ class CountdownCloseButton : public views::MdTextButton {
   void PaintButtonContents(gfx::Canvas* canvas) override {
     views::MdTextButton::PaintButtonContents(canvas);
     if (deadline_.is_null() || width() <= 2 || height() <= 2) return;
-    const double remaining = std::clamp((deadline_ - base::TimeTicks::Now()) / kReceiveResultDuration, 0.0, 1.0);
+    const double remaining = std::clamp((deadline_ - base::TimeTicks::Now()) / duration_, 0.0, 1.0);
     SkPathBuilder outline;
     const float radius = std::min(width() - 2, height() - 2) / 2.0f;
     outline.addRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(1, 1, width() - 2, height() - 2), radius, radius), SkPathDirection::kCW);
@@ -238,6 +240,7 @@ class CountdownCloseButton : public views::MdTextButton {
     if (base::TimeTicks::Now() >= deadline_) repaint_timer_.Stop();
   }
   base::TimeTicks deadline_;
+  base::TimeDelta duration_ = kReceiveResultDuration;
   base::RepeatingTimer repaint_timer_;
 };
 BEGIN_METADATA(CountdownCloseButton)
@@ -327,10 +330,14 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   void UpdateProgress(const NearbySharing::Snapshot& state) {
     displayed_state_ = state;
     using Stage = NearbySharing::Stage;
-    if (service_->IsQuickShare() && state.receiving && !state.busy && state.stage == Stage::kComplete) {
+    const auto result_duration = state.receiving ? kReceiveResultDuration : kSendResultDuration;
+    const bool succeeded = state.stage == Stage::kComplete ||
+        (!state.receiving && state.stage == Stage::kSent);
+    if (!state.busy && succeeded) {
       if (result_session_ != state.session) {
         result_session_ = state.session;
-        result_deadline_ = base::TimeTicks::Now() + kReceiveResultDuration;
+        result_deadline_ = !state.receiving && !state.discovery_resume_at.is_null() ?
+            state.discovery_resume_at : base::TimeTicks::Now() + result_duration;
         result_close_timer_.Start(FROM_HERE, result_deadline_ - base::TimeTicks::Now(),
             base::BindOnce([](base::WeakPtr<ShareSessionToastImpl> self, uint64_t session) {
               if (!self || self->session_ != session) return;
@@ -343,7 +350,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       result_session_ = 0;
       result_deadline_ = base::TimeTicks();
     }
-    cancel_->SetDeadline(result_deadline_);
+    cancel_->SetDeadline(result_deadline_, result_duration);
     const auto filename = base::UTF8ToUTF16(state.current_file.empty() ?
         (state.files.empty() ? std::string() : state.files.front()) : state.current_file);
     bool resize = filename_->GetText() != filename;
@@ -468,10 +475,22 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       if (service_->IsQuickShare() && state.receiving) {
         open_received_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
             base::BindRepeating([](base::WeakPtr<ShareSessionToastImpl> view) {
-              if (view && view->displayed_state_ && view->displayed_state_->stage == NearbySharing::Stage::kComplete &&
-                  !view->displayed_state_->batch_directory.empty())
-                base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-                    base::BindOnce(&ShowCrFilesReceivedDirectory, view->displayed_state_->batch_directory));
+              if (!view || !view->displayed_state_ || view->displayed_state_->stage != NearbySharing::Stage::kComplete ||
+                  view->displayed_state_->batch_directory.empty()) return;
+              const auto directory = view->displayed_state_->batch_directory;
+              const uint64_t session = view->session_;
+              view->result_close_timer_.Stop();
+              view->dismissed_session_ = session;
+              // Hide immediately, but destroy the clicked button only after
+              // event dispatch. The dismissed session must not reopen on refresh.
+              if (view->widget_) view->widget_->Hide();
+              base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+                  base::BindOnce([](base::WeakPtr<ShareSessionToastImpl> toast,
+                                    uint64_t completed_session, base::FilePath path) {
+                    if (!toast) return;
+                    if (toast->session_ == completed_session) toast->Close();
+                    ShowCrFilesReceivedDirectory(path);
+                  }, view, session, directory));
             }, weak_.GetWeakPtr()), Text(IDS_CRFILES_OPEN)));
         open_received_->SetTooltipText(Text(IDS_CRFILES_RECEIVED));
       }
@@ -600,8 +619,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       if (!widget_ || transfer_view_ || session_ != state.session || stage_ != state.stage ||
           conflict_id_ != state.conflict_id) Show(state);
     } else {
-      // Preserve results across discovery snapshot changes. Successful Quick
-      // Share receives retain their independent auto-close deadline.
+      // Preserve results across discovery snapshot changes. Successful
+      // transfers retain their independent auto-close deadline.
       if (!transfer_view_) Close();
       else if (widget_ && state.session != session_) {
         cancel_->SetText(Text(IDS_CRFILES_CLOSE)); cancel_->SetEnabled(true);
