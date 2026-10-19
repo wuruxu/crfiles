@@ -4542,6 +4542,10 @@ enum ContextCommand {
 };
 class FilesView;
 FilesView* g_contents = nullptr;
+base::RepeatingCallbackList<void(bool)>& SidebarObservers() {
+  static base::NoDestructor<base::RepeatingCallbackList<void(bool)>> observers;
+  return *observers;
+}
 bool g_quitting = false;
 std::unique_ptr<CrFilesTray>& Tray() {
   static base::NoDestructor<std::unique_ptr<CrFilesTray>> tray;
@@ -5316,6 +5320,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     sidebar_viewport_->SetVisible(!history && sidebar_display_width_ > 0);
     sidebar_resize_->SetVisible(!history);
     sidebar_resize_->SetCollapsed(sidebar_display_width_ == 0);
+    if (!root_) SidebarObservers().Notify(!history && sidebar_visible_);
     InvalidateLayout();
   }
   void AnimateSidebarTo(int target) {
@@ -5673,6 +5678,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
     SyncNavigation();
   }
   void ToggleSidebarFromTitlebar() { ToggleSidebar(); }
+  bool SidebarVisible() {
+    return sidebar_visible_ && !(ActivePane() && ActivePane()->history_page_ && ActivePane()->tag_id_ < 0);
+  }
   void ShowMoreMenu() {
     if (!root_ || (more_menu_runner_ && more_menu_runner_->IsRunning())) return;
     more_menu_runner_.reset();
@@ -10348,6 +10356,10 @@ void ShowCrFilesHistory() { if (g_contents) g_contents->ShowHistoryTab(); }
 bool IsCrFilesQuickShareBusy() { return g_contents && g_contents->QuickShareBusy(); }
 bool IsCrFilesSharingBusy() { return g_contents && g_contents->SharingBusy(); }
 void ApplyCrFilesViewSettings() { if (g_contents) g_contents->ApplyViewSettings(); }
+bool IsCrFilesSidebarVisible() { return g_contents && g_contents->SidebarVisible(); }
+base::CallbackListSubscription ObserveCrFilesSidebar(base::RepeatingCallback<void(bool)> callback) {
+  return SidebarObservers().Add(std::move(callback));
+}
 void ToggleCrFilesSidebar() {
   if (g_contents && !IsCrFilesWindowBlockedByModal(g_contents->GetWidget()))
     g_contents->ToggleSidebarFromTitlebar();

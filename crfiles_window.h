@@ -3,6 +3,7 @@
 #ifndef CRFILES_WINDOW_H_
 #define CRFILES_WINDOW_H_
 #include <memory>
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 namespace base { class FilePath; }
 namespace views { class View; class Widget; }
@@ -16,6 +17,8 @@ std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget* widget);
 void ApplyCrFilesSharingSettings();
 void ApplyCrFilesViewSettings();
 void ToggleCrFilesSidebar();
+bool IsCrFilesSidebarVisible();
+base::CallbackListSubscription ObserveCrFilesSidebar(base::RepeatingCallback<void(bool)> callback);
 void ApplyCrFilesTraySettings();
 bool IsCrFilesSharingBusy();
 bool IsCrFilesQuickShareBusy();

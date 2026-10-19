@@ -161,6 +161,8 @@
       <message name="IDS_CRFILES_SHOW_HIDDEN" desc="File view options and column labels.">Show Hidden Files</message>
       <message name="IDS_CRFILES_VISIBLE_COLUMNS" desc="File view options and column labels.">Visible Columns</message>
       <message name="IDS_CRFILES_NAME" desc="File view options and column labels.">Name</message>
+      <message name="IDS_CRFILES_SHOW_SIDEBAR" desc="Tooltip when the sidebar is hidden.">Show sidebar</message>
+      <message name="IDS_CRFILES_HIDE_SIDEBAR" desc="Tooltip when the sidebar is visible.">Hide sidebar</message>
       <message name="IDS_CRFILES_TOGGLE_SIDEBAR" desc="Tooltip for the titlebar button that shows or hides the sidebar.">Toggle sidebar</message>
       <message name="IDS_CRFILES_SIDEBAR_WIDTH" desc="File view options and column labels.">Sidebar Width</message>
       <message name="IDS_CRFILES_DESKTOP" desc="Sidebar locations and system trash.">Desktop</message>

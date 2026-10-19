@@ -36,6 +36,8 @@
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/animation/slide_animation.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/gfx/geometry/rrect_f.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRRect.h"
@@ -70,6 +72,55 @@ namespace {
 constexpr int kTitlebarHeight = kCrFilesTitlebarHeight;
 constexpr int kFrameBorder = 1;
 constexpr int kResizeBorder = 6;
+
+class SidebarButton : public views::ImageButton {
+  METADATA_HEADER(SidebarButton, views::ImageButton)
+
+ public:
+  SidebarButton() : views::ImageButton(base::BindRepeating(&ToggleCrFilesSidebar)) {
+    SetAnimateOnStateChange(true);
+    SetAnimationDuration(base::Milliseconds(120));
+    selection_.SetSlideDuration(base::Milliseconds(120));
+    GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
+    UpdateState(IsCrFilesSidebarVisible(), false);
+    subscription_ = ObserveCrFilesSidebar(base::BindRepeating(
+        &SidebarButton::OnSidebarChanged, base::Unretained(this)));
+  }
+ private:
+  void OnSidebarChanged(bool visible) { UpdateState(visible, true); }
+  void UpdateState(bool visible, bool animate) {
+    if (initialized_ && visible_ == visible) return;
+    initialized_ = true;
+    visible_ = visible;
+    const auto text = l10n_util::GetStringUTF16(visible
+        ? IDS_CRFILES_HIDE_SIDEBAR : IDS_CRFILES_SHOW_SIDEBAR);
+    SetTooltipText(text);
+    SetAccessibleName(text);
+    GetViewAccessibility().SetCheckedState(visible
+        ? ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
+    if (!animate) selection_.Reset(visible ? 1.0 : 0.0);
+    else if (visible) selection_.Show();
+    else selection_.Hide();
+    SchedulePaint();
+  }
+  void OnPaintBackground(gfx::Canvas* canvas) override {
+    const auto* colors = GetColorProvider();
+    if (!colors) return;
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setColor(colors->GetColor(ui::kColorSysPrimary));
+    const float hover = static_cast<float>(hover_animation().GetCurrentValue());
+    flags.setAlphaf(0.12f * static_cast<float>(selection_.GetCurrentValue()) +
+                    0.08f * hover + (GetState() == STATE_PRESSED ? 0.04f : 0.0f));
+    canvas->DrawRoundRect(GetLocalBounds(), 8, flags);
+  }
+  bool initialized_ = false;
+  bool visible_ = false;
+  gfx::SlideAnimation selection_{this};
+  base::CallbackListSubscription subscription_;
+};
+BEGIN_METADATA(SidebarButton)
+END_METADATA
 
 enum MenuCommand {
   kMenuCommandThemeSystem = 1, kMenuCommandThemeLight, kMenuCommandThemeDark,
@@ -236,13 +287,10 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
   METADATA_HEADER(FilesFrameView, views::FrameView)
  public:
   explicit FilesFrameView(views::Widget* widget) : widget_(widget) {
-    icon_ = AddChildView(std::make_unique<views::ImageButton>(
-        base::BindRepeating(&ToggleCrFilesSidebar)));
+    icon_ = AddChildView(std::make_unique<SidebarButton>());
     icon_->SetImageModel(views::Button::STATE_NORMAL, CreateCrFilesIconModel(gfx::Size(20, 20)));
     icon_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
     icon_->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
-    icon_->SetTooltipText(l10n_util::GetStringUTF16(IDS_CRFILES_TOGGLE_SIDEBAR));
-    icon_->SetAccessibleName(l10n_util::GetStringUTF16(IDS_CRFILES_TOGGLE_SIDEBAR));
     icon_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
     views::SetHitTestComponent(icon_, HTCLIENT);
     options_button_ = AddChildView(std::make_unique<libcr::TitlebarIconButton>(

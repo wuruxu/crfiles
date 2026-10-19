@@ -189,8 +189,8 @@ class ShareSessionBubbleDelegate : public views::BubbleDialogDelegate {
  private:
   base::WeakPtr<views::Widget> bounds_owner_;
 };
-constexpr base::TimeDelta kReceiveResultDuration = base::Seconds(8);
-constexpr base::TimeDelta kSendResultDuration = base::Seconds(5);
+constexpr base::TimeDelta kReceiveResultDuration = base::Seconds(5);
+constexpr base::TimeDelta kSendResultDuration = base::Seconds(3);
 
 class CountdownCloseButton : public views::MdTextButton {
   METADATA_HEADER(CountdownCloseButton, views::MdTextButton)

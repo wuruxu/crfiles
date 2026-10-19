@@ -165,7 +165,7 @@ class QuickShareAdapter final : public ShareService {
     if (!source.available) result.discovery_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
     if (!result.busy && !result.receiving && !result.finished_at.is_null() &&
         (result.stage == Stage::kComplete || result.stage == Stage::kSent))
-      result.discovery_resume_at = result.finished_at + base::Seconds(5);
+      result.discovery_resume_at = result.finished_at + base::Seconds(3);
     const bool discovery_paused = base::TimeTicks::Now() < result.discovery_resume_at;
     auto peers = source.peers;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)

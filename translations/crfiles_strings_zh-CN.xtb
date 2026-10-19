@@ -364,4 +364,6 @@
   <translation id="787426481015837208">删除标签</translation>
   <translation id="3660848480734478600">无法删除标签。</translation>
   <translation id="5384113860665892500">删除下列标签，并移除所有关联文件和文件夹上的这些标签？文件和文件夹本身将保留。</translation>
+  <translation id="4233010476457917696">显示侧边栏</translation>
+  <translation id="2613033293035359003">隐藏侧边栏</translation>
 </translationbundle>
