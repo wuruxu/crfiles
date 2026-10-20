@@ -19,6 +19,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "components/vector_icons/vector_icons.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "crFiles/grit/crfiles_strings.h"
@@ -49,6 +50,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/scroll_view.h"
+#include "ui/views/controls/scrollbar/overlay_scroll_bar.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -263,6 +265,11 @@ class SearchPage : public views::View, public views::TextfieldController, public
     // The platform default is disabled on Linux/Windows, leaving plain Views at
     // their initial zero size even when they already contain matching rows.
     scroll_ = AddChildView(std::make_unique<views::ScrollView>(views::ScrollView::ScrollWithLayers::kEnabled));
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+    auto scrollbar = std::make_unique<views::OverlayScrollBar>(views::ScrollBar::Orientation::kVertical);
+    scrollbar->SetRoundedThumb(true);
+    scroll_->SetVerticalScrollBar(std::move(scrollbar));
+#endif
     scroll_->SetUseContentsPreferredSize(true); scroll_->SetBackgroundColor(std::nullopt);
     scroll_->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
     layout->SetFlexForView(scroll_, 1);

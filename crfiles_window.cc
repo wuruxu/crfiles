@@ -5021,6 +5021,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!history_page_) {
       files_->SetVerticalScrollBar(std::make_unique<FolderScrollBar>(views::ScrollBar::Orientation::kVertical, files_));
       files_->SetHorizontalScrollBar(std::make_unique<FolderScrollBar>(views::ScrollBar::Orientation::kHorizontal, files_));
+    } else {
+      auto scrollbar = std::make_unique<views::OverlayScrollBar>(views::ScrollBar::Orientation::kVertical);
+      scrollbar->SetRoundedThumb(true);
+      files_->SetVerticalScrollBar(std::move(scrollbar));
     }
 #endif
     file_surface_ = files_;
