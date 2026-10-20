@@ -5,6 +5,7 @@
 #include "crFiles/crfiles_video_thumbnail.mojom.h"
 #include "base/check.h"
 #include "base/functional/callback.h"
+#include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -50,9 +51,13 @@
 #include "third_party/skia/include/core/SkSamplingOptions.h"
 #if BUILDFLAG(ENABLE_FFMPEG)
 #include "media/base/media.h"
+#include "media/base/decoder_buffer.h"
 #include "media/base/video_decoder_config.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 #include "media/filters/ffmpeg_glue.h"
+#if BUILDFLAG(ENABLE_LIBVPX)
+#include "media/filters/vpx_video_decoder.h"
+#endif
 #include "crFiles/third_party/libde265/de265.h"
 extern "C" {
 #include "third_party/dav1d/libdav1d/include/dav1d/dav1d.h"
@@ -594,6 +599,80 @@ SkBitmap DecodeAv1(AVFormatContext* format, AVStream* video, const media::VideoD
   return {};
 }
 
+#if BUILDFLAG(ENABLE_LIBVPX)
+SkBitmap VpxFrameThumbnail(const media::VideoFrame& source,
+    const media::VideoDecoderConfig& config, int edge) {
+  AVFrame frame = {};
+  frame.width = source.visible_rect().width();
+  frame.height = source.visible_rect().height();
+  switch (source.format()) {
+    case media::PIXEL_FORMAT_I420: frame.format = AV_PIX_FMT_YUV420P; break;
+    case media::PIXEL_FORMAT_I422: frame.format = AV_PIX_FMT_YUV422P; break;
+    case media::PIXEL_FORMAT_I444: frame.format = AV_PIX_FMT_YUV444P; break;
+    case media::PIXEL_FORMAT_YUV420P10: frame.format = AV_PIX_FMT_YUV420P10LE; break;
+    case media::PIXEL_FORMAT_YUV422P10: frame.format = AV_PIX_FMT_YUV422P10LE; break;
+    case media::PIXEL_FORMAT_YUV444P10: frame.format = AV_PIX_FMT_YUV444P10LE; break;
+    case media::PIXEL_FORMAT_YUV420P12: frame.format = AV_PIX_FMT_YUV420P12LE; break;
+    case media::PIXEL_FORMAT_YUV422P12: frame.format = AV_PIX_FMT_YUV422P12LE; break;
+    case media::PIXEL_FORMAT_YUV444P12: frame.format = AV_PIX_FMT_YUV444P12LE; break;
+    default: return {};
+  }
+  auto planes = base::span(frame.data);
+  auto strides = base::span(frame.linesize);
+  for (size_t plane = 0; plane < 3; ++plane) {
+    if (source.stride(plane) > 128 * 1024) return {};
+    // FrameThumbnail only reads these planes; source retains their ownership.
+    planes[plane] = const_cast<uint8_t*>(source.visible_data(plane));
+    strides[plane] = static_cast<int>(source.stride(plane));
+  }
+  const auto colors = media::VideoColorSpace::FromGfxColorSpace(source.ColorSpace());
+  frame.color_primaries = static_cast<AVColorPrimaries>(colors.primaries());
+  frame.color_trc = static_cast<AVColorTransferCharacteristic>(colors.transfer());
+  frame.colorspace = static_cast<AVColorSpace>(colors.matrix());
+  frame.color_range = colors.range() == gfx::ColorSpace::RangeID::FULL ? AVCOL_RANGE_JPEG :
+      colors.range() == gfx::ColorSpace::RangeID::LIMITED ? AVCOL_RANGE_MPEG : AVCOL_RANGE_UNSPECIFIED;
+  return FrameThumbnail(frame, config, edge);
+}
+
+SkBitmap DecodeVpx(AVFormatContext* format, AVStream* video,
+    const media::VideoDecoderConfig& config, int edge, const ThumbnailInput& input) {
+  const auto size = config.coded_size();
+  if (!config.IsValidConfig() || size.width() > 8192 || size.height() > 8192 ||
+      static_cast<int64_t>(size.width()) * size.height() > 16 * 1024 * 1024) return {};
+  bool ok = false;
+  scoped_refptr<media::VideoFrame> frame;
+  // This child already isolates synchronous decoding. Offloaded mode keeps
+  // callbacks synchronous too, without a nested UI/IPC run loop.
+  media::VpxVideoDecoder decoder(media::OffloadableVideoDecoder::OffloadState::kOffloaded);
+  decoder.Initialize(config, false, nullptr,
+      base::BindOnce([](bool* ok, media::DecoderStatus status) { *ok = status.is_ok(); }, &ok),
+      base::BindRepeating([](scoped_refptr<media::VideoFrame>* result,
+                            scoped_refptr<media::VideoFrame> decoded) {
+        if (!*result) *result = std::move(decoded);
+      }, &frame), media::WaitingCB());
+  if (!ok || input.Expired()) return {};
+  std::unique_ptr<AVPacket, media::ScopedPtrAVFreePacket> packet(av_packet_alloc());
+  if (!packet) return {};
+  for (int count = 0; count < 512 && !input.Expired(); ++count) {
+    const int read = av_read_frame(format, packet.get());
+    if (read < 0) break;
+    if (packet->stream_index != video->index) { av_packet_unref(packet.get()); continue; }
+    const auto bytes = media::AVPacketData(*packet);
+    if (bytes.empty() || bytes.size() > 8 * 1024 * 1024) return {};
+    auto buffer = media::DecoderBuffer::CopyFrom(bytes);
+    buffer->set_is_key_frame((packet->flags & AV_PKT_FLAG_KEY) != 0);
+    buffer->set_timestamp(base::TimeDelta());
+    av_packet_unref(packet.get());
+    ok = false;
+    decoder.Decode(std::move(buffer),
+        base::BindOnce([](bool* ok, media::DecoderStatus status) { *ok = status.is_ok(); }, &ok));
+    if (!ok || input.Expired()) return {};
+    if (frame) return VpxFrameThumbnail(*frame, config, edge);
+  }
+  return {};
+}
+#endif
+
 SkBitmap DecodeVideo(const base::FilePath& path, int edge) {
   media::InitializeMediaLibrary();
   av_max_alloc(64 * 1024 * 1024);
@@ -619,6 +698,10 @@ SkBitmap DecodeVideo(const base::FilePath& path, int edge) {
   if (!media::AVStreamToVideoDecoderConfig(video, &config)) return {};
   if (video->codecpar->codec_id == AV_CODEC_ID_HEVC) return DecodeHevc(format, video, config, edge, input);
   if (video->codecpar->codec_id == AV_CODEC_ID_AV1) return DecodeAv1(format, video, config, edge, input);
+#if BUILDFLAG(ENABLE_LIBVPX)
+  if (video->codecpar->codec_id == AV_CODEC_ID_VP8 || video->codecpar->codec_id == AV_CODEC_ID_VP9)
+    return DecodeVpx(format, video, config, edge, input);
+#endif
   auto context = media::AVStreamToAVCodecContext(video);
   const auto* decoder = avcodec_find_decoder(video->codecpar->codec_id);
   if (!context || !decoder) return {};
