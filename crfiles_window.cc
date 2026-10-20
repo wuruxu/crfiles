@@ -1098,6 +1098,27 @@ class SplitButtonHighlightPath : public views::HighlightPathGenerator {
  private:
   bool leading_;
 };
+class ViewControlsCapsule : public views::View {
+  METADATA_HEADER(ViewControlsCapsule, views::View)
+ public:
+  ViewControlsCapsule() {
+    SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal));
+    SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface5, 18));
+  }
+  void OnPaintBackground(gfx::Canvas* canvas) override {
+    views::View::OnPaintBackground(canvas);
+    if (children().size() != 2 || height() <= 0) return;
+    const float divider_height = std::min(12.f, static_cast<float>(height()));
+    const float x = GetMirroredXInView(children().front()->bounds().right());
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysNeutralOutline));
+    canvas->DrawRoundRect(gfx::RectF(x - 0.5f, (height() - divider_height) / 2.f,
+        1.f, divider_height), 0.5f, flags);
+  }
+};
+BEGIN_METADATA(ViewControlsCapsule)
+END_METADATA
 class SidebarButton : public views::LabelButton {
   METADATA_HEADER(SidebarButton, views::LabelButton)
  public:
@@ -4885,6 +4906,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
         base::BindRepeating(&FilesView::History, base::Unretained(this), 1));
     add_navigation_button(kArrowUpwardIcon, IDS_CRFILES_UP, base::BindRepeating(&FilesView::Up, base::Unretained(this)));
     add_navigation_button(vector_icons::kRefreshIcon, IDS_CRFILES_REFRESH, base::BindRepeating(&FilesView::Refresh, base::Unretained(this)));
+    auto* navigation_separator = toolbar_->AddChildView(std::make_unique<views::Separator>());
+    navigation_separator->SetOrientation(views::Separator::Orientation::kVertical);
+    navigation_separator->SetPreferredLength(20);
+    // The toolbar already contributes 4px spacing on each side.
+    navigation_separator->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 2)));
     auto* path_area = toolbar_->AddChildView(std::make_unique<views::View>());
     path_area->SetLayoutManager(std::make_unique<views::FillLayout>());
     path_area->SetPreferredSize(gfx::Size(240, 32));
@@ -4908,9 +4934,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto* view_controls_host_layout = view_controls_host->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical));
     view_controls_host_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
-    auto* view_controls = view_controls_host->AddChildView(std::make_unique<views::View>());
-    view_controls->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal));
-    view_controls->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysBaseContainer, 18));
+    auto* view_controls = view_controls_host->AddChildView(std::make_unique<ViewControlsCapsule>());
     view_toggle_ = AddIconButton(view_controls, kGridViewIcon, IDS_CRFILES_ICONS,
         base::BindRepeating(&FilesView::ToggleViewMode, base::Unretained(this)));
     view_toggle_->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(3, 10)));
@@ -4919,8 +4943,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
     views::InkDrop::Get(view_toggle_)->SetHighlightOpacity(0.16f);
     views::InkDrop::Get(view_toggle_)->SetVisibleOpacity(0.26f);
     view_toggle_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
-    auto* divider = view_controls->AddChildView(std::make_unique<views::Separator>());
-    divider->SetOrientation(views::Separator::Orientation::kVertical);
     options_button_ = AddIconButton(view_controls, vector_icons::kExpandMoreOldIcon, IDS_CRFILES_VIEW_OPTIONS,
         base::BindRepeating(&FilesView::ShowViewOptions, base::Unretained(this)));
     options_button_->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(3, 10)));
