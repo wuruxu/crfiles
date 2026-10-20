@@ -67,6 +67,13 @@
 #include "base/threading/sequence_bound.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_LINUX)
+#include "ui/base/hit_test.h"
+#include "ui/gfx/geometry/point_conversions.h"
+#include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
+#include "ui/views/window/non_client_view.h"
+#endif
 #if BUILDFLAG(IS_POSIX)
 #include <sys/stat.h>
 #if BUILDFLAG(IS_LINUX)
@@ -1112,6 +1119,21 @@ class SidebarButton : public views::LabelButton {
     SchedulePaint();
   }
   void SetFeedback(float value) { feedback_ = value; SchedulePaint(); }
+  void SetMenuHighlight(bool value) { menu_highlight_ = value; SchedulePaint(); }
+  void UseStableHoverHighlight() {
+    stable_hover_ = true;
+    views::InkDrop::Get(this)->GetInkDrop()->SetShowHighlightOnHover(false);
+  }
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    hovered_ = true;
+    views::LabelButton::OnMouseEntered(event);
+    if (stable_hover_) SchedulePaint();
+  }
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    hovered_ = false;
+    views::LabelButton::OnMouseExited(event);
+    if (stable_hover_) SchedulePaint();
+  }
   void SetBreathing(bool enabled) {
     if (enabled == breathing_timer_.IsRunning()) return;
     if (enabled) {
@@ -1126,6 +1148,14 @@ class SidebarButton : public views::LabelButton {
     SchedulePaint();
   }
   void OnPaintBackground(gfx::Canvas* canvas) override {
+    if ((menu_highlight_ || (stable_hover_ && hovered_)) && !selected_) {
+      cc::PaintFlags highlight;
+      highlight.setAntiAlias(true);
+      highlight.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
+      highlight.setAlphaf(0.09f);
+      SidebarHighlightPath path;
+      canvas->DrawPath(path.GetHighlightPath(this), highlight);
+    }
     if (!selected_ && feedback_ <= 0.f) return;
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
@@ -1165,12 +1195,98 @@ class SidebarButton : public views::LabelButton {
     if (IsDrawn()) SchedulePaint();
   }
   bool selected_ = false;
+  bool menu_highlight_ = false;
+  bool stable_hover_ = false, hovered_ = false;
   float feedback_ = 0.f;
   float breathing_alpha_ = 0.f;
   base::TimeTicks breathing_start_;
   base::RepeatingTimer breathing_timer_;
 };
 BEGIN_METADATA(SidebarButton)
+END_METADATA
+class BookmarkButton : public SidebarButton {
+  METADATA_HEADER(BookmarkButton, SidebarButton)
+ public:
+  using ReorderCallback = base::RepeatingCallback<void(gfx::Point, bool, bool)>;
+  BookmarkButton(base::RepeatingClosure open, std::u16string title, ReorderCallback reorder)
+      : SidebarButton(std::move(open), std::move(title)), reorder_(std::move(reorder)) {
+    UseStableHoverHighlight();
+  }
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    pressed_ = event.IsOnlyLeftMouseButton(); dragging_ = false; origin_ = event.location();
+    return SidebarButton::OnMousePressed(event);
+  }
+  bool OnMouseDragged(const ui::MouseEvent& event) override {
+    if (pressed_ && (dragging_ || ExceededDragThreshold(event.location() - origin_))) {
+      if (!dragging_) CancelDragPressFeedback();
+      dragging_ = true;
+      auto point = event.location(); views::View::ConvertPointToScreen(this, &point);
+      reorder_.Run(point, false, false);
+      return true;
+    }
+    return SidebarButton::OnMouseDragged(event);
+  }
+  void OnMouseReleased(const ui::MouseEvent& event) override {
+    pressed_ = false;
+    if (dragging_) {
+      dragging_ = false;
+      CancelDragPressFeedback();
+      auto point = event.location(); views::View::ConvertPointToScreen(this, &point);
+      reorder_.Run(point, true, false);
+      return;
+    }
+    SidebarButton::OnMouseReleased(event);
+  }
+  void OnMouseCaptureLost() override {
+    pressed_ = false;
+    if (dragging_) {
+      dragging_ = false;
+      CancelDragPressFeedback();
+      reorder_.Run({}, true, true);
+    }
+    SidebarButton::OnMouseCaptureLost();
+  }
+ private:
+  void CancelDragPressFeedback() {
+    // A reorder consumes release without running the button's click/cancel path.
+    // Button state and the pending ink drop must therefore both be reset.
+    SetState(STATE_NORMAL);
+    views::InkDrop::Get(ink_drop_view())->AnimateToState(
+        views::InkDropState::HIDDEN, nullptr);
+  }
+  ReorderCallback reorder_;
+  gfx::Point origin_;
+  bool pressed_ = false, dragging_ = false;
+};
+BEGIN_METADATA(BookmarkButton)
+END_METADATA
+class BookmarkDragPreview : public views::LabelButton {
+  METADATA_HEADER(BookmarkDragPreview, views::LabelButton)
+ public:
+  explicit BookmarkDragPreview(const std::u16string& title)
+      : views::LabelButton(base::RepeatingClosure(), title) {
+    SetProperty(views::kViewIgnoredByLayoutKey, true);
+    SetImageModel(STATE_NORMAL, ui::ImageModel::FromVectorIcon(vector_icons::kFolderOpenIcon,
+        ui::kColorSysPrimary, 24));
+    SetImageLabelSpacing(8);
+    SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(10, 14)));
+    SetEnabledTextColors(ui::kColorSysOnSurface);
+    label()->SetSubpixelRenderingEnabled(false);
+    SetCanProcessEventsWithinSubtree(false);
+    SetPaintToLayer(); layer()->SetFillsBoundsOpaquely(false);
+  }
+  void OnPaintBackground(gfx::Canvas* canvas) override {
+    cc::PaintFlags flags; flags.setAntiAlias(true);
+    auto bounds = GetLocalBounds(); bounds.Inset(3);
+    auto shadow = bounds; shadow.Offset(0, 2);
+    flags.setColor(SkColorSetARGB(28, 0, 0, 0));
+    const int radius = std::min(bounds.width(), bounds.height()) / 2;
+    canvas->DrawRoundRect(shadow, radius, flags);
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysSurface));
+    canvas->DrawRoundRect(bounds, radius, flags);
+  }
+};
+BEGIN_METADATA(BookmarkDragPreview)
 END_METADATA
 class PropertiesSizeLabel : public views::Label, public views::WidgetObserver {
   METADATA_HEADER(PropertiesSizeLabel, views::Label)
@@ -1295,6 +1411,7 @@ void ShowFolderProperties(views::Widget* parent, base::FilePath path, OpenTagCal
 class BookmarksView : public views::View, public views::ContextMenuController, public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(BookmarksView, views::View)
  public:
+  void BookmarkPaths(std::vector<base::FilePath> paths) { AddPaths(entries_.size(), std::move(paths)); }
   BookmarksView(base::RepeatingCallback<void(base::FilePath)> open,
                 base::RepeatingCallback<void(base::FilePath)> new_tab, OpenTagCallback open_tag)
       : open_(std::move(open)), new_tab_(std::move(new_tab)), open_tag_(std::move(open_tag)) {
@@ -1324,7 +1441,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
     }
     Rebuild();
   }
-  ~BookmarksView() override { motion_timer_.Stop(); }
+  ~BookmarksView() override { motion_timer_.Stop(); CloseDragPreview(); }
   bool SetCurrentPath(const base::FilePath& path) {
     current_ = path;
     bool matched = false;
@@ -1343,6 +1460,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
   }
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
     const int operation = DropOperation(event);
+    external_drop_highlight_ = true;
     insertion_ = buttons_.size();
     for (size_t i = 0; i < buttons_.size(); ++i) {
       if (event.y() < buttons_[i]->bounds().CenterPoint().y()) { insertion_ = i; break; }
@@ -1359,9 +1477,11 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
     views::View::OnPaintBackground(canvas);
     if (drop_alpha_ <= 0.f) return;
     cc::PaintFlags flags; flags.setAntiAlias(true);
-    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimaryContainer));
-    flags.setAlphaf(drop_alpha_ * 0.35f);
-    canvas->DrawRoundRect(GetLocalBounds(), 8, flags);
+    if (external_drop_highlight_) {
+      flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimaryContainer));
+      flags.setAlphaf(drop_alpha_ * 0.35f);
+      canvas->DrawRoundRect(GetLocalBounds(), 8, flags);
+    }
     const int y = insertion_ < buttons_.size() ? buttons_[insertion_]->y() - 3 :
         buttons_.empty() ? 8 : buttons_.back()->bounds().bottom() + 3;
     flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary)); flags.setAlphaf(drop_alpha_);
@@ -1380,7 +1500,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
       layer->GetAnimator()->StopAnimating(); layer->SetTransform(offset);
       layer->SetOpacity(old == old_positions_.end() ? 0.f : 1.f);
       ui::ScopedLayerAnimationSettings animation(layer->GetAnimator());
-      animation.SetTransitionDuration(base::Milliseconds(180)); animation.SetTweenType(gfx::Tween::EASE_OUT);
+      animation.SetTransitionDuration(base::Milliseconds(160)); animation.SetTweenType(gfx::Tween::EASE_OUT);
       layer->SetTransform(gfx::Transform()); layer->SetOpacity(1.f);
     }
     old_positions_.clear();
@@ -1390,14 +1510,17 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
     const auto found = std::ranges::find_if(buttons_, [source](const auto& button) { return button.get() == source; });
     if (found == buttons_.end()) return;
     context_ = entries_[std::distance(buttons_.begin(), found)].path;
-    runner_.reset(); menu_ = std::make_unique<ui::SimpleMenuModel>(this);
+    runner_.reset(); ClearMenuHighlight();
+    (*found)->SetMenuHighlight(true);
+    menu_ = std::make_unique<ui::SimpleMenuModel>(this);
     menu_->AddItem(IDS_CRFILES_OPEN_NEW_TAB, Text(IDS_CRFILES_OPEN_NEW_TAB));
     menu_->AddSeparator(ui::NORMAL_SEPARATOR);
     menu_->AddItem(IDS_CRFILES_REMOVE_BOOKMARK, Text(IDS_CRFILES_REMOVE_BOOKMARK));
     menu_->AddItem(IDS_CRFILES_RENAME, Text(IDS_CRFILES_RENAME));
     menu_->AddSeparator(ui::NORMAL_SEPARATOR);
     menu_->AddItem(IDS_CRFILES_PROPERTIES, Text(IDS_CRFILES_PROPERTIES));
-    runner_ = std::make_unique<views::MenuRunner>(menu_.get(), views::MenuRunner::CONTEXT_MENU);
+    runner_ = std::make_unique<views::MenuRunner>(menu_.get(), views::MenuRunner::CONTEXT_MENU,
+        base::BindRepeating(&BookmarksView::ClearMenuHighlight, weak_.GetWeakPtr()));
     runner_->RunMenuAt(GetWidget(), nullptr, gfx::Rect(point, gfx::Size(1, 1)), views::MenuAnchorPosition::kTopLeft, type);
   }
   bool IsCommandIdEnabled(int) const override { return true; }
@@ -1407,6 +1530,83 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
   }
  private:
   struct Bookmark { base::FilePath path; std::string name; int kind = 0; };
+  void ClearMenuHighlight() {
+    for (const auto& button : buttons_) button->SetMenuHighlight(false);
+  }
+  void CloseDragPreview() {
+    if (auto* preview = drag_preview_.view()) {
+      preview->parent()->RemoveChildViewT(preview);
+      drag_preview_.SetView(nullptr);
+    }
+  }
+  void AnimateReorder(const base::FilePath& path, size_t insertion, bool active) {
+    auto found = std::ranges::find(entries_, path, &Bookmark::path);
+    if (found == entries_.end()) return;
+    const size_t from = std::distance(entries_.begin(), found);
+    size_t to = std::min(insertion, entries_.size());
+    if (to > from) --to;
+    const int step = buttons_[from]->height() + 6;
+    for (size_t i = 0; i < buttons_.size(); ++i) {
+      gfx::Transform transform;
+      if (active && i > from && i <= to) transform.Translate(0, -step);
+      else if (active && i >= to && i < from) transform.Translate(0, step);
+      auto* layer = buttons_[i]->layer();
+      if (layer->GetTargetTransform() == transform &&
+          layer->GetTargetOpacity() == (active && i == from ? 0.32f : 1.f)) continue;
+      ui::ScopedLayerAnimationSettings animation(layer->GetAnimator());
+      animation.SetTransitionDuration(base::Milliseconds(160));
+      animation.SetTweenType(gfx::Tween::EASE_OUT);
+      animation.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
+      layer->SetTransform(transform);
+      layer->SetOpacity(active && i == from ? 0.32f : 1.f);
+    }
+  }
+  void ReorderBookmark(base::FilePath path, gfx::Point point, bool finished, bool cancelled) {
+    external_drop_highlight_ = false;
+    if (cancelled) { CloseDragPreview(); AnimateReorder(path, 0, false); SetDropHighlight(false); return; }
+    const auto screen_point = point;
+    views::View::ConvertPointFromScreen(this, &point);
+    insertion_ = buttons_.size();
+    for (size_t i = 0; i < buttons_.size(); ++i) {
+      if (point.y() < buttons_[i]->bounds().CenterPoint().y()) { insertion_ = i; break; }
+    }
+    const bool inside = GetVisibleBounds().Contains(point);
+    SetDropHighlight(inside && !finished); SchedulePaint();
+    if (!finished) {
+      const auto found = std::ranges::find(entries_, path, &Bookmark::path);
+      if (found == entries_.end()) return;
+      const size_t source_index = std::distance(entries_.begin(), found);
+      auto* root = GetWidget()->GetRootView();
+      if (!drag_preview_.view()) {
+        drag_preview_.SetView(root->AddChildView(std::make_unique<BookmarkDragPreview>(Name(*found))));
+      }
+      auto location = screen_point; views::View::ConvertPointFromScreen(root, &location);
+      auto* preview = drag_preview_.view();
+      const auto size = preview->GetPreferredSize();
+      preview->SetBounds(location.x() + 6, location.y() + 6, buttons_[source_index]->width() * 9 / 10, size.height());
+      AnimateReorder(path, insertion_, inside);
+      if (inside) ScrollRectToVisible(gfx::Rect(point.x(), std::max(0, point.y() - 20), 1, 40));
+      return;
+    }
+    CloseDragPreview();
+    if (!inside) { AnimateReorder(path, 0, false); return; }
+    // Commit rebuilds the buttons. Wait until mouse dispatch has returned.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce(&BookmarksView::MoveBookmark, weak_.GetWeakPtr(), path, insertion_));
+  }
+  void MoveBookmark(const base::FilePath& path, size_t insertion) {
+    auto entries = entries_;
+    const auto found = std::ranges::find(entries, path, &Bookmark::path);
+    if (found == entries.end()) return;
+    const size_t from = std::distance(entries.begin(), found);
+    insertion = std::min(insertion, entries.size());
+    if (insertion > from) --insertion;
+    if (insertion == from) { AnimateReorder(path, 0, false); return; }
+    auto moved = std::move(*found); entries.erase(found);
+    entries.insert(entries.begin() + insertion, std::move(moved));
+    if (Commit(std::move(entries))) Flash({path});
+    else AnimateReorder(path, 0, false);
+  }
   void StartMotionTimer() {
     if (!motion_timer_.IsRunning()) motion_timer_.Start(FROM_HERE, base::Milliseconds(16), this, &BookmarksView::AnimateFeedback);
   }
@@ -1468,7 +1668,8 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
   void Rebuild() {
     buttons_.clear(); error_ = nullptr; RemoveAllChildViews();
     for (const auto& entry : entries_) {
-      auto* button = AddChildView(std::make_unique<SidebarButton>(base::BindRepeating(open_, entry.path), Name(entry)));
+      auto* button = AddChildView(std::make_unique<BookmarkButton>(base::BindRepeating(open_, entry.path), Name(entry),
+          base::BindRepeating(&BookmarksView::ReorderBookmark, weak_.GetWeakPtr(), entry.path)));
       button->SetPaintToLayer(); button->layer()->SetFillsBoundsOpaquely(false);
       button->SetHorizontalAlignment(gfx::ALIGN_LEFT); button->SetImageLabelSpacing(10);
       button->SetImageModel(views::Button::STATE_NORMAL,
@@ -1567,6 +1768,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
   base::FilePath current_, context_;
   size_t insertion_ = 0;
   bool drop_visible_ = false, animate_layout_ = false;
+  bool external_drop_highlight_ = false;
   float drop_alpha_ = 0.f, drop_start_alpha_ = 0.f;
   base::TimeTicks drop_start_, feedback_start_;
   base::RepeatingTimer motion_timer_;
@@ -1574,6 +1776,7 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
   std::set<base::FilePath> feedback_paths_;
   std::unique_ptr<ui::SimpleMenuModel> menu_;
   std::unique_ptr<views::MenuRunner> runner_;
+  views::ViewTracker drag_preview_;
   base::WeakPtrFactory<BookmarksView> weak_{this};
 };
 BEGIN_METADATA(BookmarksView)
@@ -3323,6 +3526,24 @@ class FileButton : public views::LabelButton {
     if (icons_) SetPreferredSize(gfx::Size(std::max(92, icon_size_ + 47), icon_size_ + 47));
     InvalidateLayout();
   }
+  void SetFileImage(const ui::ImageModel& image, bool fade_in = false) {
+    auto* image_view = image_container_view();
+    if (image_view->layer()) {
+      image_view->layer()->GetAnimator()->StopAnimating();
+      image_view->layer()->SetOpacity(1.f);
+    }
+    SetImageModel(STATE_NORMAL, image);
+    if (!fade_in || !IsDrawn() || GetVisibleBounds().IsEmpty()) return;
+    if (!image_view->layer()) {
+      image_view->SetPaintToLayer();
+      image_view->layer()->SetFillsBoundsOpaquely(false);
+    }
+    image_view->layer()->SetOpacity(0.f);
+    ui::ScopedLayerAnimationSettings animation(image_view->layer()->GetAnimator());
+    animation.SetTransitionDuration(base::Milliseconds(120));
+    animation.SetTweenType(gfx::Tween::EASE_OUT);
+    image_view->layer()->SetOpacity(1.f);
+  }
   void SetDragDoneCallback(base::RepeatingClosure callback) { drag_done_ = std::move(callback); }
   void OnDragDone() override {
     views::LabelButton::OnDragDone();
@@ -4596,6 +4817,40 @@ struct Tab {
 class FilesView : public views::View, public views::TextfieldController, public views::ResizeAreaDelegate, public views::DragController, public ui::SimpleMenuModel::Delegate, public views::ContextMenuController, public ui::SelectFileDialog::Listener {
   METADATA_HEADER(FilesView, views::View)
  public:
+  void NewTabFromTitlebar() { NewCurrentTab(); }
+  bool CanReopenTab() const { return !closed_tabs_.empty(); }
+  void ReopenTab() {
+    if (closed_tabs_.empty()) return;
+    auto saved = std::move(closed_tabs_.back()); closed_tabs_.pop_back();
+    SuspendPanePopups();
+    for (auto& tab : tabs_) tab.pane_host->SetVisible(false);
+    tabs_.push_back(Tab{.id = next_id_++}); active_ = tabs_.size() - 1;
+    auto* host = split_host_->AddChildView(std::make_unique<views::View>());
+    host->SetLayoutManager(std::make_unique<views::FillLayout>());
+    Current().pane_host = host;
+    Current().deferred_tree = saved.FindDict("tree")->Clone();
+    Current().deferred_active = *saved.FindString("active_pane");
+    Current().pinned = saved.FindBool("pinned").value_or(false);
+    SelectPaneTab(Current().id);
+  }
+  void BookmarkTabs() {
+    std::vector<base::FilePath> paths;
+    auto collect = [&](auto&& self, const base::DictValue& tree) -> void {
+      if (const auto* first = tree.FindDict("first")) self(self, *first);
+      if (const auto* second = tree.FindDict("second")) self(self, *second);
+      if (tree.FindBool("history_page").value_or(false) || tree.FindString("tag_id")) return;
+      if (const auto* path = tree.FindString("path")) {
+        auto folder = base::FilePath::FromUTF8Unsafe(*path);
+        if (folder.IsAbsolute() && !folder.ReferencesParent()) paths.push_back(std::move(folder));
+      }
+    };
+    for (const auto& tab : tabs_) {
+      auto tree = tab.deferred_tree ? tab.deferred_tree->Clone() :
+          SerializePane(tab.pane_host->children().front().get());
+      collect(collect, tree);
+    }
+    bookmarks_->BookmarkPaths(std::move(paths));
+  }
   explicit FilesView(FilesView* root = nullptr, base::FilePath initial_path = {}, bool history_page = false, bool deferred_start = false, bool search_page = false, int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}) : search_scope_(std::move(search_scope)), tag_id_(tag_id), tag_name_(std::move(tag_name)), history_page_(history_page || search_page), search_page_(search_page), root_(root), sharing_(root ? nullptr : std::make_shared<NearbySharing>()) {
     if (!root_) g_contents = this;
     if (root_) {
@@ -5156,7 +5411,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
             pane->ApplyLiveDirectory(std::move(data));
             pane->RequestFileVisuals();
           } else {
-            pane->SaveScroll(); pane->CancelOrdering(); pane->CancelFileVisuals(); pane->ClearMaterializedRows();
+            pane->SaveScroll(); pane->CancelOrdering(); pane->CancelFileVisuals(); pane->ClearMaterializedRows(true);
             current.error = !data.ok;
             std::erase_if(current.visuals, [&](const auto& item) { return !data.delta->unchanged.contains(item.first); });
             std::erase_if(current.failed_thumbnails, [&](const auto& path) { return !data.delta->unchanged.contains(path); });
@@ -5997,7 +6252,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextShare, IDS_CRFILES_SHARE_TO, &vector_icons::kScreenShareIcon);
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-      add(kContextQuickShare, IDS_CRFILES_QUICK_SHARE, &kQuickShareAndroidIcon);
+      context_menu_->AddItemWithIcon(kContextQuickShare, Text(IDS_CRFILES_QUICK_SHARE),
+          ui::ImageModel::FromVectorIcon(kQuickShareAndroidIcon, ui::kColorSysTertiary, 18));
 #endif
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextRename, IDS_CRFILES_RENAME, &kEditIcon); add(kContextCompress, IDS_CRFILES_COMPRESS, &kCompressIcon); add(kContextTrash, IDS_CRFILES_MOVE_TRASH, &kDeleteIcon);
@@ -7479,6 +7735,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (found == tabs_.end()) return;
     if (tabs_.size() == 1) { GetWidget()->Close(); return; }
     SuspendPanePopups();
+    base::DictValue saved;
+    saved.Set("tree", found->deferred_tree ? found->deferred_tree->Clone() :
+        SerializePane(found->pane_host->children().front().get()));
+    saved.Set("active_pane", found->deferred_tree ? found->deferred_active : found->active_pane->pane_id_);
+    saved.Set("pinned", found->pinned);
+    if (closed_tabs_.size() >= 20) closed_tabs_.erase(closed_tabs_.begin());
+    closed_tabs_.push_back(std::move(saved));
     const int previous_id = Current().id;
     auto* host = found->pane_host.get();
     found->active_pane = nullptr; found->pane_host = nullptr;
@@ -8080,7 +8343,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         tab.selected.clear(); tab.visuals.clear(); tab.failed_thumbnails.clear();
         tab.scroll = restored_scroll_.value_or(0); restored_scroll_.reset();
       }
-      CancelOrdering(); ClearMaterializedRows();
+      CancelOrdering(); ClearMaterializedRows(true);
       tab.path = result.path; tab.entries = std::move(result.entries); tab.removed.clear(); ++tab.metadata_generation;
       tab.sorted_entries = result.order.values(); tab.sorted_mode = result.sort; tab.sorted_hidden = result.hidden;
       if (history_index >= 0) tab.history_index = history_index;
@@ -8170,7 +8433,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (!weak_button) continue;
       auto* button = static_cast<FileButton*>(weak_button.get());
       button->SetIconSize(size);
-      button->SetImageModel(views::Button::STATE_NORMAL, FileImage(*entry));
+      button->SetFileImage(FileImage(*entry));
     }
     if (!Current().options.icons) {
       const int row_height = std::max(36, size + 12);
@@ -8782,11 +9045,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     read_cancel_ = std::make_shared<std::atomic_bool>(false);
     directory_retry_.Stop(); CancelOrdering();
   }
-  void ClearMaterializedRows() {
+  void ClearMaterializedRows(bool preserve_visuals = false) {
     if (!files_->contents() || history_page_) return;
     std::vector<base::FilePath> paths;
     for (const auto& [path, row] : row_views_) paths.push_back(path);
-    RemoveFileRows(paths);
+    RemoveFileRows(paths, false, preserve_visuals);
     // Keep the old scroll extent until the sorted replacement is ready.
     displayed_entries_.clear();
   }
@@ -8834,7 +9097,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         materialized_positions_.emplace(entry.path, position);
     }
   }
-  void RemoveFileRows(const std::vector<base::FilePath>& paths, bool recycle = false) {
+  void RemoveFileRows(const std::vector<base::FilePath>& paths, bool recycle = false, bool preserve_visuals = false) {
     std::set<base::FilePath> removed_paths;
     std::set<views::View*> removed_rows;
     for (const auto& path : paths) {
@@ -8858,7 +9121,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         auto visual = Current().visuals.find(path);
         if (visual != Current().visuals.end()) RememberRowThumbnail(path, visual->second);
       }
-      Current().visuals.erase(path);
+      if (!preserve_visuals) Current().visuals.erase(path);
       file_buttons_.erase(path);
       row_views_.erase(path);
       pending_row_details_.erase(path);
@@ -8872,7 +9135,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (recycle) {
         // Drop image references before pooling; decoded cache memory remains bounded.
         auto* button = static_cast<FileButton*>(row->children().front().get());
-        button->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel());
+        button->SetFileImage(ui::ImageModel());
         layout->RecycleRow(static_cast<FileRow*>(row));
       } else {
         layout->RemoveChildViewT(row);
@@ -9357,7 +9620,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         if (options.created_column) column(tile, 4);
         if (options.permissions_column) column(tile, 5);
       }
-      open->SetImageModel(views::Button::STATE_NORMAL, FileImage(entry));
+      open->SetFileImage(FileImage(entry));
       file_buttons_.emplace(entry.path, open->GetWeakPtr());
       visible_buttons_.emplace_back(&entry, open->GetWeakPtr());
     // Cached details are ready; uncached cells were cleared before showing.
@@ -9445,6 +9708,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
         return ui::ImageModel::FromImageSkia(visual.thumbnail_display);
       }
       if (visual.thumbnail_display_only) return ui::ImageModel::FromImageSkia(visual.thumbnail_display);
+      if (!entry.directory) {
+        visual.thumbnail = FindMemoryThumbnail(entry.path, entry.size, entry.modified, kFileIconSizes.back());
+        if (!visual.thumbnail.isNull()) visual.thumbnail_attempted = true;
+      }
     }
     if (allow_thumbnail && !visual.thumbnail.isNull()) {
       // ImageSkia retains generated representations for each device scale.
@@ -9490,7 +9757,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
               << " edge=" << kFileIconSizes[options.icon_index] << " pane=" << Current().id
               << " request=" << Current().request << " image_empty=" << cached->isNull();
 #endif
-        static_cast<FileButton*>(button->second.get())->SetImageModel(views::Button::STATE_NORMAL, FileImage(entry));
+        static_cast<FileButton*>(button->second.get())->SetFileImage(FileImage(entry));
       }
     }
     const bool video = IsVideoThumbnailPath(entry.path);
@@ -9792,16 +10059,24 @@ class FilesView : public views::View, public views::TextfieldController, public 
               << " retries_exhausted=" << (result.retry_icon && !retry);
 #endif
       }
+      bool fade_thumbnail = false;
       if (item.thumbnail) {
-        if (result.thumbnail.isNull()) Current().failed_thumbnails.insert(entry->path);
-        else Current().failed_thumbnails.erase(entry->path);
         auto& visuals = Current().visuals[entry->path];
-        visuals.thumbnail = std::move(result.thumbnail); visuals.thumbnail_attempted = true;
-        visuals.thumbnail_display = {};
-        visuals.thumbnail_display_edge = 0;
-        visuals.thumbnail_display_only = false;
+        if (result.thumbnail.isNull() && visuals.thumbnail.isNull() && !visuals.thumbnail_display_only)
+          Current().failed_thumbnails.insert(entry->path);
+        else Current().failed_thumbnails.erase(entry->path);
+        fade_thumbnail = !item.probe && !result.thumbnail.isNull() &&
+            visuals.thumbnail.isNull() && !visuals.thumbnail_display_only;
+        visuals.thumbnail_attempted = true;
+        // A late failed job must not replace an already available preview.
+        if (!result.thumbnail.isNull()) {
+          visuals.thumbnail = std::move(result.thumbnail);
+          visuals.thumbnail_display = {};
+          visuals.thumbnail_display_edge = 0;
+          visuals.thumbnail_display_only = false;
+        }
       }
-      static_cast<FileButton*>(button->second.get())->SetImageModel(views::Button::STATE_NORMAL, FileImage(*entry));
+      static_cast<FileButton*>(button->second.get())->SetFileImage(FileImage(*entry), fade_thumbnail);
       QueueFileVisual(item.path);
     }
     if (!visual_ready_.empty())
@@ -10178,6 +10453,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool pane_border_active_ = false;
   SplitSelectionStyle pane_border_style_ = SplitSelectionStyle::kFlow;
   std::vector<Tab> tabs_;
+  std::vector<base::DictValue> closed_tabs_;
   size_t active_ = 0;
   int next_id_ = 1;
   raw_ptr<views::View> tabs_view_ = nullptr;
@@ -10364,6 +10640,10 @@ void ToggleCrFilesSidebar() {
   if (g_contents && !IsCrFilesWindowBlockedByModal(g_contents->GetWidget()))
     g_contents->ToggleSidebarFromTitlebar();
 }
+void NewCrFilesTab() { if (g_contents) g_contents->NewTabFromTitlebar(); }
+bool CanReopenCrFilesTab() { return g_contents && g_contents->CanReopenTab(); }
+void ReopenCrFilesTab() { if (g_contents) g_contents->ReopenTab(); }
+void BookmarkCrFilesTabs() { if (g_contents) g_contents->BookmarkTabs(); }
 void ApplyCrFilesSharingSettings() { if (g_contents) g_contents->ApplySharing(); }
 void HideCrFilesWindow() {
   if (g_quitting || !Window() || Window()->IsClosed() || !Window()->IsVisible()) return;
@@ -10413,6 +10693,35 @@ void QuitCrFiles() {
   g_quitting = true;
   Window()->Close();
 }
+#if BUILDFLAG(IS_LINUX)
+class FilesWindowTreeHostLinux : public views::DesktopWindowTreeHostLinux {
+ public:
+  FilesWindowTreeHostLinux(views::Widget* widget, views::DesktopNativeWidgetAura* native)
+      : views::DesktopWindowTreeHostLinux(widget, native), widget_(widget) {}
+  void DispatchEvent(ui::Event* event) override {
+    // The Linux host consumes caption clicks before Aura pre-target handlers.
+    // Intercept only our titlebar's context menu; keep native move/resize paths.
+    if (event->type() == ui::EventType::kMousePressed &&
+        event->AsMouseEvent()->IsOnlyRightMouseButton() &&
+        widget_->non_client_view() && !widget_->IsClosed() &&
+        !IsCrFilesWindowBlockedByModal(widget_)) {
+      auto* frame = widget_->non_client_view()->frame_view();
+      const auto location = event->AsMouseEvent()->location_f();
+      auto point = gfx::ToRoundedPoint(GetRootTransform().InverseMapPoint(location).value_or(location));
+      views::View::ConvertPointToTarget(widget_->GetRootView(), frame, &point);
+      if (frame->NonClientHitTest(point) == HTCAPTION) {
+        views::View::ConvertPointToScreen(frame, &point);
+        event->SetHandled();
+        frame->ShowContextMenu(point, ui::mojom::MenuSourceType::kMouse);
+        return;
+      }
+    }
+    views::DesktopWindowTreeHostLinux::DispatchEvent(event);
+  }
+ private:
+  raw_ptr<views::Widget> widget_;
+};
+#endif
 void ShowCrFilesWindow(base::OnceClosure quit) {
   g_quitting = false;
   InitializeCrFilesTheme();
@@ -10435,6 +10744,9 @@ void ShowCrFilesWindow(base::OnceClosure quit) {
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
 #endif
 #if BUILDFLAG(IS_LINUX)
+  auto* native = new views::DesktopNativeWidgetAura(Window().get());
+  params.native_widget = native;
+  params.desktop_window_tree_host = new FilesWindowTreeHostLinux(Window().get(), native);
   params.wm_class_name = "libcr.crfiles"; params.wm_class_class = "libcr.crfiles";
   params.wayland_app_id = "libcr.crfiles";
 #endif

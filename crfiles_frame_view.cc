@@ -7,6 +7,12 @@
 #include <vector>
 #include "base/memory/weak_ptr.h"
 #include "base/task/thread_pool.h"
+#include "base/task/single_thread_task_runner.h"
+#include "crFiles/crfiles_dialog.h"
+#include "ui/menus/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/views/context_menu_controller.h"
+#include "ui/views/controls/menu/menu_runner.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "components/vector_icons/vector_icons.h"
@@ -57,11 +63,11 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include <cmath>
-#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "crFiles/crfiles_dialog.h"
-#include "ui/aura/window.h"
 #include "ui/display/win/screen_win.h"
+#endif
+#if BUILDFLAG(IS_WIN)
+#include "ui/aura/window.h"
 #include "ui/events/event.h"
 #include "ui/events/event_handler.h"
 #endif
@@ -223,24 +229,26 @@ BEGIN_METADATA(OptionsMenuOverlayView)
 END_METADATA
 
 #if BUILDFLAG(IS_WIN)
-class TitlebarDoubleClickHandler : public ui::EventHandler {
+class TitlebarMouseHandler : public ui::EventHandler {
  public:
-  TitlebarDoubleClickHandler(views::FrameView* frame, views::Widget* widget)
+  TitlebarMouseHandler(views::FrameView* frame, views::Widget* widget)
       : frame_(frame), widget_(widget),
         event_window_(widget->GetNativeView()->GetRootWindow()) {
     // Caption input may target the host rather than the content window.
-    event_window_->AddPreTargetHandler(this);
+    event_window_->AddPreTargetHandler(this, ui::EventTarget::Priority::kSystem);
   }
-  ~TitlebarDoubleClickHandler() override {
+  ~TitlebarMouseHandler() override {
     event_window_->RemovePreTargetHandler(this);
   }
   void OnMouseEvent(ui::MouseEvent* event) override {
     if (event->type() != ui::EventType::kMousePressed) return;
+#if BUILDFLAG(IS_WIN)
     const auto previous_press = last_press_;
     last_press_ = base::TimeTicks();
-    if (!event->IsOnlyLeftMouseButton() || !event->target() ||
+#endif
+    if ((!event->IsOnlyLeftMouseButton() && !event->IsOnlyRightMouseButton()) || !event->target() ||
         widget_->IsClosed() || widget_->IsFullscreen() ||
-        !widget_->widget_delegate()->CanMaximize() ||
+        (event->IsOnlyLeftMouseButton() && !widget_->widget_delegate()->CanMaximize()) ||
         IsCrFilesWindowBlockedByModal(widget_)) return;
     auto point = event->location();
     aura::Window::ConvertPointToTarget(
@@ -249,6 +257,12 @@ class TitlebarDoubleClickHandler : public ui::EventHandler {
     views::View::ConvertPointToTarget(widget_->GetRootView(), frame_, &point);
     if (frame_->NonClientHitTest(point) != HTCAPTION) return;
     views::View::ConvertPointToScreen(frame_, &point);
+    if (event->IsOnlyRightMouseButton()) {
+      event->StopPropagation();
+      frame_->ShowContextMenu(point, ui::mojom::MenuSourceType::kMouse);
+      return;
+    }
+#if BUILDFLAG(IS_WIN)
     const auto screen_point =
         display::win::GetScreenWin()->DIPToScreenPoint(point);
     const auto elapsed = event->time_stamp() - previous_press;
@@ -273,20 +287,25 @@ class TitlebarDoubleClickHandler : public ui::EventHandler {
           if (maximize) widget->Maximize();
           else widget->Restore();
         }, widget_->GetWeakPtr(), !widget_->IsMaximized()));
+#endif
   }
  private:
   raw_ptr<views::FrameView> frame_;
   raw_ptr<views::Widget> widget_;
   raw_ptr<aura::Window> event_window_;
+#if BUILDFLAG(IS_WIN)
   base::TimeTicks last_press_;
   gfx::Point last_press_point_;
+#endif
 };
 #endif
 
-class FilesFrameView : public views::FrameView, public views::WidgetObserver {
+class FilesFrameView : public views::FrameView, public views::WidgetObserver,
+                       public views::ContextMenuController, public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(FilesFrameView, views::FrameView)
  public:
   explicit FilesFrameView(views::Widget* widget) : widget_(widget) {
+    set_context_menu_controller(this);
     icon_ = AddChildView(std::make_unique<SidebarButton>());
     icon_->SetImageModel(views::Button::STATE_NORMAL, CreateCrFilesIconModel(gfx::Size(20, 20)));
     icon_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
@@ -302,6 +321,7 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     separator_->SetOrientation(views::Separator::Orientation::kVertical);
     separator_->SetColorId(ui::kColorSysOnHeaderDivider);
     tabs_ = AddChildView(CreateCrFilesTabStrip(widget_));
+    tabs_->set_context_menu_controller(this);
     title_ = AddChildView(std::make_unique<views::Label>());
     // The frame paints rounded corners and shadows onto a translucent layer.
     title_->SetSubpixelRenderingEnabled(false);
@@ -321,11 +341,53 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver {
     UpdateWindowTitle();
     UpdateColors();
   }
+  void ShowContextMenuForViewImpl(views::View*, const gfx::Point& point,
+                                 ui::mojom::MenuSourceType type) override {
+    gfx::Point local = point;
+    views::View::ConvertPointFromScreen(this, &local);
+    if (NonClientHitTest(local) != HTCAPTION || IsCrFilesWindowBlockedByModal(widget_)) return;
+    title_menu_runner_.reset();
+    title_menu_ = std::make_unique<ui::SimpleMenuModel>(this);
+    auto add = [&](int id) { title_menu_->AddItem(id, l10n_util::GetStringUTF16(id)); };
+    add(IDS_CRFILES_MINIMIZE);
+    add(widget_->IsMaximized() ? IDS_CRFILES_RESTORE : IDS_CRFILES_MAXIMIZE);
+    title_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
+    add(IDS_CRFILES_NEW_TAB);
+    add(IDS_CRFILES_REOPEN_CLOSED_TAB);
+    add(IDS_CRFILES_BOOKMARK_ALL_TABS);
+    title_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
+    add(IDS_CRFILES_CLOSE);
+    title_menu_runner_ = std::make_unique<views::MenuRunner>(title_menu_.get(), views::MenuRunner::CONTEXT_MENU);
+    title_menu_runner_->RunMenuAt(widget_, nullptr, gfx::Rect(point, gfx::Size()),
+        views::MenuAnchorPosition::kTopLeft, type);
+  }
+  bool IsCommandIdEnabled(int command) const override {
+    if (command == IDS_CRFILES_REOPEN_CLOSED_TAB) return CanReopenCrFilesTab();
+    if (command == IDS_CRFILES_MINIMIZE) return widget_->widget_delegate()->CanMinimize();
+    if (command == IDS_CRFILES_MAXIMIZE) return widget_->widget_delegate()->CanMaximize();
+    return true;
+  }
+  void ExecuteCommand(int command, int) override {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce(&FilesFrameView::RunTitlebarCommand, weak_factory_.GetWeakPtr(), command));
+  }
+  void RunTitlebarCommand(int command) {
+    if (widget_->IsClosed() || IsCrFilesWindowBlockedByModal(widget_)) return;
+    switch (command) {
+      case IDS_CRFILES_MINIMIZE: widget_->Minimize(); break;
+      case IDS_CRFILES_RESTORE: widget_->Restore(); break;
+      case IDS_CRFILES_MAXIMIZE: widget_->Maximize(); break;
+      case IDS_CRFILES_NEW_TAB: NewCrFilesTab(); break;
+      case IDS_CRFILES_REOPEN_CLOSED_TAB: ReopenCrFilesTab(); break;
+      case IDS_CRFILES_BOOKMARK_ALL_TABS: BookmarkCrFilesTabs(); break;
+      case IDS_CRFILES_CLOSE: widget_->Close(); break;
+    }
+  }
 #if BUILDFLAG(IS_WIN)
   void AddedToWidget() override {
     views::FrameView::AddedToWidget();
     titlebar_click_handler_ =
-        std::make_unique<TitlebarDoubleClickHandler>(this, widget_);
+        std::make_unique<TitlebarMouseHandler>(this, widget_);
   }
   void RemovedFromWidget() override {
     titlebar_click_handler_.reset();
@@ -577,6 +639,8 @@ void ShowInstallResult(bool success) {
     SchedulePaint();
   }
   raw_ptr<libcr::TitlebarIconButton> options_button_ = nullptr;
+  std::unique_ptr<ui::SimpleMenuModel> title_menu_;
+  std::unique_ptr<views::MenuRunner> title_menu_runner_;
   raw_ptr<views::View> options_menu_overlay_ = nullptr;
   raw_ptr<views::View> options_menu_view_ = nullptr;
   raw_ptr<views::ImageButton> icon_ = nullptr;
@@ -597,7 +661,7 @@ void ShowInstallResult(bool success) {
   raw_ptr<views::Button> minimize_ = nullptr, maximize_ = nullptr;
   raw_ptr<views::Button> restore_ = nullptr, close_ = nullptr;
 #if BUILDFLAG(IS_WIN)
-  std::unique_ptr<TitlebarDoubleClickHandler> titlebar_click_handler_;
+  std::unique_ptr<TitlebarMouseHandler> titlebar_click_handler_;
 #endif
   base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
   base::WeakPtrFactory<FilesFrameView> weak_factory_{this};

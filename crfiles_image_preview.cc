@@ -186,6 +186,23 @@ gfx::ImageSkia LoadThumbnailImpl(const base::FilePath& path, int maximum_edge,
   return image;
 }
 }
+gfx::ImageSkia FindMemoryThumbnail(const base::FilePath& path, int64_t size,
+    base::Time modified, int maximum_edge) {
+  auto& cache = Thumbnails();
+  base::AutoLock guard(cache.lock);
+  auto found = cache.index.lower_bound(ThumbnailKey{path, std::numeric_limits<int64_t>::min(),
+      base::Time(), base::Time(), 0});
+  for (; found != cache.index.end() && std::get<0>(found->first) == path; ++found) {
+    const auto& key = found->first;
+    if (std::get<1>(key) != size || std::get<2>(key) != modified ||
+        std::get<4>(key) != maximum_edge) continue;
+    const auto item = found->second;
+    if (!item->epoch->Matches(item->revision)) continue;
+    cache.recent.splice(cache.recent.begin(), cache.recent, item);
+    return item->image;
+  }
+  return {};
+}
 gfx::ImageSkia FindCachedThumbnail(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled) {
   return LoadThumbnailImpl(path, maximum_edge, canceled, false);

@@ -3,18 +3,24 @@
 #ifndef CRFILES_IMAGE_PREVIEW_H_
 #define CRFILES_IMAGE_PREVIEW_H_
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include "base/files/file_path.h"
+#include "base/time/time.h"
 #include "ui/gfx/image/image_skia.h"
 namespace crfiles {
 // Images/SVG/HEIC/HEIF, PDF first pages, and static video frames (up to 128 px).
-// Video decode runs in a time-limited child; all calls below are worker-only.
+// Video decode runs in a time-limited child; decoding calls are worker-only.
 // Blocking decode: use MayBlock + WithBaseSyncPrimitives worker traits.
 // Encoded inputs share a 128 MiB admission budget. Raster/HEIC pixels and
 // PDF/SVG outputs share 320 MiB; larger HEIC requests run exclusively (up to
 // 800 MiB estimated buffers). Codec-private scratch and retained caches are
 // separate. PDFium/HEIC access is serialized; HEIC primary images allow 64 MP.
 gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge);
+// UI-safe memory-only lookup using the directory's metadata snapshot. Performs
+// no filesystem IO or decoding; mutation epochs reject invalidated entries.
+gfx::ImageSkia FindMemoryThumbnail(const base::FilePath& path, int64_t size,
+    base::Time modified, int maximum_edge);
 // Worker-only memory/disk lookup: validates metadata, never decodes the source
 // file on a cache miss. Folder thumbnails also have a 256 MiB / 4096-item disk LRU.
 gfx::ImageSkia FindCachedThumbnail(const base::FilePath& path, int maximum_edge,

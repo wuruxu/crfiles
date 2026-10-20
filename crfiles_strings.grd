@@ -97,6 +97,8 @@
       <message name="IDS_CRFILES_NEARBY_OFF" desc="crFiles file manager interface.">Sharing is off.</message>
       <message name="IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE" desc="Local device discovery is unavailable and will retry">Device discovery is unavailable. Check your network and local-network permissions. Retrying automatically; you can still use a device address.</message>
       <message name="IDS_CRFILES_NEARBY_READY" desc="crFiles file manager interface.">Devices on your local network appear here.</message>
+      <message name="IDS_CRFILES_REOPEN_CLOSED_TAB" desc="Titlebar context menu command.">Reopen closed tab</message>
+      <message name="IDS_CRFILES_BOOKMARK_ALL_TABS" desc="Titlebar context menu command.">Bookmark all tabs</message>
       <message name="IDS_CRFILES_NEW_TAB" desc="crFiles file manager interface.">New tab</message>
       <message name="IDS_CRFILES_OPEN" desc="crFiles file manager interface.">Open</message>
       <message name="IDS_CRFILES_OPEN_ERROR" desc="crFiles file manager interface.">Unable to open this file.</message>
