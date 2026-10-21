@@ -59,7 +59,7 @@
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include <shellapi.h>
-#include "base/win/shell_util.h"
+#include "base/win/elevation_util.h"
 #endif
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "base/nix/xdg_util.h"
@@ -158,10 +158,8 @@ void LaunchCrFilesProjectPageWithActivation(base::LaunchOptions options) {
 
 #if BUILDFLAG(IS_WIN)
 void OpenCrFilesProjectPageViaExplorer() {
-  base::win::ShellExecuteOptions options;
-  options.verb = L"open";
-  const HRESULT result = base::win::RunShellExecuteViaExplorer(
-      base::UTF8ToWide(kProjectUrl), std::wstring(), options);
+  const HRESULT result = base::win::RunDeElevatedNoWait(
+      base::UTF8ToWide(kProjectUrl), std::wstring());
   if (SUCCEEDED(result)) {
     return;
   }

@@ -219,14 +219,14 @@ ui::ColorId NavigationColor(const views::View* view) {
 
 class NavigationBackground : public views::Background {
  public:
-  NavigationBackground() { SetColor(ui::kColorSysBase); }
+  NavigationBackground() { set_color(ui::kColorSysBase); }
 
   void Paint(gfx::Canvas* canvas, views::View* view) const override {
     canvas->DrawColor(view->GetColorProvider()->GetColor(NavigationColor(view)));
   }
 
   void OnViewThemeChanged(views::View* view) override {
-    SetColor(NavigationColor(view));
+    set_color(NavigationColor(view));
     view->SchedulePaint();
   }
 };

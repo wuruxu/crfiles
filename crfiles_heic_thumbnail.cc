@@ -39,7 +39,7 @@
 #include "third_party/skia/include/private/SkHdrMetadata.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/icc_profile.h"
+#include "skia/ext/color_profile.h"
 #include "skia/ext/image_operations.h"
 #endif
 
@@ -204,13 +204,13 @@ DISABLE_CFI_DLSYM sk_sp<SkColorSpace> ReadColorSpace(
             resources.handle, icc.data()).code != heif_error_Ok) {
       return nullptr;
     }
-    auto profile = gfx::ICCProfile::FromData(icc.data(), icc.size());
-    if (!profile.IsValid()) {
+    auto profile = skia::ColorProfile::Make(base::as_byte_span(icc));
+    if (!profile) {
       return nullptr;
     }
-    auto space = profile.GetColorSpace();
-    metadata->is_hdr = space.IsHDR();
-    return space.ToSkColorSpace();
+    auto space = profile->GetSkColorSpace();
+    metadata->is_hdr = gfx::ColorSpace(*space).IsHDR();
+    return space;
   }
   if (api.heif_image_handle_get_nclx_color_profile(
           resources.handle, &resources.nclx).code != heif_error_Ok ||
