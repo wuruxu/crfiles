@@ -174,7 +174,7 @@
 #include "ui/views/controls/throbber.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/scrollbar/base_scroll_bar_thumb.h"
-#include "ui/views/controls/scrollbar/overlay_scroll_bar.h"
+#include "libcr/overlay_scroll_bar.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/layout/box_layout.h"
@@ -1803,12 +1803,12 @@ class BookmarksView : public views::View, public views::ContextMenuController, p
 BEGIN_METADATA(BookmarksView)
 END_METADATA
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
-class FolderScrollBar : public views::OverlayScrollBar, public views::AnimationDelegateViews {
-  METADATA_HEADER(FolderScrollBar, views::OverlayScrollBar)
+class FolderScrollBar : public libcr::OverlayScrollBar, public views::AnimationDelegateViews {
+  METADATA_HEADER(FolderScrollBar, libcr::OverlayScrollBar)
  public:
   FolderScrollBar(views::ScrollBar::Orientation orientation,
                   views::ScrollView* scroll)
-      : views::OverlayScrollBar(orientation), views::AnimationDelegateViews(this), scroll_(scroll) {
+      : libcr::OverlayScrollBar(orientation), views::AnimationDelegateViews(this), scroll_(scroll) {
     // Follow content offsets immediately instead of animating thumb bounds.
     // The scrollbar's own layer retains its fade animation.
     GetThumb()->layer()->SetAnimator(ui::LayerAnimator::CreateDefaultAnimator());
@@ -1828,7 +1828,7 @@ class FolderScrollBar : public views::OverlayScrollBar, public views::AnimationD
     if (amplitude_ != 0.f) rebound_.Start();
   }
   void Update(int viewport_size, int content_size, int contents_scroll_offset) override {
-    views::OverlayScrollBar::Update(viewport_size, content_size, contents_scroll_offset);
+    libcr::OverlayScrollBar::Update(viewport_size, content_size, contents_scroll_offset);
     // ScrollBar::Update receives an integer offset. Read the original layer
     // offset so the visual thumb also follows fractional content movement.
     double offset = contents_scroll_offset;
@@ -5044,7 +5044,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       files_->SetVerticalScrollBar(std::make_unique<FolderScrollBar>(views::ScrollBar::Orientation::kVertical, files_));
       files_->SetHorizontalScrollBar(std::make_unique<FolderScrollBar>(views::ScrollBar::Orientation::kHorizontal, files_));
     } else {
-      auto scrollbar = std::make_unique<views::OverlayScrollBar>(views::ScrollBar::Orientation::kVertical);
+      auto scrollbar = std::make_unique<libcr::OverlayScrollBar>(views::ScrollBar::Orientation::kVertical);
       scrollbar->SetRoundedThumb(true);
       files_->SetVerticalScrollBar(std::move(scrollbar));
     }

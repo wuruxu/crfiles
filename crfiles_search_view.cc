@@ -50,7 +50,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/scroll_view.h"
-#include "ui/views/controls/scrollbar/overlay_scroll_bar.h"
+#include "libcr/overlay_scroll_bar.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -266,7 +266,7 @@ class SearchPage : public views::View, public views::TextfieldController, public
     // their initial zero size even when they already contain matching rows.
     scroll_ = AddChildView(std::make_unique<views::ScrollView>(views::ScrollView::ScrollWithLayers::kEnabled));
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
-    auto scrollbar = std::make_unique<views::OverlayScrollBar>(views::ScrollBar::Orientation::kVertical);
+    auto scrollbar = std::make_unique<libcr::OverlayScrollBar>(views::ScrollBar::Orientation::kVertical);
     scrollbar->SetRoundedThumb(true);
     scroll_->SetVerticalScrollBar(std::move(scrollbar));
 #endif
