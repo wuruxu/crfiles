@@ -3,5 +3,6 @@
 #include "crFiles/sharing/share_service.h"
 
 namespace crfiles {
+bool ShareService::RetryWithBluetoothReconnect(uint64_t) { return false; }
 bool ShareService::IsQuickShare() const { return false; }
 }  // namespace crfiles

@@ -1,2 +1,5 @@
 // Local network permission prompt shown by macOS.
 "NSLocalNetworkUsageDescription" = "crFiles detecta dispositivos cercanos y envía y recibe archivos en tu red local.";
+"NSBluetoothAlwaysUsageDescription" = "crFiles utiliza Bluetooth para detectar dispositivos Quick Share cercanos y conectarse a ellos para enviar archivos.";
+"NSLocationWhenInUseUsageDescription" = "crFiles necesita permiso de ubicación para identificar redes Wi-Fi, conectarse al punto de acceso de un dispositivo cercano para usar Quick Share y restablecer tu conexión Wi-Fi anterior.";
+"NSLocationUsageDescription" = "crFiles necesita permiso de ubicación para identificar redes Wi-Fi, conectarse al punto de acceso de un dispositivo cercano para usar Quick Share y restablecer tu conexión Wi-Fi anterior.";

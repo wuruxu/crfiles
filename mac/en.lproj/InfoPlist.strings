@@ -1,2 +1,5 @@
 // English fallback for the native macOS permission prompt.
 "NSLocalNetworkUsageDescription" = "crFiles discovers nearby devices and sends and receives files on your local network.";
+"NSBluetoothAlwaysUsageDescription" = "crFiles uses Bluetooth to discover nearby Quick Share devices and connect to them to send files.";
+"NSLocationWhenInUseUsageDescription" = "crFiles needs location permission to identify Wi-Fi networks, connect to a nearby device's hotspot for Quick Share, and restore your previous Wi-Fi connection.";
+"NSLocationUsageDescription" = "crFiles needs location permission to identify Wi-Fi networks, connect to a nearby device's hotspot for Quick Share, and restore your previous Wi-Fi connection.";

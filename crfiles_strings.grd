@@ -367,6 +367,9 @@
       <message name="IDS_CRFILES_QS_TYPE_FOLDABLE" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Foldable device</message>
       <message name="IDS_CRFILES_QS_TYPE_XR" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">XR device</message>
       <message name="IDS_CRFILES_QS_ERROR_CONNECTION" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">Could not connect to the device.</message>
+      <message name="IDS_CRFILES_QS_RECONNECT_BLUETOOTH_RETRY" desc="macOS Quick Share button shown after Bluetooth connection setup fails.">Reconnect and retry</message>
+      <message name="IDS_CRFILES_QS_RECONNECT_BLUETOOTH_HINT" desc="Explains the effect of the macOS Quick Share Bluetooth recovery button.">This briefly disconnects other Bluetooth services on this device.</message>
+      <message name="IDS_CRFILES_QS_RECONNECTING_BLUETOOTH" desc="macOS Quick Share status while restoring Bluetooth before retrying a file transfer.">Reconnecting Bluetooth…</message>
       <message name="IDS_CRFILES_QS_ERROR_NETWORK" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">The connection was interrupted.</message>
       <message name="IDS_CRFILES_QS_ERROR_STORAGE" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">Storage is unavailable or full.</message>
       <message name="IDS_CRFILES_QS_ERROR_SOURCE" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">The source file could not be read.</message>

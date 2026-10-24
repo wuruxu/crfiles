@@ -13,13 +13,20 @@
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "build/build_config.h"
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #include "crQuickShare/ble_wakeup.h"
+#include "crQuickShare/bluetooth_receiver.h"
+#endif
 #include "crQuickShare/ble_discovery.h"
 #include "crQuickShare/bootstrap_probe.h"
-#include "crQuickShare/bluetooth_receiver.h"
 #include "crQuickShare/lan_discovery.h"
 #include "device/bluetooth/bluetooth_adapter.h"
+#endif
+#if BUILDFLAG(IS_MAC)
+#include "crQuickShare/corewlan_client_mac.h"
+#include "crQuickShare/mac_fast_init_experiment.h"
+#include "crQuickShare/mac_bluetooth_reconnect.h"
 #endif
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -66,8 +73,15 @@ class QuickShareAdapter final : public ShareService {
   }
   ~QuickShareAdapter() override {
     timer_.Stop();
+#if BUILDFLAG(IS_MAC)
+    crquickshare::CancelDeferredCoreWlanAccessRequest();
+#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-    receiver_.Update(nullptr); sender_.Cancel(); discovery_.Update(false); wakeup_.Update(false);
+    receiver_.Update(nullptr);
+#endif
+    sender_.Cancel(); discovery_.Update(false);
+    wakeup_.Update(false);
 #endif
   }
   bool IsQuickShare() const override { return true; }
@@ -75,6 +89,10 @@ class QuickShareAdapter final : public ShareService {
     discovery_active_ = active;
     if (active && service_) service_->RefreshDiscovery();
     UpdateWakeup();
+#if BUILDFLAG(IS_MAC)
+    if (active && service_) crquickshare::RequestCoreWlanAccess();
+    if (!active) crquickshare::CancelDeferredCoreWlanAccessRequest();
+#endif
   }
   Snapshot GetSnapshot() const override {
     Snapshot result;
@@ -161,6 +179,17 @@ class QuickShareAdapter final : public ShareService {
         }
         break;
     }
+#if BUILDFLAG(IS_MAC)
+    result.can_reconnect_bluetooth = retry_peer_ && !retry_paths_.empty() &&
+        retry_session_ == result.session && !source.busy && !source.incoming &&
+        source.failure == crquickshare::Failure::kConnection &&
+        (source.phase == Phase::kError || source.phase == Phase::kTimedOut) &&
+        preferences_.enabled && GetQuickSharePreferences() == preferences_ &&
+        !crquickshare::MacBluetoothReconnectInProgress(retry_peer_->classic_bluetooth_address) &&
+        sender_.CanRetryWithBluetoothReconnect();
+    if (source.busy && source.phase == Phase::kConnecting && sender_.reconnecting_bluetooth())
+      result.status_message_id = IDS_CRFILES_QS_RECONNECTING_BLUETOOTH;
+#endif
     if (!source.available && !source.busy && !source.session) result.status_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
     if (!source.available) result.discovery_message_id = IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE;
     if (!result.busy && !result.receiving && !result.finished_at.is_null() &&
@@ -168,7 +197,7 @@ class QuickShareAdapter final : public ShareService {
       result.discovery_resume_at = result.finished_at + base::Seconds(3);
     const bool discovery_paused = base::TimeTicks::Now() < result.discovery_resume_at;
     auto peers = source.peers;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     if (source.available && discovery_active_ && !source.busy && !discovery_paused) {
       result.discovery_message_id = discovery_.state() == crquickshare::BleDiscovery::State::kUnavailable ?
           IDS_CRFILES_QUICK_SHARE_BLE_UNAVAILABLE : IDS_CRFILES_QUICK_SHARE_BLE_SCANNING;
@@ -180,7 +209,7 @@ class QuickShareAdapter final : public ShareService {
 #endif
     for (const auto& peer : peers) {
       bool bluetooth_connectable = false;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
       bluetooth_connectable = peer.ble_only && !crquickshare::EndpointName(peer.endpoint_info).empty() && !peer.classic_bluetooth_address.empty() &&
           !discovery_.bootstrap_active();
 #endif
@@ -215,7 +244,7 @@ class QuickShareAdapter final : public ShareService {
     if (paths.empty()) return reject("empty_selection");
     const auto source = service_->GetSnapshot();
     auto peers = source.peers;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     peers = discovery_.MergeWithLan(std::move(peers));
 #endif
     const auto peer = std::ranges::find_if(peers, [&](const auto& item) {
@@ -225,27 +254,66 @@ class QuickShareAdapter final : public ShareService {
     std::vector<std::string> names;
     for (const auto& path : paths) names.push_back(path.BaseName().AsUTF8Unsafe());
     if (peer->ble_only) {
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
       if (peer->classic_bluetooth_address.empty()) return reject("bluetooth_route_missing");
       if (crquickshare::EndpointName(peer->endpoint_info).empty()) return reject("public_name_missing");
       if (discovery_.bootstrap_active()) return reject("discovery_bootstrap_busy");
       const auto selected = *peer;
+#if BUILDFLAG(IS_MAC)
+      const auto retry_paths = paths;
+#endif
       auto adapter = discovery_.adapter();
-      discovery_.Update(false, true); wakeup_.Update(false);
+      discovery_.Update(false, true);
+      wakeup_.Update(false);
       if (!sender_.Send(std::move(adapter), selected, *service_, std::move(paths), hotspot_,
                         [this](base::OnceClosure ready) { discovery_.WhenConnectionReady(std::move(ready)); })) {
         UpdateWakeup(); return reject("bluetooth_sender_rejected");
       }
+#if BUILDFLAG(IS_MAC)
+      retry_peer_ = selected;
+      retry_paths_ = retry_paths;
+      retry_session_ = session_base_ + service_->GetSnapshot().session;
+#endif
 #else
       return reject("bluetooth_unsupported");
 #endif
-    } else if (!service_->Send(*peer, std::move(paths))) return reject("lan_service_rejected");
+    } else {
+      if (!service_->Send(*peer, std::move(paths))) return reject("lan_service_rejected");
+#if BUILDFLAG(IS_MAC)
+      retry_peer_.reset(); retry_paths_.clear(); retry_session_ = 0;
+#endif
+    }
     files_ = std::move(names);
     started_at_ = base::TimeTicks::Now();
     finished_at_ = base::TimeTicks();
     UpdateWakeup();
     return true;
   }
+#if BUILDFLAG(IS_MAC)
+  bool RetryWithBluetoothReconnect(uint64_t session) override {
+    // Recheck the displayed session before consuming the retained device and
+    // immutable selection. Discovery may have withdrawn it after the failure.
+    const auto state = GetSnapshot();
+    if (!state.can_reconnect_bluetooth || state.session != session) return false;
+    auto peer = *retry_peer_;
+    auto paths = retry_paths_;
+    auto adapter = discovery_.adapter();
+    discovery_.Update(false, true);
+    wakeup_.Update(false);
+    if (!sender_.Send(std::move(adapter), peer, *service_, std::move(paths), hotspot_,
+                      [this](base::OnceClosure ready) { discovery_.WhenConnectionReady(std::move(ready)); }, true)) {
+      UpdateWakeup();
+      return false;
+    }
+    const auto next = service_->GetSnapshot();
+    retry_session_ = session_base_ + next.session;
+    started_at_ = base::TimeTicks::Now(); finished_at_ = {};
+    LOG(INFO) << "crQuickShare: macOS Bluetooth recovery authorized; previous_session=" << session
+              << "; session=" << retry_session_ << "; files=" << retry_paths_.size();
+    UpdateWakeup();
+    return true;
+  }
+#endif
   void Decide(uint64_t session, Stage prompt, bool accept, bool trust,
               uint64_t conflict_id) override {
     if (service_ && session > session_base_ && prompt == Stage::kPairing && !trust && !conflict_id)
@@ -278,21 +346,31 @@ class QuickShareAdapter final : public ShareService {
     if (!configured_ || preferences_ != desired) {
       // Do not replace a backend while its worker owns a transfer. The core
       // atomically closes incoming admission before the idle backend is reset.
-      if (service_ && !service_->StopReceivingIfIdle()) return;
+      if (service_ && !service_->StopReceivingIfIdle()) {
+#if BUILDFLAG(IS_MAC)
+        wakeup_.Update(false);
+#endif
+        return;
+      }
       CopyReceivedTexts();
       if (service_) session_base_ += service_->GetSnapshot().session + 1;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
       receiver_.Update(nullptr);
+#endif
       sender_.Cancel();
 #endif
       service_.reset();
       preferences_ = desired; configured_ = true;
       files_.clear(); started_at_ = {}; finished_at_ = {};
+#if BUILDFLAG(IS_MAC)
+      retry_peer_.reset(); retry_paths_.clear(); retry_session_ = 0;
+#endif
       if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory(), true, CreateQuickShareJournal);
     }
     const auto state = service_ ? service_->GetSnapshot() : crquickshare::Snapshot();
     if (service_ && state.available && !state.receiving) service_->SetReceiving(true, true);
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     const auto snapshot = GetSnapshot();
     const bool discovery_paused = base::TimeTicks::Now() < snapshot.discovery_resume_at;
     const bool active = service_ && discovery_active_ && !state.busy && !discovery_paused;
@@ -319,11 +397,26 @@ class QuickShareAdapter final : public ShareService {
           base::WideToUTF8(command->GetSwitchValueNative("quick-share-upgrade-interface")) : preferences_.upgrade_interface;
       hotspot_ = crquickshare::MakeWindowsHotspotConnector(requested_interface);
       if (service_) service_->SetPreferHotspotUpgrade(command->HasSwitch("quick-share-prefer-hotspot"));
+#elif BUILDFLAG(IS_MAC)
+      const auto* command = base::CommandLine::ForCurrentProcess();
+      const auto interface = command->HasSwitch("quick-share-upgrade-interface") ?
+          command->GetSwitchValueASCII("quick-share-upgrade-interface") : preferences_.upgrade_interface;
+      hotspot_ = crquickshare::MakeMacHotspotConnector(interface);
+      const bool direct_client = !command->HasSwitch("disable-quick-share-mac-direct-client");
+      const bool prefer_hotspot = command->HasSwitch("quick-share-prefer-hotspot");
+      if (service_) {
+        service_->SetPreferHotspotUpgrade(prefer_hotspot);
+        service_->SetWifiDirectClientConnector(direct_client ?
+            crquickshare::MakeMacWifiDirectClientConnector(interface) : crquickshare::WifiDirectClientConnector(),
+            !prefer_hotspot && command->HasSwitch("quick-share-prefer-direct-client"));
+      }
 #endif
     }
     discovery_.Update(active, service_ && discovery_active_ && (state.busy || discovery_paused));
     wakeup_.Update(active);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     receiver_.Update(service_.get(), hotspot_);
+#endif
 #endif
   }
   QuickSharePreferences preferences_;
@@ -332,15 +425,26 @@ class QuickShareAdapter final : public ShareService {
   uint64_t copied_text_session_ = 0;
   mutable uint64_t observed_session_ = 0;
   std::unique_ptr<crquickshare::QuickShareService> service_;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   crquickshare::BleWakeup wakeup_;
+#elif BUILDFLAG(IS_MAC)
+  crquickshare::MacFastInitExperiment wakeup_;
+#endif
   crquickshare::BleDiscovery discovery_;
   crquickshare::BootstrapProbe sender_{false};
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   crquickshare::BluetoothReceiver receiver_;
+#endif
   crquickshare::HotspotConnector hotspot_;
 #endif
   base::RepeatingTimer timer_;
   bool discovery_active_ = false;
+#if BUILDFLAG(IS_MAC)
+  std::optional<crquickshare::Peer> retry_peer_;
+  std::vector<base::FilePath> retry_paths_;
+  uint64_t retry_session_ = 0;
+#endif
   std::vector<std::string> files_;
   mutable base::TimeTicks started_at_;
   mutable base::TimeTicks finished_at_;

@@ -66,6 +66,7 @@ grit("crfiles_strings") {
 repack("crfiles_resources_pak") {
   sources = [
     "$root_gen_dir/crFiles/crfiles_strings_en-US.pak",
+    "$root_gen_dir/device/bluetooth/strings/bluetooth_strings_en-US.pak",
     "$root_gen_dir/ui/resources/ui_resources_100_percent.pak",
     "$root_gen_dir/ui/strings/app_locale_settings_en-US.pak",
     "$root_gen_dir/ui/strings/ax_strings_en-US.pak",
@@ -74,6 +75,7 @@ repack("crfiles_resources_pak") {
   output = "$root_out_dir/crfiles_resources.pak"
   deps = [
     ":crfiles_strings",
+    "//device/bluetooth/strings",
     "//ui/resources",
     "//ui/strings",
   ]
@@ -88,6 +90,7 @@ foreach(locale, crfiles_locales) {
   repack("crfiles_resources_${locale}_pak") {
     sources = [
       "$root_gen_dir/crFiles/crfiles_strings_${locale}.pak",
+      "$root_gen_dir/device/bluetooth/strings/bluetooth_strings_${locale}.pak",
       "$root_gen_dir/ui/strings/app_locale_settings_${locale}.pak",
       "$root_gen_dir/ui/strings/ax_strings_${locale}.pak",
       "$root_gen_dir/ui/strings/ui_strings_${locale}.pak",
@@ -95,6 +98,7 @@ foreach(locale, crfiles_locales) {
     output = "$root_out_dir/crfiles_resources_${locale}.pak"
     deps = [
       ":crfiles_strings",
+      "//device/bluetooth/strings",
       "//ui/strings",
     ]
   }
@@ -381,12 +385,19 @@ executable("crFiles") {
   }
   if (is_mac) {
     deps += [ "//components/remote_cocoa/common:mojo" ]
+    # Privacy prompts also need usage metadata when running the loose binary.
+    inputs = [ "mac/Info.plist" ]
+    if (!defined(ldflags)) {
+      ldflags = []
+    }
+    ldflags += [ "-Wl,-sectcreate,__TEXT,__info_plist," +
+                 rebase_path("mac/Info.plist", root_build_dir) ]
   }
   if (is_linux || is_win || is_mac) {
     sources += [ "sharing/quick_share_adapter.cc", "sharing/quick_share_adapter.h" ]
     deps += [ "//crQuickShare:protocol" ]
   }
-  if (is_linux || is_win) {
+  if (is_linux || is_win || is_mac) {
     deps += [ "//crQuickShare:ble" ]
     if (!enable_libcr_shared) {
       deps += [ "//device/bluetooth" ]

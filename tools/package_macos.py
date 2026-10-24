@@ -3,8 +3,9 @@
 # Use of this source code is governed by a BSD-style license in LICENSE.
 """Stage a standalone GN output as a signed macOS bundle.
 
-Never builds, uploads, installs, or overwrites an existing output. Signing is
-explicit; --unsigned is for inspecting layout only (not a sandbox test).
+Never builds, uploads, installs, or overwrites an existing output. --development
+uses local ad-hoc signing unless --identity is supplied. --unsigned is for
+inspecting layout only (not a sandbox test).
 """
 import argparse
 import datetime
@@ -145,7 +146,12 @@ def package(args):
         raise ValueError('Invalid CFBundleVersion')
     if args.developer_id and (args.profile or args.pkg or args.installer_identity):
         raise ValueError('--developer-id cannot use App Store profiles or installer signing')
-    if not args.unsigned and not (args.identity and (args.profile or args.developer_id)):
+    if args.development and (args.developer_id or args.unsigned or args.profile or
+                             args.pkg or args.installer_identity):
+        raise ValueError('--development cannot use distribution, unsigned or provisioning options')
+    if args.development and not args.identity:
+        args.identity = '-'
+    if not args.unsigned and not args.development and not (args.identity and (args.profile or args.developer_id)):
         raise ValueError('Signing needs --identity and --profile; or explicitly use --unsigned')
     if args.unsigned and (args.identity or args.profile or args.pkg or args.installer_identity):
         raise ValueError('--unsigned cannot be combined with signing or installer arguments')
@@ -169,7 +175,7 @@ def package(args):
             privacy.get('NSPrivacyAccessedAPITypes'), list):
         raise ValueError('Missing or invalid privacy manifest')
     profile_entitlements = None
-    if not args.unsigned and not args.developer_id:
+    if not args.unsigned and not args.developer_id and not args.development:
         profile_entitlements = check_profile(args.profile, args.bundle_id, args.team_id, bool(args.pkg))
     contents = output / 'Contents'
     resources = contents / 'Resources'
@@ -181,11 +187,11 @@ def package(args):
     main = macos / 'crFiles'
     helper = helpers / 'crFiles Helper'
     shutil.copy2(build / 'crFiles', main)
-    # Direct-download workers have the same signing requirements as the UI.
+    # Direct-download and local development workers use the UI signature.
     # Preserve the existing worker launch path without duplicating executable
     # code. App Store workers still need a separate inheritance-only signature.
     executables = [main]
-    if args.developer_id:
+    if args.developer_id or args.development:
         helper.symlink_to(Path('../MacOS/crFiles'))
     else:
         shutil.copy2(build / 'crFiles', helper)
@@ -216,6 +222,8 @@ def package(args):
                 CFBundleIdentifier=args.bundle_id,
                 CFBundleShortVersionString=version(), CFBundleVersion=args.build_number,
                 LSMinimumSystemVersion=args.minimum_system_version)
+    if args.development:
+        info['CrFilesDevelopmentBundle'] = True
     write_plist(contents / 'Info.plist', info)
     (contents / 'PkgInfo').write_bytes(b'APPL????')
     if args.unsigned:
@@ -226,12 +234,18 @@ def package(args):
     # Keep generated entitlements next to the output for inspection, outside
     # the sealed bundle. Sign nested code before the enclosing app, never --deep.
     entitlement_path = output.with_suffix('.entitlements')
-    if entitlement_path.exists():
+    if not args.development and entitlement_path.exists():
         raise ValueError(f'Refusing to overwrite {entitlement_path}')
     signing_options = ['--options', 'runtime'] if args.developer_id else []
     main_options = []
     helper_options = []
-    if not args.developer_id:
+    if args.developer_id:
+        # Hardened Runtime requires Location resource access even without App
+        # Sandbox. Usage descriptions alone do not permit an authorization prompt.
+        entitlements = load_plist(PROJECT / 'mac/DeveloperID.entitlements')
+        write_plist(entitlement_path, entitlements)
+        main_options = ['--entitlements', entitlement_path]
+    elif not args.development:
         entitlements = load_plist(PROJECT / 'mac/App.entitlements')
         entitlements['com.apple.security.application-groups'] = [f'{args.team_id}.{args.bundle_id}.ipc']
         entitlements['com.apple.application-identifier'] = f'{args.team_id}.{args.bundle_id}'
@@ -241,18 +255,27 @@ def package(args):
         write_plist(entitlement_path, entitlements)
         main_options = ['--entitlements', entitlement_path]
         helper_options = ['--entitlements', PROJECT / 'mac/Helper.entitlements']
+    timestamp = '--timestamp=none' if args.development else '--timestamp'
     for library in libraries:
-        run('codesign', '--force', '--sign', args.identity, '--timestamp',
+        run('codesign', '--force', '--sign', args.identity, timestamp,
             *signing_options, library)
-    if not args.developer_id:
-        run('codesign', '--force', '--sign', args.identity, '--timestamp',
+    if not args.developer_id and not args.development:
+        run('codesign', '--force', '--sign', args.identity, timestamp,
             *signing_options, '--identifier', f'{args.bundle_id}.helper',
             *helper_options, helper)
-    run('codesign', '--force', '--sign', args.identity, '--timestamp',
+    run('codesign', '--force', '--sign', args.identity, timestamp,
         *signing_options, *main_options, output)
     run('codesign', '--verify', '--deep', '--strict', '--verbose=2', output)
+    if args.developer_id:
+        data = subprocess.check_output(['codesign', '-d', '--entitlements', '-', '--xml', str(output)])
+        signed_entitlements = plistlib.loads(data) if data.strip() else {}
+        if signed_entitlements.get('com.apple.security.personal-information.location') is not True:
+            raise ValueError('Developer ID signature is missing the Location entitlement')
     details = subprocess.run(['codesign', '-dv', '--verbose=4', str(output)],
                              capture_output=True, text=True, check=True).stderr
+    if args.development and args.identity == '-':
+        print(f'Locally ad-hoc signed development bundle: {output}')
+        return
     if f'TeamIdentifier={args.team_id}' not in details.splitlines():
         raise ValueError('Signing identity Team ID does not match --team-id')
     if args.developer_id and not any(
@@ -262,7 +285,7 @@ def package(args):
     if args.pkg:
         run('productbuild', '--component', output, '/Applications', '--sign',
             args.installer_identity, args.pkg)
-    print(f'Signed bundle: {output}')
+    print(f'Signed {"development " if args.development else ""}bundle: {output}')
 
 
 def main():
@@ -283,6 +306,8 @@ def main():
                         help='Strip debug and local symbols from staged binaries before signing')
     parser.add_argument('--developer-id', action='store_true',
                         help='Sign a non-sandboxed direct-download app with hardened runtime')
+    parser.add_argument('--development', action='store_true',
+                        help='Create an unsandboxed local app; use ad-hoc signing unless --identity is supplied')
     args = parser.parse_args()
     try:
         package(args)

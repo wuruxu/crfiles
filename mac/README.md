@@ -17,6 +17,8 @@ identity for the upload package. Install the corresponding private keys locally.
 - User-selected files, read/write, with persistent app-scoped bookmarks.
 - Downloads, read/write, for the default receiving destination.
 - Outgoing and incoming network connections for nearby discovery and transfers.
+- Bluetooth access for discovering Quick Share receivers and initiating file transfers.
+- Location access for identifying Wi-Fi networks used by Quick Share hotspot upgrades.
 - App Groups for Chromium Mojo's Mach-port rendezvous. The group is
   `6JYK2B5HZ3.com.libcr.crfiles.ipc`; it is also the `CrFilesIPCGroup` Info.plist
   value and the prefix passed to `SetBaseBundleIDOverride` in both processes.
@@ -28,10 +30,45 @@ register/provision it and update **both** the entitlement and Info.plist; changi
 only one breaks helper startup. See Apple's [App Groups entitlement documentation](https://developer.apple.com/documentation/BundleResources/Entitlements/com.apple.security.application-groups).
 
 No iCloud, Push Notifications, Sign in with Apple, Associated Domains, Network
-Extensions, Bluetooth, camera or microphone entitlement is added. Network
+Extensions, camera or microphone entitlement is added. Network
 multicast entitlement is not needed on macOS. The local-network purpose string
-and the three Bonjour service types are in Info.plist, per
+and Bonjour service types are in Info.plist, per
 [TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+The Bluetooth purpose string is localized in the same `InfoPlist.strings` files.
+Quick Share requests Bluetooth access when device discovery is opened.
+It also requests location access to identify Wi-Fi networks and connect to a
+phone-provided hotspot or Direct group for transfers across different networks. The location
+purpose strings are localized in those same files; the main app has the
+`com.apple.security.personal-information.location` entitlement. No location
+coordinates are requested. CoreWLAN scans, joins and restoration use a background
+task and interfaces provided by `CWWiFiClient`, following Apple's
+[CoreWLAN sandbox guidance](https://developer.apple.com/documentation/corewlan).
+Quick Share does not read the existing network's password or enterprise
+credentials from Keychain before switching networks. After releasing its
+temporary hotspot connection, it waits for macOS AutoJoin using system-managed
+saved credentials. Reconnection depends on system policy and network
+availability; returning to the exact previous network is not guaranteed. A
+timeout is reported through the existing network-cleanup warning.
+The experimental Direct client is enabled by default and joins a phone-owned
+group as an ordinary Wi-Fi station, using the same CoreWLAN connection and
+cleanup flow. It can replace the Mac's existing Wi-Fi link; it does not create
+a Mac P2P group or require an additional entitlement. Phone interoperability
+still needs hardware validation. Use `--quick-share-prefer-direct-client` for a
+bounded Direct-first request, or `--disable-quick-share-mac-direct-client` to
+compare against LAN/Hotspot only. A pending peer offer can select another
+medium, and `--quick-share-prefer-hotspot` takes precedence over the Direct
+preference. See the [Direct client behavior and capture procedure](../../crQuickShare/README.md#macos-wi-fi-direct-station-client).
+The development executable embeds this Info.plist so native privacy diagnostics
+can read usage metadata when launched directly. Use the development app launcher
+below to test location authorization with an application bundle and foreground
+activation. Packaged applications use the bundle's Info.plist and localized
+permission descriptions.
+
+The public CoreBluetooth FE2C/local-name broadcast experiment is enabled by
+default while the Quick Share device dialog is discovering. No enable flag is
+required; `--disable-quick-share-mac-fast-init-experiment` disables it for comparison.
+It uses the existing Bluetooth permission; no extra entitlement is required. OS advertising success does not
+establish an Android response. See the [experiment and comparison procedure](../../crQuickShare/README.md#macos-fast-initiation-local-name-experiment).
 
 The helper has exactly the two sandbox entitlements `app-sandbox` and `inherit`.
 Do not sign it with the main application's entitlements or launch it independently.
@@ -73,6 +110,51 @@ more restrictive security boundary than the parent. See Apple's
 - Open/Open With/Open in Terminal use NSWorkspace instead of spawning
   `/usr/bin/open`. Worker calls wait at most ten seconds with explicitly allowed
   synchronization; UI callers do not wait for application launch.
+
+## Run a development app in the foreground
+
+After producing the desired binary, quit any existing crFiles instance and run:
+
+```sh
+python3 crFiles/tools/run_macos.py out/arm64
+```
+
+The launcher does not compile. It packages existing artifacts into
+`out/arm64/crFiles.app`, including usage descriptions, translations, resources,
+private libraries and the existing helper layout. It uses local ad-hoc signing,
+without a provisioning profile, App Sandbox, hardened runtime or network
+timestamp service. This mode is for local development. The distribution and
+sandbox packaging modes remain separate.
+
+The launcher stages and verifies the replacement first and replaces only a
+bundle marked as a development app with the same bundle identifier. It refuses
+to replace unrelated or distribution apps and asks you to quit any running
+crFiles instance. Launch Services opens the exact `.app` in the foreground;
+application arguments are forwarded without shell expansion. Application logs
+are printed in the terminal and saved in a temporary directory shown at launch.
+Quit crFiles to finish. Ctrl+C stops the launcher's wait without quitting the app.
+
+For packaging and signature checks without opening a GUI:
+
+```sh
+python3 crFiles/tools/run_macos.py --prepare-only out/arm64
+```
+
+Open nearby Quick Share discovery while the app is active. Location requests
+record `bundle_is_app=1` and `application_active=1`. If discovery opens before
+activation, `request_deferred` waits for `NSApplicationDidBecomeActiveNotification`;
+closing discovery cancels that deferred request. The app does not request
+location access at startup. Permission is confirmed only when the state becomes
+`services_enabled=1; authorization=authorized_always; allowed=1`; a submitted
+request or initial authorization callback alone does not establish a grant.
+
+For repeatable authorization checks across rebuilt binaries, you may select the
+same installed development signing identity with `--identity 'Apple Development: ...'`
+before the build-directory argument. Ad-hoc signing does not provide a stable
+certificate identity across rebuilds. `--output` can select a different bundle
+path; keep the same path and signing identity when comparing authorization runs.
+The packaging script also exposes this mode as `--development` for a new output
+path, independently of the launcher.
 
 ## Package a build
 
@@ -193,9 +275,23 @@ Finder automation; allow Terminal (or the invoking app) to control Finder when
 macOS prompts. A graphical login session is required. The default staging directory and DMG are
 replaced on each `make dmg` invocation. Custom output paths are not deleted.
 The App Store `.app` and `.pkg` outputs are separate and remain untouched.
+The image builder copies only the signed app, the `Applications` shortcut and
+the required hidden Finder resources into a separate image root. Generated
+`.entitlements` and other signing/diagnostic artifacts beside the staged app
+remain available for inspection but are excluded from the disk image. The
+runtime permissions are embedded in the app's signature and do not require
+shipping the separate entitlement input file.
 
 The direct-download app uses hardened runtime with no sandbox or
 sandbox-inheritance entitlements and no App Store provisioning profile.
+It signs with `DeveloperID.entitlements`, which grants Location resource access
+for Quick Share Wi-Fi discovery and hotspot upgrades. Hardened Runtime requires
+`com.apple.security.personal-information.location` even without App Sandbox;
+the Info.plist purpose strings alone do not allow the authorization prompt.
+The packager verifies that this entitlement is present in the final signature
+and leaves the generated `.entitlements` beside the app for inspection.
+Location Services authorization is still required from the user. See Apple's
+[Location entitlement documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.personal-information.location).
 `Contents/Helpers/crFiles Helper` is a relative symlink to `../MacOS/crFiles`:
 search, archive and video jobs launch separate processes using the same binary
 and its signature. The App Store package retains a separate helper executable

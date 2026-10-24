@@ -295,6 +295,9 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     parent_widget_.reset();
     accept_ = nullptr; reject_ = nullptr; trust_ = nullptr;
     filename_ = nullptr; progress_status_ = nullptr; progress_ = nullptr; cancel_ = nullptr; open_received_ = nullptr;
+#if BUILDFLAG(IS_MAC)
+    reconnect_ = nullptr; reconnect_hint_ = nullptr;
+#endif
     if (widget_) widget_->MakeCloseSynchronous({});
     widget_.reset(); delegate_.reset();
     background_mode_.reset();
@@ -327,6 +330,19 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       dismiss_ = true;
     }
   }
+#if BUILDFLAG(IS_MAC)
+  void ReconnectBluetooth(uint64_t session) {
+    const auto state = service_->GetSnapshot();
+    if (state.session != session || !state.can_reconnect_bluetooth) return;
+    if (reconnect_) reconnect_->SetEnabled(false);
+    // Starting a new session can replace this result bubble. Defer until the
+    // clicked button's event dispatch has unwound; the service rechecks session.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce([](std::shared_ptr<ShareService> service, uint64_t session) {
+          service->RetryWithBluetoothReconnect(session);
+        }, service_, session));
+  }
+#endif
   void UpdateProgress(const NearbySharing::Snapshot& state) {
     displayed_state_ = state;
     using Stage = NearbySharing::Stage;
@@ -375,6 +391,14 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       resize |= open_received_->GetVisible() != show;
       open_received_->SetVisible(show);
     }
+#if BUILDFLAG(IS_MAC)
+    if (reconnect_) {
+      const bool show = state.can_reconnect_bluetooth;
+      resize |= reconnect_->GetVisible() != show;
+      reconnect_->SetVisible(show); reconnect_->SetEnabled(show);
+      reconnect_hint_->SetVisible(show);
+    }
+#endif
     if (resize && delegate_ && widget_) delegate_->SizeToContents();
   }
   void Show(const NearbySharing::Snapshot& state, bool transfer = false,
@@ -424,6 +448,12 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       progress_->SetPreferredSize(gfx::Size(336, 6));
       progress_->GetViewAccessibility().SetName(Text(IDS_CRFILES_TRANSFERRING));
       progress_status_ = Label(contents.get(), std::u16string());
+#if BUILDFLAG(IS_MAC)
+      if (service_->IsQuickShare() && !state.receiving) {
+        reconnect_hint_ = Label(contents.get(), Text(IDS_CRFILES_QS_RECONNECT_BLUETOOTH_HINT));
+        reconnect_hint_->SetVisible(false);
+      }
+#endif
     } else if (stage_ == NearbySharing::Stage::kReceivingConflict) {
       auto* filename = Label(contents.get(), base::UTF8ToUTF16(state.current_file));
       filename->SetTooltipText(base::UTF8ToUTF16(state.current_file));
@@ -472,6 +502,14 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (transfer) {
       cancel_ = actions->AddChildView(std::make_unique<CountdownCloseButton>(
           base::BindRepeating(&ShareSessionToastImpl::CancelOrClose, weak_.GetWeakPtr()), Text(IDS_CRFILES_CANCEL)));
+#if BUILDFLAG(IS_MAC)
+      if (service_->IsQuickShare() && !state.receiving) {
+        reconnect_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
+            base::BindRepeating(&ShareSessionToastImpl::ReconnectBluetooth, weak_.GetWeakPtr(), state.session),
+            Text(IDS_CRFILES_QS_RECONNECT_BLUETOOTH_RETRY)));
+        reconnect_->SetVisible(false);
+      }
+#endif
       if (service_->IsQuickShare() && state.receiving) {
         open_received_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
             base::BindRepeating([](base::WeakPtr<ShareSessionToastImpl> view) {
@@ -637,6 +675,10 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     }
   }
   raw_ptr<views::MdTextButton> open_received_ = nullptr;
+#if BUILDFLAG(IS_MAC)
+  raw_ptr<views::MdTextButton> reconnect_ = nullptr;
+  raw_ptr<views::Label> reconnect_hint_ = nullptr;
+#endif
   base::WeakPtr<views::Widget> owner_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> owner_observation_{this};
   base::ScopedObservation<views::Widget, views::WidgetObserver> anchor_observation_{this};

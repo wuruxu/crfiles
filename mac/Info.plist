@@ -26,6 +26,12 @@
 	<string>NSApplication</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>crFiles discovers nearby devices and sends and receives files on your local network.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>crFiles uses Bluetooth to discover nearby Quick Share devices and connect to them to send files.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>crFiles needs location permission to identify Wi-Fi networks, connect to a nearby device's hotspot for Quick Share, and restore your previous Wi-Fi connection.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>crFiles needs location permission to identify Wi-Fi networks, connect to a nearby device's hotspot for Quick Share, and restore your previous Wi-Fi connection.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_crphotos._tcp</string>

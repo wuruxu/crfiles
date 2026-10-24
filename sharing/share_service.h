@@ -70,6 +70,8 @@ class ShareService {
     bool busy = false;
     bool receiving = false;
     bool trust_error = false;
+    // macOS Quick Share only: explicit recovery for a failed Bluetooth setup.
+    bool can_reconnect_bluetooth = false;
     Stage stage = Stage::kOff;
     int status_message_id = 0;
     int warning_message_id = 0;
@@ -121,6 +123,7 @@ class ShareService {
   virtual void Decide(uint64_t session, Stage prompt, bool accept,
                       bool trust = false, uint64_t conflict_id = 0) = 0;
   virtual void CancelSession(uint64_t session) = 0;
+  virtual bool RetryWithBluetoothReconnect(uint64_t session);
   virtual std::vector<TrustedDevice> GetTrustedDevices() const = 0;
   virtual void ForgetTrustedDevice(std::string fingerprint) = 0;
   virtual bool IsQuickShare() const;

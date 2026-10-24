@@ -14,6 +14,16 @@ def run(*args):
     return subprocess.check_output([str(arg) for arg in args])
 
 
+def prepare_image_root(stage, destination, app_filename, background):
+    # Signing inputs and diagnostics beside the app are build artifacts, not
+    # distribution contents. Keep the signed app's internal symlinks intact.
+    destination.mkdir()
+    shutil.copytree(stage / app_filename, destination / app_filename, symlinks=True)
+    (destination / 'Applications').symlink_to('/Applications')
+    (destination / '.background').mkdir()
+    shutil.copy2(background, destination / '.background/background.png')
+
+
 def wait_for_layout(path, timeout=30):
     # Finder writes .DS_Store asynchronously, including after the window closes.
     # Do not detach while the file is missing, empty, or still changing.
@@ -56,15 +66,15 @@ def main():
     if not (stage / app_filename).is_dir():
         parser.error(f'Missing staged {app_filename}')
     background = Path(__file__).resolve().parents[1] / 'mac/dmg/background.png'
-    (stage / '.background').mkdir(exist_ok=True)
-    shutil.copy2(background, stage / '.background/background.png')
     with tempfile.TemporaryDirectory(prefix=f'{args.app_name.lower()}-dmg-') as temp:
         temp = Path(temp)
+        image_root = temp / 'image-root'
+        prepare_image_root(stage, image_root, app_filename, background)
         image = temp / 'layout.dmg'
         # Finder can resolve aliases to an already mounted volume with the same
         # name. Use a unique staging volume, then rename it after saving layout.
         run('hdiutil', 'create', '-volname', temp.name,
-            '-srcfolder', stage, '-format', 'UDRW', image)
+            '-srcfolder', image_root, '-format', 'UDRW', image)
         result = plistlib.loads(run('hdiutil', 'attach', '-readwrite', '-nobrowse',
                                     '-plist', image))
         volume = next(item for item in result['system-entities']

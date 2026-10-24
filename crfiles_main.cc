@@ -79,6 +79,7 @@
 
 #if BUILDFLAG(IS_MAC)
 #include "crFiles/crfiles_mac.h"
+#include "crQuickShare/mac_sdp_client.h"
 #endif
 
 #if BUILDFLAG(ENABLE_DESKTOP_AURA)
@@ -297,6 +298,17 @@ int RunApplication() {
   partition_alloc->ReconfigureAfterFeatureListInit(process_type);
   base::SingleThreadTaskExecutor executor(base::MessagePumpType::UI);
   LogStartupStage("main_scheduler_ready");
+#if BUILDFLAG(IS_MAC)
+  if (command_line->HasSwitch(crquickshare::kMacSdpProbeSwitch)) {
+    // Isolate one SDP query before singleton activation, windows or discovery.
+    base::ThreadPoolInstance::CreateAndStartWithDefaultParams("crFilesSdpProbe");
+    partition_alloc->ReconfigureAfterTaskRunnerInit(process_type);
+    const int result = crquickshare::RunMacSdpProbe(
+        command_line->GetSwitchValueASCII(crquickshare::kMacSdpProbeSwitch));
+    base::ThreadPoolInstance::Get()->Shutdown();
+    return result;
+  }
+#endif
   auto singleton_activation = std::make_shared<SingletonActivation>();
   crfiles::CrFilesProcessSingleton process_singleton(base::BindRepeating(
       [](std::shared_ptr<SingletonActivation> activation) { activation->Request(); },
