@@ -1545,33 +1545,67 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   multicast.sin_family = AF_INET;
   multicast.sin_port = htons(5353);
   inet_pton(AF_INET, "224.0.0.251", &multicast.sin_addr);
-  std::vector<in_addr> interfaces;
-  for (const in_addr local : LocalAddresses()) {
-    ip_mreq membership{multicast.sin_addr, local};
-    if (SetOption(socket_fd.get(), IPPROTO_IP, IP_ADD_MEMBERSHIP, membership) == 0)
-      interfaces.push_back(local);
-  }
-  if (interfaces.empty()) return;
-  {
-    base::AutoLock lock(state->lock);
-    if (state->stop) return;
-    state->snapshot.discovery_ready = true;
-  }
-  auto interface_addresses = [](const std::vector<in_addr>& addresses) {
-    std::set<uint32_t> result;
-    for (const auto& address : addresses) result.insert(address.s_addr);
-    return result;
+  std::map<uint32_t, in_addr> interfaces;
+  std::set<uint32_t> join_failures;
+  std::set<uint32_t> send_failures;
+  auto address_text = [](in_addr address) {
+    std::array<char, INET_ADDRSTRLEN> text{};
+    return inet_ntop(AF_INET, &address, text.data(), text.size()) ?
+        std::string(text.begin(), std::ranges::find(text, '\0')) : std::string();
   };
-  const auto joined_addresses = interface_addresses(interfaces);
+  auto refresh_interfaces = [&] {
+    std::map<uint32_t, in_addr> current;
+    for (const in_addr local : LocalAddresses()) current.emplace(local.s_addr, local);
+    std::erase_if(interfaces, [&](const auto& entry) {
+      if (current.contains(entry.first)) return false;
+      ip_mreq membership{multicast.sin_addr, entry.second};
+      // A removed interface may already have lost its membership in the OS.
+      SetOption(socket_fd.get(), IPPROTO_IP, IP_DROP_MEMBERSHIP, membership);
+      LOG(INFO) << "crFiles nearby discovery interface removed; address="
+                << address_text(entry.second);
+      return true;
+    });
+    std::erase_if(join_failures, [&](uint32_t address) { return !current.contains(address); });
+    std::erase_if(send_failures, [&](uint32_t address) { return !current.contains(address); });
+    for (const auto& [address, local] : current) {
+      if (interfaces.contains(address)) continue;
+      ip_mreq membership{multicast.sin_addr, local};
+      if (SetOption(socket_fd.get(), IPPROTO_IP, IP_ADD_MEMBERSHIP, membership) != 0) {
+        const int error = SocketError();
+        if (join_failures.insert(address).second)
+          LOG(WARNING) << "crFiles nearby discovery multicast join failed; address="
+                       << address_text(local) << "; error=" << error;
+        continue;
+      }
+      interfaces.emplace(address, local);
+      join_failures.erase(address);
+      LOG(INFO) << "crFiles nearby discovery multicast joined; address="
+                << address_text(local);
+    }
+  };
   auto publish = [&](uint32_t lifetime) {
     bool sent = false;
-    for (in_addr local : interfaces) {
-      if (SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_IF, local) != 0)
-        continue;
-      const std::string bytes = Advertisement(*state, port, local, lifetime);
-      if (sendto(socket_fd.get(), bytes.data(), static_cast<int>(bytes.size()), kSendFlags,
-                 reinterpret_cast<sockaddr*>(&multicast), sizeof(multicast)) ==
-          static_cast<int>(bytes.size())) sent = true;
+    for (const auto& [address, local] : interfaces) {
+      int error = 0;
+      bool published = false;
+      if (SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_IF, local) != 0) {
+        error = SocketError();
+      } else {
+        const std::string bytes = Advertisement(*state, port, local, lifetime);
+        const auto written = sendto(socket_fd.get(), bytes.data(), static_cast<int>(bytes.size()), kSendFlags,
+            reinterpret_cast<sockaddr*>(&multicast), sizeof(multicast));
+        published = written == static_cast<int>(bytes.size());
+        if (written < 0) error = SocketError();
+      }
+      if (published) {
+        sent = true;
+        if (send_failures.erase(address))
+          LOG(INFO) << "crFiles nearby discovery publishing recovered; address="
+                    << address_text(local);
+      } else if (send_failures.insert(address).second) {
+        LOG(WARNING) << "crFiles nearby discovery publishing failed; address="
+                     << address_text(local) << "; error=" << error;
+      }
     }
     return sent;
   };
@@ -1583,10 +1617,14 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   while (!state->stop) {
     const auto now = base::TimeTicks::Now();
     if (now - last_sent >= base::Seconds(5)) {
-      // Recreate the socket and memberships after link/address changes. This
-      // also retries interfaces whose initial multicast join failed.
-      if (interface_addresses(LocalAddresses()) != joined_addresses) break;
-      if (!publish(15)) break;
+      // Reconcile memberships independently. Failed joins and sends are retried
+      // without restarting healthy interfaces or discarding unexpired peers.
+      refresh_interfaces();
+      const bool published = publish(15);
+      {
+        base::AutoLock lock(state->lock);
+        state->snapshot.discovery_ready = !state->stop && published;
+      }
       last_sent = now;
     }
     PollFd pfd{socket_fd.get(), POLLIN, 0};
@@ -1721,8 +1759,8 @@ void Discovery(std::shared_ptr<State> state, uint16_t port) {
       state->snapshot.discovery_ready = false;
       state->snapshot.peers.clear();
     }
-    // Retry bind/join failures and offline startup without spinning, while
-    // allowing Disable() to cancel the retry promptly.
+    // Retry socket setup failures without spinning. Membership changes and
+    // offline startup are handled in place by DiscoveryAttempt().
     for (int i = 0; i < 25 && !state->stop; ++i) Poll(nullptr, 0, 200);
   }
 }

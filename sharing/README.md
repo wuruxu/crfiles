@@ -36,6 +36,14 @@ mDNS port with Bonjour. Interface types come from Chromium's Darwin network
 interface enumeration. Identity and trust files retain the existing private
 `~/.config/crFiles/nearby` location; the wire protocol is unchanged.
 
+Desktop discovery reconciles IPv4 multicast memberships every five seconds.
+Failed joins are retried independently; interface changes and announcement
+failures do not restart healthy interfaces or clear the peer/identity caches.
+Peers retain their existing 15-second advertisement expiry. An offline socket
+remains open so discovery can resume when an interface becomes available.
+Join failures and publishing failures are logged once per address until recovery
+or address removal; successful joins and interface removals are also logged.
+
 The macOS port has not yet been compiled or tested between devices. When testing
 macOS, leave Bonjour running, verify discovery with Wi-Fi and Ethernet, and
 disconnect a peer during a transfer to check that the app stays running. Also
@@ -55,6 +63,12 @@ test application.
    returns. Check independent identities by running both apps on the same host.
 6. Check inaccessible receive paths, empty files, duplicate names, and the existing
    crPhotos protocol limits. Folders and symlinks are not regular-file transfers.
+7. With a working LAN interface, add/remove a VPN or secondary interface and verify
+   peers on the LAN remain visible. Verify a failed multicast join does not prevent
+   discovery on another interface, and retry succeeds after the interface recovers.
+   Start offline, then connect to the LAN and verify discovery resumes without an
+   application restart. These membership changes require device validation after
+   an authorized build.
 
 For the upstream packet and security details, consult
 `../../crPhotos/sharing/PROTOCOL.md` and `../../crPhotos/sharing/MDNS_INTEROP.md`.
