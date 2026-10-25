@@ -50,6 +50,8 @@ class ShareService {
     std::string bluetooth_address = {};  // Display only, not a connection target.
     bool ble_only = false;
     bool bluetooth_connectable = false;  // BLE discovery with an implemented send route.
+    int quick_share_avatar = -1;
+    uint8_t quick_share_application = 0;
     uint8_t device_type = 0;  // Quick Share's advertised type; 0 means unknown.
     std::vector<SharedTarget> targets = {};
     bool operator==(const Peer&) const = default;
@@ -89,6 +91,8 @@ class ShareService {
     std::string receive_target;
     std::string receive_target_name;
     std::string peer_name;
+    int peer_quick_share_avatar = -1;
+    uint8_t peer_quick_share_application = 0;
     uint8_t peer_device_type = 0;
     int peer_avatar = 0;
     bool peer_trusted = false;

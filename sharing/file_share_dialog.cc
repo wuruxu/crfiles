@@ -126,13 +126,17 @@ ui::ImageModel QuickShareAvatar(int edge = 64) {
       gfx::SizeF(150, 150));
   return icon->GetImageModel(gfx::Size(edge, edge));
 }
-ui::ImageModel QuickShareDeviceAvatar(uint8_t type) {
+ui::ImageModel Avatar(int index, int edge);
+ui::ImageModel QuickShareDeviceAvatar(uint8_t type, int avatar = -1) {
+  if (avatar >= 0 && avatar < 9) return Avatar(avatar, 64);
   const gfx::VectorIcon* icon = &vector_icons::kDevicesIcon;
   if (type == 3) icon = &kComputerCustomIcon;
   else if (type == 1 || type == 2 || type == 5) icon = &kHardwareSmartphoneOldIcon;
   return ui::ImageModel::FromVectorIcon(*icon, ui::kColorSysOnSurface, 54);
 }
-std::u16string QuickShareDeviceType(uint8_t type) {
+std::u16string QuickShareDeviceType(uint8_t type, uint8_t application = 0) {
+  if (application == 1) return u"crFiles";
+  if (application == 2) return u"crPhotos";
   static constexpr std::array ids = {IDS_CRFILES_QS_TYPE_UNKNOWN, IDS_CRFILES_QS_TYPE_PHONE,
       IDS_CRFILES_QS_TYPE_TABLET, IDS_CRFILES_QS_TYPE_LAPTOP, IDS_CRFILES_QS_TYPE_CAR,
       IDS_CRFILES_QS_TYPE_FOLDABLE, IDS_CRFILES_QS_TYPE_XR};
@@ -428,7 +432,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     identity->SetVisible(!code_notice);
     auto* identity_layout = identity->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 12));
     identity_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* avatar = identity->AddChildView(std::make_unique<views::ImageView>(service_->IsQuickShare() ? QuickShareDeviceAvatar(state.peer_device_type) : PeerAvatar(state)));
+    auto* avatar = identity->AddChildView(std::make_unique<views::ImageView>(service_->IsQuickShare() ? QuickShareDeviceAvatar(state.peer_device_type, state.peer_quick_share_avatar) : PeerAvatar(state)));
     avatar->SetImageSize(service_->IsQuickShare() ? gfx::Size(54, 54) : gfx::Size(64, 64));
     auto* identity_text = identity->AddChildView(std::make_unique<views::View>());
     identity_text->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 4));
@@ -439,6 +443,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (service_->IsQuickShare())
       name_row->AddChildView(std::make_unique<views::ImageView>(QuickShareAvatar(16)));
     auto* name = Label(name_row, base::UTF8ToUTF16(state.peer_name)); name->SetMaximumWidth(248);
+    if (service_->IsQuickShare() && state.peer_quick_share_application)
+      Label(identity_text, QuickShareDeviceType(state.peer_device_type, state.peer_quick_share_application));
     if (!code_notice) Label(contents.get(), Text(state.receiving ? IDS_CRFILES_HISTORY_RECEIVE : IDS_CRFILES_HISTORY_SEND));
     if (transfer) {
       filename_ = Label(contents.get(), std::u16string());
@@ -1309,18 +1315,18 @@ class FileShareView : public views::View, public ui::EventObserver {
           row = peers_->AddChildView(std::make_unique<views::View>());
           row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
         }
-        auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareDeviceAvatar(peer.device_type) : Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
-        if (service_->IsQuickShare()) button->SetDeviceType(QuickShareDeviceType(peer.device_type));
+        auto* button = row->AddChildView(std::make_unique<DeviceButton>(base::RepeatingClosure(), service_->IsQuickShare() ? QuickShareDeviceAvatar(peer.device_type, peer.quick_share_avatar) : Avatar(peer.avatar), base::UTF8ToUTF16(peer.name)));
+        if (service_->IsQuickShare()) button->SetDeviceType(QuickShareDeviceType(peer.device_type, peer.quick_share_application));
         button->SetTrusted(peer.trusted);
         if (peer.ble_only && !peer.bluetooth_connectable) {
           auto* hint = button->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_QUICK_SHARE_BLE_ONLY)));
           hint->SetMaximumWidthSingleLine(112);
 
           button->GetViewAccessibility().SetName(base::UTF8ToUTF16(peer.name) + u" · " +
-              QuickShareDeviceType(peer.device_type) + u" · " + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT));
+              QuickShareDeviceType(peer.device_type, peer.quick_share_application) + u" · " + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT));
         }
         auto tooltip = base::UTF8ToUTF16(peer.name);
-        if (service_->IsQuickShare()) tooltip += u"\n" + QuickShareDeviceType(peer.device_type);
+        if (service_->IsQuickShare()) tooltip += u"\n" + QuickShareDeviceType(peer.device_type, peer.quick_share_application);
         if (!peer.bluetooth_address.empty()) tooltip += u"\n" + base::UTF8ToUTF16(peer.bluetooth_address);
         if (peer.ble_only && !peer.bluetooth_connectable) tooltip += u"\n" + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT);
         button->SetDeviceTooltip(std::move(tooltip));
@@ -1344,14 +1350,17 @@ class FileShareView : public views::View, public ui::EventObserver {
       if (service_->IsQuickShare() && !state.busy && !discovery_paused && !toast_widget_ &&
           latest != state.peers.end() &&
           (displayed.name != latest->name || displayed.device_type != latest->device_type ||
+           displayed.quick_share_avatar != latest->quick_share_avatar || displayed.quick_share_application != latest->quick_share_application ||
            displayed.address != latest->address || displayed.bluetooth_address != latest->bluetooth_address ||
            displayed.ble_only != latest->ble_only || displayed.bluetooth_connectable != latest->bluetooth_connectable)) {
         // Update the existing card and its send route without replacing its view.
-        if (displayed.name != latest->name || displayed.device_type != latest->device_type)
-          button->SetIdentity(QuickShareDeviceAvatar(latest->device_type), base::UTF8ToUTF16(latest->name));
-        if (displayed.name != latest->name || displayed.device_type != latest->device_type)
-          button->SetDeviceType(QuickShareDeviceType(latest->device_type));
-        auto tooltip = base::UTF8ToUTF16(latest->name) + u"\n" + QuickShareDeviceType(latest->device_type);
+        if (displayed.name != latest->name || displayed.device_type != latest->device_type ||
+           displayed.quick_share_avatar != latest->quick_share_avatar || displayed.quick_share_application != latest->quick_share_application)
+          button->SetIdentity(QuickShareDeviceAvatar(latest->device_type, latest->quick_share_avatar), base::UTF8ToUTF16(latest->name));
+        if (displayed.name != latest->name || displayed.device_type != latest->device_type ||
+           displayed.quick_share_avatar != latest->quick_share_avatar || displayed.quick_share_application != latest->quick_share_application)
+          button->SetDeviceType(QuickShareDeviceType(latest->device_type, latest->quick_share_application));
+        auto tooltip = base::UTF8ToUTF16(latest->name) + u"\n" + QuickShareDeviceType(latest->device_type, latest->quick_share_application);
         if (!latest->bluetooth_address.empty()) tooltip += u"\n" + base::UTF8ToUTF16(latest->bluetooth_address);
         if (latest->ble_only && !latest->bluetooth_connectable) tooltip += u"\n" + Text(IDS_CRFILES_QUICK_SHARE_BLE_HINT);
         button->SetDeviceTooltip(std::move(tooltip));
@@ -1381,8 +1390,8 @@ class FileShareView : public views::View, public ui::EventObserver {
     peers_->SetVisible(!fallback);
     session_device_->SetTrusted(state.peer_trusted);
     if (session) {
-      session_device_->SetIdentity(service_->IsQuickShare() ? QuickShareDeviceAvatar(state.peer_device_type) : PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
-      if (service_->IsQuickShare()) session_device_->SetDeviceType(QuickShareDeviceType(state.peer_device_type));
+      session_device_->SetIdentity(service_->IsQuickShare() ? QuickShareDeviceAvatar(state.peer_device_type, state.peer_quick_share_avatar) : PeerAvatar(state), base::UTF8ToUTF16(state.peer_name));
+      if (service_->IsQuickShare()) session_device_->SetDeviceType(QuickShareDeviceType(state.peer_device_type, state.peer_quick_share_application));
     }
     // The direction is retained with completed/canceled/failed sessions.
     // An old receive result must not dismiss a newly composed outgoing offer.

@@ -102,6 +102,8 @@ class QuickShareAdapter final : public ShareService {
     }
     const auto source = service_->GetSnapshot();
     result.peer_device_type = source.peer_device_type;
+    result.peer_quick_share_avatar = source.peer_presentation.avatar;
+    result.peer_quick_share_application = static_cast<uint8_t>(source.peer_presentation.application);
     result.diagnostic = source.diagnostic;
     if (source.network_cleanup_failed) result.warning_message_id = IDS_CRFILES_QS_NETWORK_CLEANUP_FAILED;
     result.enabled = preferences_.enabled;
@@ -223,6 +225,9 @@ class QuickShareAdapter final : public ShareService {
       item.ble_only = peer.ble_only;
       item.bluetooth_connectable = bluetooth_connectable;
       item.device_type = peer.endpoint_info.empty() ? 0 : (static_cast<uint8_t>(peer.endpoint_info[0]) >> 1) & 7;
+      const auto presentation = crquickshare::EndpointPresentation(peer.endpoint_info);
+      item.quick_share_avatar = presentation.avatar;
+      item.quick_share_application = static_cast<uint8_t>(presentation.application);
       item.bluetooth_address = peer.bluetooth_address;
       item.address = PeerKey(peer);
       result.peers.push_back(std::move(item));
@@ -341,7 +346,8 @@ class QuickShareAdapter final : public ShareService {
   void UpdateWakeup() {
     CopyReceivedTexts();
     const auto desired = GetQuickSharePreferences();
-    if (!configured_ || preferences_ != desired) {
+    const int desired_avatar = std::clamp(GetNearbySharingPreferences().avatar, 0, 8);
+    if (!configured_ || preferences_ != desired || avatar_ != desired_avatar) {
       // Do not replace a backend while its worker owns a transfer. The core
       // atomically closes incoming admission before the idle backend is reset.
       if (service_ && !service_->StopReceivingIfIdle()) {
@@ -357,12 +363,12 @@ class QuickShareAdapter final : public ShareService {
       sender_.Cancel();
 #endif
       service_.reset();
-      preferences_ = desired; configured_ = true;
+      preferences_ = desired; avatar_ = desired_avatar; configured_ = true;
       files_.clear(); started_at_ = {}; finished_at_ = {};
 #if BUILDFLAG(IS_MAC)
       retry_peer_.reset(); retry_paths_.clear(); retry_session_ = 0;
 #endif
-      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory(), true, CreateQuickShareJournal);
+      if (preferences_.enabled) service_ = std::make_unique<crquickshare::QuickShareService>(preferences_.name, ReceiveDirectory(), true, CreateQuickShareJournal, crquickshare::Presentation{crquickshare::Application::kFiles, avatar_});
     }
     const auto state = service_ ? service_->GetSnapshot() : crquickshare::Snapshot();
     if (service_ && state.available && !state.receiving) service_->SetReceiving(true, true);
@@ -428,6 +434,7 @@ class QuickShareAdapter final : public ShareService {
 #endif
   }
   QuickSharePreferences preferences_;
+  int avatar_ = 0;
   bool configured_ = false;
   uint64_t session_base_ = 0;
   uint64_t copied_text_session_ = 0;
