@@ -16,8 +16,8 @@
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #include "crQuickShare/ble_wakeup.h"
-#include "crQuickShare/bluetooth_receiver.h"
 #endif
+#include "crQuickShare/bluetooth_receiver.h"
 #include "crQuickShare/ble_discovery.h"
 #include "crQuickShare/bootstrap_probe.h"
 #include "crQuickShare/lan_discovery.h"
@@ -77,9 +77,7 @@ class QuickShareAdapter final : public ShareService {
     crquickshare::CancelDeferredCoreWlanAccessRequest();
 #endif
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     receiver_.Update(nullptr);
-#endif
     sender_.Cancel(); discovery_.Update(false);
     wakeup_.Update(false);
 #endif
@@ -355,9 +353,7 @@ class QuickShareAdapter final : public ShareService {
       CopyReceivedTexts();
       if (service_) session_base_ += service_->GetSnapshot().session + 1;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
       receiver_.Update(nullptr);
-#endif
       sender_.Cancel();
 #endif
       service_.reset();
@@ -413,8 +409,20 @@ class QuickShareAdapter final : public ShareService {
 #endif
     }
     discovery_.Update(active, service_ && discovery_active_ && (state.busy || discovery_paused));
+#if BUILDFLAG(IS_MAC)
+    // Share the local-name advertiser: foreground discovery uses FE2C, idle
+    // reception uses FEF3. Keep the receiver's RFCOMM listener and GATT service.
+    const bool bluetooth_receiver_enabled = !base::CommandLine::ForCurrentProcess()->HasSwitch(
+        "disable-quick-share-mac-bluetooth-receiver");
+    const bool wants_fast_init = active && crquickshare::IsMacFastInitExperimentEnabled();
+    // Stop the previous advertiser before allowing the other one to start.
+    if (!wants_fast_init) wakeup_.Update(false);
+    const bool receiver_advertising_stopped =
+        receiver_.SetAdvertisingPausedForDiscovery(wants_fast_init);
+    receiver_.Update(bluetooth_receiver_enabled ? service_.get() : nullptr, hotspot_);
+    if (wants_fast_init) wakeup_.Update(receiver_advertising_stopped);
+#else
     wakeup_.Update(active);
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
     receiver_.Update(service_.get(), hotspot_);
 #endif
 #endif
@@ -433,9 +441,7 @@ class QuickShareAdapter final : public ShareService {
 #endif
   crquickshare::BleDiscovery discovery_;
   crquickshare::BootstrapProbe sender_{false};
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   crquickshare::BluetoothReceiver receiver_;
-#endif
   crquickshare::HotspotConnector hotspot_;
 #endif
   base::RepeatingTimer timer_;
