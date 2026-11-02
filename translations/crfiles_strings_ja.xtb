@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">復元中にファイルが変更されました。元のファイルと一時保存されたファイルは保持されています。再開する前に復元用フォルダを確認してください。</translation>
   <translation id="9086302186042011942">同期中</translation>
   <translation id="4467043784868232357"><ph name="DEVICE"/> に同期</translation>
-  <translation id="1378015185729583470">読み取り専用</translation>
-  <translation id="8592267278951868125">読み取りと書き込み</translation>
   <translation id="8798449543960971550">読み取り</translation>
   <translation id="1236731661735898386">書き込み</translation>
   <translation id="5610152171700512965">開始：<ph name="STARTED"/> · 最終同期：<ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">未記録</translation>
-  <translation id="8487302916007481729">相手のデバイスにローカルファイルの読み取りを許可します。</translation>
-  <translation id="5398621785031221697">相手のデバイスにローカルファイルの変更と削除を許可します。</translation>
   <translation id="5083932160057998629">同期の権限を待っています</translation>
-  <translation id="1407590690133810237">デバイスと、このファイルまたはフォルダへのアクセス権限を選択してください。</translation>
-  <translation id="6042188701694090072">このフォルダの継続的な同期を許可しますか？相手のデバイスはここのファイルを読み取り、変更、削除できます。ローカルでの変更は、相手が書き込みを許可した場合のみ送り返されます。「同期中」で権限を管理できます。置き換えられたファイルや削除されたファイルは復元フォルダに保存されます。</translation>
+  <translation id="4069953589247346347">相手からの更新を受け取る</translation>
+  <translation id="522734733030994012"><ph name="DEVICE"/> が管理</translation>
+  <translation id="3528789313631430010">作成元のデバイスから受信側への更新を許可します。</translation>
+  <translation id="3026848479191650761">受信側のデバイスから作成元への更新を許可します。</translation>
+  <translation id="752612961231969308">このフォルダの継続的な同期を許可しますか？同期の権限は作成元のデバイスが管理します。「同期中」でこの関係を一時停止または削除できます。置き換えられたファイルや削除されたファイルは復元フォルダに保存されます。</translation>
+  <translation id="369053807563392520">このファイルまたはフォルダを同期するデバイスを選択してください。</translation>
 </translationbundle>

@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">복구 중 파일이 변경되었습니다. 원본과 임시 파일은 보존되었습니다. 다시 시작하기 전에 복구 폴더를 확인하세요.</translation>
   <translation id="9086302186042011942">동기화 중</translation>
   <translation id="4467043784868232357"><ph name="DEVICE"/>(으)로 동기화</translation>
-  <translation id="1378015185729583470">읽기 전용</translation>
-  <translation id="8592267278951868125">읽기 및 쓰기</translation>
   <translation id="8798449543960971550">읽기</translation>
   <translation id="1236731661735898386">쓰기</translation>
   <translation id="5610152171700512965">시작: <ph name="STARTED"/> · 최근 동기화: <ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">기록 없음</translation>
-  <translation id="8487302916007481729">원격 기기가 로컬 파일을 읽도록 허용합니다.</translation>
-  <translation id="5398621785031221697">원격 기기가 로컬 파일을 수정하고 삭제하도록 허용합니다.</translation>
   <translation id="5083932160057998629">동기화 권한 대기 중</translation>
-  <translation id="1407590690133810237">기기와 이 파일 또는 폴더에 대한 접근 권한을 선택하세요.</translation>
-  <translation id="6042188701694090072">이 폴더의 지속적인 동기화를 허용할까요? 상대 기기는 여기의 파일을 읽고 수정하고 삭제할 수 있습니다. 로컬 변경 사항은 상대가 쓰기 권한을 허용한 경우에만 다시 동기화됩니다. 동기화 중에서 권한을 관리할 수 있습니다. 교체되거나 삭제된 파일은 복구 폴더에 보관됩니다.</translation>
+  <translation id="4069953589247346347">원격 변경 사항 받기</translation>
+  <translation id="522734733030994012"><ph name="DEVICE"/>에서 관리</translation>
+  <translation id="3528789313631430010">동기화를 만든 기기에서 수신 기기로 변경 사항을 보내도록 허용합니다.</translation>
+  <translation id="3026848479191650761">수신 기기에서 동기화를 만든 기기로 변경 사항을 다시 보내도록 허용합니다.</translation>
+  <translation id="752612961231969308">이 폴더의 지속적인 동기화를 허용할까요? 동기화를 만든 기기에서 동기화 권한을 관리합니다. 동기화 중에서 이 관계를 일시중지하거나 삭제할 수 있습니다. 교체되거나 삭제된 파일은 복구 폴더에 보관됩니다.</translation>
+  <translation id="369053807563392520">이 파일 또는 폴더를 동기화할 기기를 선택하세요.</translation>
 </translationbundle>

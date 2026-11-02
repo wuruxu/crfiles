@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">Un archivo cambió durante la recuperación. Se conservan los originales y los archivos temporales. Revisa la carpeta de recuperación antes de reanudar.</translation>
   <translation id="9086302186042011942">Sincronizaciones</translation>
   <translation id="4467043784868232357">Sincronizar con <ph name="DEVICE"/></translation>
-  <translation id="1378015185729583470">Solo lectura</translation>
-  <translation id="8592267278951868125">Lectura y escritura</translation>
   <translation id="8798449543960971550">Lectura</translation>
   <translation id="1236731661735898386">Escritura</translation>
   <translation id="5610152171700512965">Inicio: <ph name="STARTED"/> · Última sincronización: <ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">Sin registros</translation>
-  <translation id="8487302916007481729">Permitir que el dispositivo remoto lea archivos locales.</translation>
-  <translation id="5398621785031221697">Permitir que el dispositivo remoto modifique y elimine archivos locales.</translation>
   <translation id="5083932160057998629">Esperando permisos de sincronización</translation>
-  <translation id="1407590690133810237">Elige un dispositivo y sus permisos de acceso a este archivo o carpeta.</translation>
-  <translation id="6042188701694090072">¿Permitir la sincronización continua en esta carpeta? El otro dispositivo podrá leer, modificar y eliminar archivos aquí. Los cambios locales solo se enviarán de vuelta si concede permiso de escritura. Gestiona los permisos en Sincronizaciones. Los archivos reemplazados y eliminados se conservan en la carpeta de recuperación.</translation>
+  <translation id="4069953589247346347">Recibir actualizaciones remotas</translation>
+  <translation id="522734733030994012">Gestionado por <ph name="DEVICE"/></translation>
+  <translation id="3528789313631430010">Permitir actualizaciones del dispositivo creador al receptor.</translation>
+  <translation id="3026848479191650761">Permitir actualizaciones del dispositivo receptor al creador.</translation>
+  <translation id="752612961231969308">¿Permitir la sincronización continua en esta carpeta? El dispositivo creador controla los permisos de sincronización. Puedes pausar o eliminar esta relación en Sincronizaciones. Los archivos reemplazados y eliminados se conservan en la carpeta de recuperación.</translation>
+  <translation id="369053807563392520">Elige un dispositivo para sincronizar este archivo o carpeta.</translation>
 </translationbundle>

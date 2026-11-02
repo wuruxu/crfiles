@@ -39,9 +39,12 @@ struct SyncJob {
   int avatar = 0;
   base::Time started;
   base::Time last_synced;
-  // Local grants to the authenticated remote device.
+  // Creator A's grants to receiver B, mirrored unchanged on both devices.
+  // Read permits A -> B; Write permits B -> A.
+  bool creator = false;
+  bool permissions_known = false;
   bool read = true;
-  bool write = true;
+  bool write = false;
   bool paused = false;
   bool removed = false;
   int status = 0;  // Localized resource ID; never peer-supplied text.

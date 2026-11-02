@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">Un fichier a changé pendant la récupération. Les originaux et fichiers temporaires sont conservés. Vérifiez le dossier de récupération avant de reprendre.</translation>
   <translation id="9086302186042011942">Synchronisations</translation>
   <translation id="4467043784868232357">Synchroniser vers <ph name="DEVICE"/></translation>
-  <translation id="1378015185729583470">Lecture seule</translation>
-  <translation id="8592267278951868125">Lecture et écriture</translation>
   <translation id="8798449543960971550">Lecture</translation>
   <translation id="1236731661735898386">Écriture</translation>
   <translation id="5610152171700512965">Début : <ph name="STARTED"/> · Dernière synchro : <ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">Aucun enregistrement</translation>
-  <translation id="8487302916007481729">Autoriser l’appareil distant à lire les fichiers locaux.</translation>
-  <translation id="5398621785031221697">Autoriser l’appareil distant à modifier et supprimer les fichiers locaux.</translation>
   <translation id="5083932160057998629">En attente des autorisations de synchronisation</translation>
-  <translation id="1407590690133810237">Choisissez un appareil et ses droits d’accès à ce fichier ou dossier.</translation>
-  <translation id="6042188701694090072">Autoriser la synchronisation continue dans ce dossier ? L’autre appareil pourra lire, modifier et supprimer les fichiers ici. Les modifications locales ne lui seront transmises que s’il autorise l’écriture. Gérez les autorisations dans Synchronisations. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération.</translation>
+  <translation id="4069953589247346347">Recevoir les mises à jour distantes</translation>
+  <translation id="522734733030994012">Géré par <ph name="DEVICE"/></translation>
+  <translation id="3528789313631430010">Autoriser les mises à jour de l’appareil créateur vers l’appareil destinataire.</translation>
+  <translation id="3026848479191650761">Autoriser les mises à jour de l’appareil destinataire vers l’appareil créateur.</translation>
+  <translation id="752612961231969308">Autoriser la synchronisation continue dans ce dossier ? L’appareil créateur contrôle les autorisations de synchronisation. Vous pouvez suspendre ou supprimer cette relation dans Synchronisations. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération.</translation>
+  <translation id="369053807563392520">Choisissez un appareil pour synchroniser ce fichier ou dossier.</translation>
 </translationbundle>

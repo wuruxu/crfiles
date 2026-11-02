@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">復原期間檔案發生變更。原始檔案及暫存檔案皆已保留。請檢查復原資料夾後再繼續。</translation>
   <translation id="9086302186042011942">同步中</translation>
   <translation id="4467043784868232357">同步至 <ph name="DEVICE"/></translation>
-  <translation id="1378015185729583470">唯讀</translation>
-  <translation id="8592267278951868125">讀寫</translation>
   <translation id="8798449543960971550">讀取</translation>
   <translation id="1236731661735898386">寫入</translation>
   <translation id="5610152171700512965">開始：<ph name="STARTED"/> · 最近同步：<ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">尚無紀錄</translation>
-  <translation id="8487302916007481729">允許遠端裝置讀取本機檔案。</translation>
-  <translation id="5398621785031221697">允許遠端裝置修改及刪除本機檔案。</translation>
   <translation id="5083932160057998629">正在等待同步權限</translation>
-  <translation id="1407590690133810237">選擇裝置及其對此檔案或資料夾的存取權限。</translation>
-  <translation id="6042188701694090072">允許在此資料夾中持續同步嗎？另一台裝置可讀取、修改及刪除此處的檔案。僅當對方授予寫入權限時，本機變更才會同步回去。可在「同步中」管理權限。被取代及刪除的檔案會保留在復原資料夾中。</translation>
+  <translation id="4069953589247346347">接收遠端更新</translation>
+  <translation id="522734733030994012">由 <ph name="DEVICE"/> 管理</translation>
+  <translation id="3528789313631430010">允許將建立端的更新同步至接收端。</translation>
+  <translation id="3026848479191650761">允許將接收端的更新同步回建立端。</translation>
+  <translation id="752612961231969308">允許在此資料夾中持續同步嗎？同步權限由建立端控制。你可以在「同步中」暫停或移除此關係。被取代及刪除的檔案會保留在復原資料夾中。</translation>
+  <translation id="369053807563392520">選擇裝置以同步此檔案或資料夾。</translation>
 </translationbundle>

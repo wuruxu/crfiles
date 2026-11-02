@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">恢复期间文件发生变化。原文件和暂存文件均已保留。请检查恢复文件夹后再继续。</translation>
   <translation id="9086302186042011942">同步中</translation>
   <translation id="4467043784868232357">同步到 <ph name="DEVICE"/></translation>
-  <translation id="1378015185729583470">只读</translation>
-  <translation id="8592267278951868125">读写</translation>
   <translation id="8798449543960971550">读取</translation>
   <translation id="1236731661735898386">写入</translation>
   <translation id="5610152171700512965">开始：<ph name="STARTED"/> · 最近同步：<ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">尚无记录</translation>
-  <translation id="8487302916007481729">允许远端设备读取本机文件。</translation>
-  <translation id="5398621785031221697">允许远端设备修改和删除本机文件。</translation>
   <translation id="5083932160057998629">正在等待同步权限</translation>
-  <translation id="1407590690133810237">选择设备及其对此文件或文件夹的访问权限。</translation>
-  <translation id="6042188701694090072">允许在此文件夹中持续同步吗？另一台设备可读取、修改和删除此处的文件。仅当对方授予写入权限时，本机改动才会同步回去。可在“同步中”管理权限。被替换和删除的文件会保留在恢复文件夹中。</translation>
+  <translation id="4069953589247346347">接收远端更新</translation>
+  <translation id="522734733030994012">由 <ph name="DEVICE"/> 管理</translation>
+  <translation id="3528789313631430010">允许将创建端的更新同步到接收端。</translation>
+  <translation id="3026848479191650761">允许将接收端的更新同步回创建端。</translation>
+  <translation id="752612961231969308">允许在此文件夹中持续同步吗？同步权限由创建端控制。你可以在“同步中”暂停或解除此关系。被替换和删除的文件会保留在恢复文件夹中。</translation>
+  <translation id="369053807563392520">选择设备以同步此文件或文件夹。</translation>
 </translationbundle>

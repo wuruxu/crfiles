@@ -54,7 +54,7 @@ class ShareService {
     uint8_t quick_share_application = 0;
     uint8_t device_type = 0;  // Quick Share's advertised type; 0 means unknown.
     std::vector<SharedTarget> targets = {};
-    // Requires both sync-v1 and its permission-negotiation extension.
+    // Requires sync-v1 and creator-controlled permissions (sync_permissions=2).
     bool sync_v1 = false;
     bool operator==(const Peer&) const = default;
   };

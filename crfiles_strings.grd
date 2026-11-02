@@ -438,17 +438,17 @@
       <message name="IDS_CRFILES_SYNC_RECOVERY_REQUIRED" desc="Two-way file synchronization interface.">A file changed during recovery. Originals and staged files are preserved. Review the recovery folder before resuming.</message>
       <message name="IDS_CRFILES_SYNCING" desc="Sync device access, permissions and relationship management.">Syncing</message>
       <message name="IDS_CRFILES_SYNC_TO_DEVICE" desc="Sync device access, permissions and relationship management.">Sync to <ph name="DEVICE">$1<ex>Laptop</ex></ph></message>
-      <message name="IDS_CRFILES_SYNC_READ_ONLY" desc="Sync device access, permissions and relationship management.">ReadOnly</message>
-      <message name="IDS_CRFILES_SYNC_READ_WRITE" desc="Sync device access, permissions and relationship management.">Read and Write</message>
       <message name="IDS_CRFILES_SYNC_READ" desc="Sync device access, permissions and relationship management.">Read</message>
       <message name="IDS_CRFILES_SYNC_WRITE" desc="Sync device access, permissions and relationship management.">Write</message>
       <message name="IDS_CRFILES_SYNC_TIMES" desc="Sync device access, permissions and relationship management.">Started: <ph name="STARTED">$1<ex>11/3/2026 10:00</ex></ph> · Last synced: <ph name="SYNCED">$2<ex>11/3/2026 10:05</ex></ph></message>
       <message name="IDS_CRFILES_SYNC_NOT_YET" desc="Sync device access, permissions and relationship management.">Not yet</message>
-      <message name="IDS_CRFILES_SYNC_READ_HINT" desc="Sync device access, permissions and relationship management.">Allow the remote device to read local files.</message>
-      <message name="IDS_CRFILES_SYNC_WRITE_HINT" desc="Sync device access, permissions and relationship management.">Allow the remote device to change and delete local files.</message>
       <message name="IDS_CRFILES_SYNC_NO_PERMISSION" desc="Sync device access, permissions and relationship management.">Waiting for sync permissions</message>
-      <message name="IDS_CRFILES_SYNC_HINT" desc="Sync device access, permissions and relationship management.">Choose a device and the access it can have to this file or folder.</message>
-      <message name="IDS_CRFILES_SYNC_CONSENT" desc="Sync device access, permissions and relationship management.">Allow ongoing sync in this folder? The other device can read, change and delete files here. Local edits sync back only when it grants Write access. Manage permissions in Syncing. Replaced and deleted files are kept in the recovery folder.</message>
+      <message name="IDS_CRFILES_SYNC_UPDATE_FROM_REMOTE" desc="Sync permissions controlled by the device that created the relationship.">Update from remote</message>
+      <message name="IDS_CRFILES_SYNC_MANAGED_BY" desc="Sync permissions controlled by the device that created the relationship.">Managed by <ph name="DEVICE">$1<ex>Laptop</ex></ph></message>
+      <message name="IDS_CRFILES_SYNC_READ_HINT" desc="Sync permissions controlled by the device that created the relationship.">Allow updates from the creating device to the receiving device.</message>
+      <message name="IDS_CRFILES_SYNC_WRITE_HINT" desc="Sync permissions controlled by the device that created the relationship.">Allow updates from the receiving device back to the creating device.</message>
+      <message name="IDS_CRFILES_SYNC_CONSENT" desc="Sync permissions controlled by the device that created the relationship.">Allow ongoing sync in this folder? The creating device controls sync permissions. You can pause or remove this relationship in Syncing. Replaced and deleted files are kept in the recovery folder.</message>
+      <message name="IDS_CRFILES_SYNC_HINT" desc="Sync permissions controlled by the device that created the relationship.">Choose a device to sync this file or folder.</message>
 </messages>
   </release>
 </grit>

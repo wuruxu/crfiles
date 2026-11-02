@@ -261,12 +261,12 @@ class SyncService::Impl {
     sqlite3_busy_timeout(db, 5000);
     {
       Statement version(db, "PRAGMA user_version");
-      if (version.Step() != SQLITE_ROW || (version.Column(0) != "0" && version.Column(0) != "1" && version.Column(0) != "2")) return false;
+      if (version.Step() != SQLITE_ROW || (version.Column(0) != "0" && version.Column(0) != "1" && version.Column(0) != "2" && version.Column(0) != "3")) return false;
     }
     if (!Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"
         "CREATE TABLE IF NOT EXISTS relations(id TEXT PRIMARY KEY,value TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS entries(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path));"
-        "CREATE TABLE IF NOT EXISTS pending(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path)); PRAGMA user_version=2;")) return false;
+        "CREATE TABLE IF NOT EXISTS pending(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path)); PRAGMA user_version=3;")) return false;
     jobs.clear();
     Statement rows(db, "SELECT id,value FROM relations");
     int step;
@@ -290,9 +290,14 @@ class SyncService::Impl {
       r->view.name = value->FindString("item_name") ? *value->FindString("item_name") :
           (r->single.empty() ? r->view.root.BaseName().AsUTF8Unsafe() : r->single);
       r->view.avatar = std::clamp(value->FindInt("avatar").value_or(0), 0, 8);
-      // Existing registrations retain their previously granted two-way access.
-      r->view.read = value->FindBool("read").value_or(true);
-      r->view.write = value->FindBool("write").value_or(true);
+      // A retains its grants. B's legacy local grants are not A's policy:
+      // wait for the authenticated creator instead of displaying invented values.
+      const auto permissions = value->FindInt("permissions");
+      if ((value->contains("permissions") && (!permissions || (*permissions != 0 && *permissions != 2))) ||
+          (permissions == 2 && (!value->FindBool("read") || !value->FindBool("write")))) return false;
+      r->view.permissions_known = r->role == 0 || permissions == 2;
+      r->view.read = r->view.permissions_known && value->FindBool("read").value_or(true);
+      r->view.write = r->view.permissions_known && value->FindBool("write").value_or(true);
       uint64_t started = 0, synced = 0;
       if ((value->contains("started") && !Number(*value, "started", &started)) ||
           (value->contains("last_synced") && !Number(*value, "last_synced", &synced))) return false;
@@ -327,6 +332,7 @@ class SyncService::Impl {
     value.Set("counter", base::NumberToString(r.counter));
     value.Set("item_name", r.view.name); value.Set("avatar", r.view.avatar);
     value.Set("read", r.view.read); value.Set("write", r.view.write);
+    value.Set("permissions", r.view.permissions_known ? 2 : 0);
     value.Set("started", base::NumberToString(r.view.started.ToDeltaSinceWindowsEpoch().InMicroseconds()));
     value.Set("last_synced", base::NumberToString(r.view.last_synced.ToDeltaSinceWindowsEpoch().InMicroseconds()));
     Statement row(db, "INSERT OR REPLACE INTO relations VALUES(?,?)");
@@ -347,7 +353,7 @@ class SyncService::Impl {
     std::vector<SyncJob> views;
     for (auto& [id, r] : jobs) {
       if (r->view.removed && r->view.status != IDS_CRFILES_SYNC_STORAGE_ERROR) continue;
-      auto view = r->view;
+      auto view = r->view; view.creator = r->role == 0;
       if (view.paused && view.status != IDS_CRFILES_SYNC_SOURCE_ERROR && view.status != IDS_CRFILES_SYNC_STORAGE_ERROR) view.status = IDS_CRFILES_SYNC_PAUSED;
       views.push_back(std::move(view));
       if (!r->watcher && !r->view.paused) {
@@ -385,7 +391,7 @@ class SyncService::Impl {
     r->single = info.is_directory ? "" : CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe());
     r->view.name = CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe());
     r->view.avatar = std::clamp(command.avatar, 0, 8); r->view.started = base::Time::Now();
-    r->view.read = command.read; r->view.write = command.write;
+    r->view.read = command.read; r->view.write = command.write; r->view.permissions_known = true;
     if (!SafeSyncPath(CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe())) ||
         (!r->single.empty() && !SafeSyncPath(r->single)) || Overlaps(r->view.root, {}, !r->single.empty())) return false;
     SyncFiles files(r->view.root, r->view.id, [] { return false; });
@@ -418,7 +424,7 @@ class SyncService::Impl {
           r->view.root = command.source; r->view.peer = command.peer;
           r->view.name = command.source.BaseName().AsUTF8Unsafe();
           r->view.avatar = std::clamp(command.avatar, 0, 8);
-          r->view.read = command.read; r->view.write = command.write;
+          r->view.read = command.read; r->view.write = command.write; r->view.permissions_known = true;
           r->view.status = IDS_CRFILES_SYNC_SOURCE_ERROR; r->view.paused = true;
           jobs.emplace(command.id, std::move(r));
         }
@@ -429,7 +435,9 @@ class SyncService::Impl {
         if (command.kind == 3 ? r->view.fingerprint != command.fingerprint : id != command.id) continue;
         const bool old_removed = r->view.removed;
         if (command.kind == 4) {
-          r->view.read = command.read; r->view.write = command.write;
+          // UI disabling is not authorization: only the creator can edit policy.
+          if (r->role != 0 || r->view.removed) continue;
+          r->view.read = command.read; r->view.write = command.write; r->view.permissions_known = true;
         } else r->view.paused = command.kind == 1 ? command.paused : true;
         r->view.removed = old_removed || command.kind == 2 || command.kind == 3;
         if (!r->view.fingerprint.empty() && !Save(*r)) {
@@ -520,10 +528,10 @@ class SyncService::Impl {
     r.index[path] = entry; return true;
   }
   bool Scan(Relationship& r, SyncFiles& files) {
-    if (!r.view.write) {
+    if (!(r.role == 0 ? r.view.write : r.view.read)) {
       Statement pending(db, "SELECT 1 FROM pending WHERE id=? LIMIT 1");
       if (!pending.Text(1, r.view.id) || pending.Step() != SQLITE_DONE) {
-        // Do not replay a previous receive journal after local Write is revoked.
+        // Do not replay a receive journal after this direction is disabled.
         r.view.status = IDS_CRFILES_SYNC_RECOVERY_REQUIRED; return false;
       }
     }
@@ -681,9 +689,10 @@ class SyncService::Impl {
     if (changed) r.dirty->value = true;
     return true;
   }
-  bool Exchange(SyncWire& wire, Relationship& r, SyncFiles& files, bool peer_read, bool peer_write) {
-    const bool send = r.view.read && peer_write;
-    const bool receive = r.view.write && peer_read;
+  bool Exchange(SyncWire& wire, Relationship& r, SyncFiles& files) {
+    if (!r.view.permissions_known) return false;
+    const bool send = r.role == 0 ? r.view.read : r.view.write;
+    const bool receive = r.role == 0 ? r.view.write : r.view.read;
     // No file/index access when neither direction is permitted.
     if (!send && !receive) {
       r.view.status = IDS_CRFILES_SYNC_NO_PERMISSION;
@@ -773,21 +782,21 @@ class SyncService::Impl {
       auto open = Message("sync-open"); open.Set("id", id); open.Set("create", !relation->confirmed);
       open.Set("name", relation->single.empty() ? CanonicalSyncPath(relation->view.root.BaseName().AsUTF8Unsafe()) : relation->single);
       open.Set("file", !relation->single.empty());
-      open.Set("permissions", 1); open.Set("read", relation->view.read); open.Set("write", relation->view.write);
+      open.Set("permissions", 2); open.Set("read", relation->view.read); open.Set("write", relation->view.write);
       if (!wire.Write(std::move(open))) return false;
       const auto accepted = wire.Read();
       if (Type(accepted, "sync-declined")) {
         relation->view.paused = true; Save(*relation); Publish(); return false;
       }
-      if (!Type(accepted, "sync-accepted") || accepted->FindInt("permissions") != 1 ||
-          !accepted->FindBool("read") || !accepted->FindBool("write")) return false;
-      peer_read = *accepted->FindBool("read"); peer_write = *accepted->FindBool("write");
+      if (!Type(accepted, "sync-accepted") || accepted->FindInt("permissions") != 2 ||
+          accepted->FindBool("read") != relation->view.read ||
+          accepted->FindBool("write") != relation->view.write) return false;
       relation->confirmed = true;
       if (!Save(*relation)) return false;
     } else {
       const auto open = wire.Read();
       const auto* remote_id = open ? open->FindString("id") : nullptr;
-      if (!Type(open, "sync-open") || !remote_id || *remote_id != id || open->FindInt("permissions") != 1 ||
+      if (!Type(open, "sync-open") || !remote_id || *remote_id != id || open->FindInt("permissions") != 2 ||
           !open->FindBool("read") || !open->FindBool("write")) return false;
       peer_read = *open->FindBool("read"); peer_write = *open->FindBool("write");
       if (it == jobs.end()) {
@@ -800,6 +809,7 @@ class SyncService::Impl {
         r->single = *file ? *name : ""; r->role = 1; r->confirmed = true;
         r->view.name = *name; r->view.started = base::Time::Now();
         r->view.avatar = std::clamp(avatar, 0, 8);
+        r->view.read = peer_read; r->view.write = peer_write; r->view.permissions_known = true;
         if (Overlaps(r->view.root) || base::PathExists(r->view.root)) return false;
         if (!wire.Consent(r->view.root, *name)) {
           wire.Write(Message("sync-declined")); return false;
@@ -814,6 +824,10 @@ class SyncService::Impl {
         if (relation->role != 1 || relation->view.fingerprint != fingerprint ||
             relation->view.paused || relation->view.removed) return false;
       }
+      // These are the authenticated creator's grants to this receiver, not
+      // local grants back to the creator. Persist and display the exact policy.
+      relation->view.read = peer_read; relation->view.write = peer_write;
+      relation->view.permissions_known = true;
       if (relation->identity.empty()) {
         if (!base::CreateDirectory(relation->view.root)) return false;
         const auto canonical_root = base::MakeAbsoluteFilePath(relation->view.root);
@@ -824,7 +838,9 @@ class SyncService::Impl {
         relation->identity = initial.Identity(); relation->view.recovery = initial.Recovery();
         if (!Save(*relation)) return false;
       }
-      auto accepted = Message("sync-accepted"); accepted.Set("permissions", 1);
+      if (!Save(*relation)) { relation->view.status = IDS_CRFILES_SYNC_STORAGE_ERROR; Publish(); return false; }
+      Publish();
+      auto accepted = Message("sync-accepted"); accepted.Set("permissions", 2);
       accepted.Set("read", relation->view.read); accepted.Set("write", relation->view.write);
       if (!wire.Write(std::move(accepted))) return false;
     }
@@ -837,7 +853,7 @@ class SyncService::Impl {
     relation->view.status = IDS_CRFILES_SYNC_ACTIVE; Publish();
     const bool opened = files.Open();
     if (!opened || files.Identity() != relation->identity) relation->view.status = IDS_CRFILES_SYNC_SOURCE_ERROR;
-    bool ok = opened && Exchange(wire, *relation, files, peer_read, peer_write);
+    bool ok = opened && Exchange(wire, *relation, files);
     const bool idle = relation->view.status == IDS_CRFILES_SYNC_NO_PERMISSION;
     if (ok && !idle) {
       const auto previous = relation->view.last_synced;

@@ -804,7 +804,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
   hello.Set("version", 1);
   hello.Set("folder_transfer", true);
   hello.Set("sync_v1", true);
-  hello.Set("sync_permissions", 1);
+  hello.Set("sync_permissions", 2);
   if (!state->sync_id.empty()) hello.Set("sync", state->sync_id);
   hello.Set("targets", SharedTargetsJson(state));
   hello.Set("name", state->name);
@@ -838,7 +838,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
         pixels.size() == 96 * 96 * 4) custom_avatar = *encoded;
   }
   const bool trusted = IsTrusted(state->trust, fingerprint);
-  state->peer_sync = peer->FindBool("sync_v1").value_or(false) && peer->FindInt("sync_permissions") == 1;
+  state->peer_sync = peer->FindBool("sync_v1").value_or(false) && peer->FindInt("sync_permissions") == 2;
   if (state->snapshot.receiving) {
     if (const auto* sync_id = peer->FindString("sync")) {
       if (!state->peer_sync || !IsSyncId(*sync_id)) return false;
@@ -1977,7 +1977,7 @@ void ServeIdentities(std::shared_ptr<State> state, ScopedSocket listener,
     identity.Set("port", transfer_port);
     identity.Set("folder_transfer", true);
     identity.Set("sync_v1", true);
-    identity.Set("sync_permissions", 1);
+    identity.Set("sync_permissions", 2);
     if (!channel.SendJson(std::move(identity))) continue;
     // Legacy probes read only the small identity frame and close the channel.
     auto targets = Message("targets"); targets.Set("targets", SharedTargetsJson(state));
@@ -2083,7 +2083,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
         if (type_ok && id_ok && port_ok) {
           fingerprint = channel.PeerFingerprint();
           folder_transfer = identity->FindBool("folder_transfer").value_or(false);
-          sync_v1 = identity->FindBool("sync_v1").value_or(false) && identity->FindInt("sync_permissions") == 1;
+          sync_v1 = identity->FindBool("sync_v1").value_or(false) && identity->FindInt("sync_permissions") == 2;
           if (folder_transfer) {
             const auto catalog = channel.ReadJson(base::Seconds(2));
             if (IsMessage(catalog, "targets")) targets = ParseTargets(*catalog);

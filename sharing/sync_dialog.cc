@@ -28,7 +28,6 @@
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
-#include "ui/views/controls/button/radio_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
@@ -75,7 +74,7 @@ class SyncView : public views::View {
   ~SyncView() override { ClosePopup(); }
  private:
   void ClosePopup() {
-    write_ = nullptr;
+    update_from_remote_ = nullptr;
     if (popup_delegate_) popup_delegate_->SetAnchorView(nullptr);
     if (popup_widget_) popup_widget_->MakeCloseSynchronous({});
     popup_widget_.reset(); popup_delegate_.reset();
@@ -87,9 +86,8 @@ class SyncView : public views::View {
     auto* layout = contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
     layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* read_only = contents->AddChildView(std::make_unique<views::RadioButton>(Text(IDS_CRFILES_SYNC_READ_ONLY), 1));
-    write_ = contents->AddChildView(std::make_unique<views::RadioButton>(Text(IDS_CRFILES_SYNC_READ_WRITE), 1));
-    read_only->SetChecked(true);
+    update_from_remote_ = contents->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_SYNC_UPDATE_FROM_REMOTE)));
+    update_from_remote_->SetChecked(false);
     IconButton(contents.get(), base::BindRepeating(&SyncView::Confirm, weak_.GetWeakPtr(), peer), kCheckIcon, IDS_CRFILES_SYNC_TO);
     popup_delegate_ = std::make_unique<views::BubbleDialogDelegate>(
         anchors_.at(peer.verified_fingerprint), views::BubbleBorder::TOP_CENTER);
@@ -106,8 +104,8 @@ class SyncView : public views::View {
     popup_delegate_->SizeToContents(); popup_widget_->Show();
   }
   void Confirm(NearbySharing::Peer peer) {
-    if (!write_ || paths_.size() != 1 || queued_ || requesting_) return;
-    const bool write = write_->GetChecked();
+    if (!update_from_remote_ || paths_.size() != 1 || queued_ || requesting_) return;
+    const bool write = update_from_remote_->GetChecked();
     // Close asynchronously, after the confirmation button's event unwinds.
     if (popup_widget_) popup_widget_->Close();
     requesting_ = true; device_key_.clear();
@@ -168,7 +166,7 @@ class SyncView : public views::View {
   std::vector<base::FilePath> paths_;
   raw_ptr<views::View> devices_ = nullptr;
   raw_ptr<views::Label> status_ = nullptr;
-  raw_ptr<views::RadioButton> write_ = nullptr;
+  raw_ptr<views::Checkbox> update_from_remote_ = nullptr;
   std::map<std::string, raw_ptr<views::View>> anchors_;
   std::unique_ptr<views::BubbleDialogDelegate> popup_delegate_;
   std::unique_ptr<views::Widget> popup_widget_;
@@ -238,11 +236,16 @@ class SyncingView : public views::View {
       auto* read = second->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_SYNC_READ)));
       auto* write = second->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_SYNC_WRITE)));
       read->SetChecked(job.read); write->SetChecked(job.write);
-      read->SetTooltipText(Text(IDS_CRFILES_SYNC_READ_HINT)); write->SetTooltipText(Text(IDS_CRFILES_SYNC_WRITE_HINT));
+      const auto managed = job.creator ? std::u16string() : u"\n" + l10n_util::GetStringFUTF16(
+          IDS_CRFILES_SYNC_MANAGED_BY, base::UTF8ToUTF16(job.peer));
+      read->SetTooltipText(Text(IDS_CRFILES_SYNC_READ_HINT) + managed);
+      write->SetTooltipText(Text(IDS_CRFILES_SYNC_WRITE_HINT) + managed);
       read->SetCallback(base::BindRepeating(&SyncingView::Permissions, weak_.GetWeakPtr(), job.id, base::Unretained(read), base::Unretained(write)));
       write->SetCallback(base::BindRepeating(&SyncingView::Permissions, weak_.GetWeakPtr(), job.id, base::Unretained(read), base::Unretained(write)));
       const bool valid = !job.id.empty() && !job.fingerprint.empty() && !job.removed;
-      read->SetEnabled(valid); write->SetEnabled(valid);
+      const bool editable = valid && job.creator && job.permissions_known;
+      read->SetEnabled(editable); write->SetEnabled(editable);
+      if (!job.permissions_known && valid) Label(text, Text(IDS_CRFILES_SYNC_NO_PERMISSION));
       if (job.status == IDS_CRFILES_SYNC_SOURCE_ERROR || job.status == IDS_CRFILES_SYNC_STORAGE_ERROR ||
           job.status == IDS_CRFILES_SYNC_RECOVERY_REQUIRED || job.status == IDS_CRFILES_SYNC_RETRY) {
         auto* error = Label(text, status, true); error->SetEnabledColor(ui::kColorSysError);

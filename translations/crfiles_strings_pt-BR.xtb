@@ -389,15 +389,15 @@
   <translation id="6371951046798553292">Um arquivo mudou durante a recuperação. Os originais e arquivos temporários foram preservados. Verifique a pasta de recuperação antes de retomar.</translation>
   <translation id="9086302186042011942">Sincronizações</translation>
   <translation id="4467043784868232357">Sincronizar com <ph name="DEVICE"/></translation>
-  <translation id="1378015185729583470">Somente leitura</translation>
-  <translation id="8592267278951868125">Leitura e gravação</translation>
   <translation id="8798449543960971550">Leitura</translation>
   <translation id="1236731661735898386">Gravação</translation>
   <translation id="5610152171700512965">Início: <ph name="STARTED"/> · Última sincronização: <ph name="SYNCED"/></translation>
   <translation id="2123074103454259350">Sem registros</translation>
-  <translation id="8487302916007481729">Permitir que o dispositivo remoto leia arquivos locais.</translation>
-  <translation id="5398621785031221697">Permitir que o dispositivo remoto altere e exclua arquivos locais.</translation>
   <translation id="5083932160057998629">Aguardando permissões de sincronização</translation>
-  <translation id="1407590690133810237">Escolha um dispositivo e suas permissões de acesso a este arquivo ou pasta.</translation>
-  <translation id="6042188701694090072">Permitir a sincronização contínua nesta pasta? O outro dispositivo poderá ler, alterar e excluir arquivos aqui. As alterações locais só serão enviadas de volta se ele conceder permissão de gravação. Gerencie as permissões em Sincronizações. Arquivos substituídos e excluídos são mantidos na pasta de recuperação.</translation>
+  <translation id="4069953589247346347">Receber atualizações remotas</translation>
+  <translation id="522734733030994012">Gerenciado por <ph name="DEVICE"/></translation>
+  <translation id="3528789313631430010">Permitir atualizações do dispositivo criador para o receptor.</translation>
+  <translation id="3026848479191650761">Permitir atualizações do dispositivo receptor para o criador.</translation>
+  <translation id="752612961231969308">Permitir a sincronização contínua nesta pasta? O dispositivo criador controla as permissões de sincronização. Você pode pausar ou remover esta relação em Sincronizações. Arquivos substituídos e excluídos são mantidos na pasta de recuperação.</translation>
+  <translation id="369053807563392520">Escolha um dispositivo para sincronizar este arquivo ou pasta.</translation>
 </translationbundle>

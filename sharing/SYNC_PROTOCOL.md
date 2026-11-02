@@ -12,8 +12,8 @@ contents again. There is no system background daemon.
 Select one regular file or directory, then choose **Sync to**, immediately below
 **Share to**. Only desktop peers advertising the sync extension through the
 identity probe are listed. Select a device avatar to open **Sync to <device>**.
-Choose **ReadOnly** (the default) or **Read and Write**, then confirm with the check
-icon. Compare pairing codes if needed and approve continuing access on the receiver.
+Leave **Update from remote** unchecked for A-to-B updates only, or check it
+for two-way synchronization, then confirm with the check icon. Compare pairing codes if needed and approve continuing access on the receiver.
 Normal trusted-send acceptance does not substitute for this initial sync consent.
 
 The receiver creates a fresh `Sync-<relationship-id>` directory under its configured
@@ -25,8 +25,11 @@ folders are not merged during registration.
 The titlebar menu opens **Syncing**, directly below **Sharing folders**. This
 separate dialog follows the Trusted devices layout: the remote avatar, registration
 and last successful reconciliation times, and the selected file/folder name followed
-by **Read** and **Write** checkboxes. These are this device's grants to the remote
-peer. The avatar opens the local root; trailing icons pause/resume, open recovery
+by **Read** and **Write** checkboxes. Both devices display A's grants to B:
+Read allows A-to-B updates and Write allows B-to-A updates. Only A can edit them;
+on B both checkboxes are disabled and identify A as their manager in tooltips.
+Either device can pause or remove the relationship. The avatar opens the local
+root; trailing icons pause/resume, open recovery
 files and remove the relationship. Device and status details are available in
 tooltips; errors also appear inline. Management remains available after a selected
 file is gone.
@@ -42,9 +45,10 @@ prompting. Canceling the initial transfer pauses that local relationship.
 The existing mDNS service, transfer ALPN, TLS 1.3 channel, pairing-code exporter,
 identity keys and legacy hello version remain unchanged. Discovery adds
 `sync-v1` to TXT `caps`. The identity frame and authenticated hello add the boolean
-`sync_v1` and integer `sync_permissions: 1`. Both are required in the authenticated
-hello as well as the identity probe. A peer implementing only the original sync-v1
-is excluded and rejected, rather than silently ignoring ReadOnly. Normal Share
+`sync_v1` and integer `sync_permissions: 2`. Both are required in the authenticated
+hello as well as the identity probe. Peers implementing only the original sync-v1
+or the previous per-device permissions extension are excluded and rejected. They
+must not interpret creator-controlled permissions as independent local grants. Normal Share
 compatibility is unchanged. Discovery and identity-probe records are routing/capability hints only.
 
 A sync initiator adds `sync: "<32 uppercase hexadecimal characters>"` to hello.
@@ -67,7 +71,7 @@ Manual Share sends queued before scheduling a sync session take priority.
 ## State and change detection
 
 `nearby/sync/sync.sqlite3`, under the existing private crFiles identity location,
-stores schema version 2, relationship settings, per-path versions and a pending
+stores schema version 3, relationship settings, per-path versions and a pending
 filesystem journal. SQLite uses WAL and FULL synchronous commits. A separate
 filesystem lock excludes another process from using this sync store concurrently.
 UI commands are queued; database and protocol operations are serialized across
@@ -102,19 +106,25 @@ removal is not propagated as deletion of the entire relationship.
 
 ## Access permissions and persisted display information
 
-Read permits the remote peer to receive local file contents. Write permits the
-remote peer to modify/delete local files. A-to-B transfer requires A.Read and
-B.Write; B-to-A transfer requires B.Read and A.Write. Both grants are checked
-locally when constructing a reconciliation plan. Each endpoint can change only
-its own grants. Changing permissions interrupts the active session, saves the
-new grant and renegotiates on the next connection; it does not unpause a relation.
-A failed durable permission update pauses the local relation and retries storage.
+A is the creator and the authority for this relationship's permissions. The Read
+bit permits A-to-B updates; the Write bit permits B-to-A updates. Both endpoints
+store and display the same bits. A sends them over the authenticated connection;
+B saves them and echoes them unchanged, and A rejects a different acknowledgement.
+The worker also rejects local permission-edit commands on B, independently of the
+disabled UI controls. B retains local pause/removal controls.
 
-A new initiator defaults to Read=true, Write=false. Initial receiver consent grants
-Read=true, Write=true on the receiver, so the default relationship sends only from
-the initiator to the receiver. Enabling Write on the initiator allows edits back.
-If neither direction is permitted, peers exchange `sync-idle` without scanning,
-transferring file contents or updating the last successful sync time.
+The initial **Update from remote** checkbox is unchecked: Read=true, Write=false.
+Checking it creates Read=true, Write=true. Later A can edit both bits in Syncing.
+Changing permissions interrupts A's active session, saves the policy and exchanges
+it on the next connection; it does not unpause a relation. B shows its last received
+policy while offline or paused, then adopts A's current policy on reconnection.
+A failed durable local permission update pauses the relation and retries storage.
+B must durably save the mirrored policy before acknowledging or transferring data.
+
+For A, send=Read and receive=Write. For B, send=Write and receive=Read. If neither
+direction is permitted, peers still exchange policy, then `sync-idle` without
+scanning, transferring file contents or updating the last successful sync time.
+These permissions control synchronization, not operating-system file permissions.
 
 With only one permitted direction, the source is authoritative for its indexed
 paths and is never modified by the receiver. The source sends its index first.
@@ -126,21 +136,27 @@ recovery archive. Receiver-only files are left alone. Unrelated descendants that
 prevent replacing/deleting an ancestor cause a safe retry rather than recursive
 deletion. Two permitted directions use the original vector merge/conflict rules.
 
-A previously committed receive journal is not replayed after local Write is
-revoked. The staged payload and originals remain available and the UI reports
-recovery required; grant Write again to permit replay or follow the recovery steps.
+A previously committed receive journal is not replayed after that incoming
+direction is disabled: Write=false blocks replay on A; Read=false blocks replay
+on B. The staged payload and originals remain available and the UI reports
+recovery required. Re-enable the corresponding direction to permit replay or
+follow the recovery steps. In particular, Write=false on B does not block its
+normal receipt or crash recovery of A-to-B updates.
 An individual filesystem operation already in progress can finish when a permission
 change is requested, but the canceled session cannot start a new reconciliation.
 
 The relationship JSON also persists the selected name, remote avatar, registration
 time and last acknowledged successful reconciliation time. Display uses local
-calendar/time formatting. Legacy records preserve their original two-way grants;
-missing timestamps remain unknown until a successful sync, and missing display
-names fall back to the stored single-file name or root basename. Both peers must
-upgrade before those existing relationships can resume. SQLite user_version is
-raised to 2 while keeping the existing tables and adding JSON fields. Version-1
-databases are upgraded on open; older apps reject version 2, so a downgrade cannot
-silently discard a saved ReadOnly restriction.
+calendar/time formatting. A's legacy records preserve A's existing Read/Write
+settings. B's legacy per-device grants are not a copy of A's policy: B displays
+an unknown-permissions state until it receives A's authenticated settings. The
+JSON `permissions: 2` marker distinguishes a saved creator-controlled policy from
+legacy values. The role is retained and determines which endpoint owns the policy.
+Missing timestamps remain unknown until a successful sync; missing display names
+fall back to the stored single-file name or root basename. Both peers must upgrade.
+SQLite user_version is raised to 3 with existing tables retained. Versions 1/2
+upgrade on open; older apps reject version 3, preventing a downgrade from reverting
+to editable per-device grants.
 
 ## Session messages
 
@@ -148,9 +164,9 @@ All control messages use the existing bounded, length-prefixed JSON framing.
 File bytes are unframed, with lengths fixed by the agreed index. No control frame
 is inserted into a raw byte stream.
 
-1. A sends `sync-open` with `id`, `create`, `name`, `file`, `permissions: 1`,
-   `read` and `write`. `sync-accepted` includes the same permissions version and
-   B's own `read`/`write` grants; missing or malformed grants are rejected. `create` is true
+1. A sends `sync-open` with `id`, `create`, `name`, `file`, `permissions: 2`,
+   `read` and `write`. `sync-accepted` echoes that version and the exact same
+   `read`/`write` bits. Missing, malformed or changed grants are rejected. `create` is true
    until A durably records acceptance. B either looks up the existing authorized
    relationship or obtains initial consent for a fresh root. B saves registration
    before responding `sync-accepted`. Initial rejection returns `sync-declined`.
@@ -270,13 +286,16 @@ Use `autoninja` for any subsequently authorized build. No unit-test source was a
    that old peers do not appear in Sync to and cannot receive sync traffic.
 2. Pair two devices, reject initial sync consent, and check that the sender pauses.
    Resume and accept; verify the exact destination and that unrelated files remain.
-3. Verify both dialogs, device avatars, the default ReadOnly selection, the check
-   button, localized dates and the titlebar menu ordering. Sync a file, nested
-   folders, empty files and empty directories. With ReadOnly, verify edits never
-   flow back and receiver edits replaced by the source remain recoverable. Enable
-   Write to check two-way convergence without repeated sends. Exercise all four
-   Read/Write combinations on both ends, permission changes during transfer and
-   restart, and a pending journal with Write revoked. Check old peers fail closed.
+3. Verify both dialogs, device avatars, the unchecked Update from remote checkbox,
+   the check button, localized dates and the titlebar menu ordering. Sync a file,
+   nested folders, empty files and empty directories. With the checkbox off,
+   verify updates flow A-to-B only and both lists show Read checked, Write unchecked.
+   B's checkboxes must be disabled. With it on, verify two-way convergence and both
+   lists checked. Change Read/Write on A; check B mirrors the policy after connecting,
+   including all four combinations, cancellation during transfer and restart.
+   B must reject permission-edit commands but still support pause/removal. Check
+   pending-journal replay against each role's incoming direction, legacy B's unknown
+   state before receiving A's policy, and rejection of old peers.
 4. Close panes and hide/minimize windows. Edit using another application and verify
    synchronization continues. Quit, edit offline, restart, and verify reconciliation.
 5. Disconnect both devices and edit the same file differently; reconnect and verify
