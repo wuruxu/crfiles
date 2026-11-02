@@ -234,6 +234,7 @@ class SyncService::Impl {
   ~Impl() { if (db) sqlite3_close(db); }
   struct Command {
     int kind; std::string id; base::FilePath source; std::string fingerprint; std::string peer; bool paused = false;
+    int avatar = 0; bool read = true; bool write = false;
   };
   mutable base::Lock ui_lock;
   base::Lock io_lock;
@@ -259,12 +260,12 @@ class SyncService::Impl {
     sqlite3_busy_timeout(db, 5000);
     {
       Statement version(db, "PRAGMA user_version");
-      if (version.Step() != SQLITE_ROW || (version.Column(0) != "0" && version.Column(0) != "1")) return false;
+      if (version.Step() != SQLITE_ROW || (version.Column(0) != "0" && version.Column(0) != "1" && version.Column(0) != "2")) return false;
     }
     if (!Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"
         "CREATE TABLE IF NOT EXISTS relations(id TEXT PRIMARY KEY,value TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS entries(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path));"
-        "CREATE TABLE IF NOT EXISTS pending(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path)); PRAGMA user_version=1;")) return false;
+        "CREATE TABLE IF NOT EXISTS pending(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path)); PRAGMA user_version=2;")) return false;
     jobs.clear();
     Statement rows(db, "SELECT id,value FROM relations");
     int step;
@@ -285,6 +286,17 @@ class SyncService::Impl {
       r->view.paused = value->FindBool("paused").value_or(true);
       r->view.removed = value->FindBool("removed").value_or(true);
       r->confirmed = value->FindBool("confirmed").value_or(false);
+      r->view.name = value->FindString("item_name") ? *value->FindString("item_name") :
+          (r->single.empty() ? r->view.root.BaseName().AsUTF8Unsafe() : r->single);
+      r->view.avatar = std::clamp(value->FindInt("avatar").value_or(0), 0, 8);
+      // Existing registrations retain their previously granted two-way access.
+      r->view.read = value->FindBool("read").value_or(true);
+      r->view.write = value->FindBool("write").value_or(true);
+      uint64_t started = 0, synced = 0;
+      if ((value->contains("started") && !Number(*value, "started", &started)) ||
+          (value->contains("last_synced") && !Number(*value, "last_synced", &synced))) return false;
+      r->view.started = base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(started));
+      r->view.last_synced = base::Time::FromDeltaSinceWindowsEpoch(base::Microseconds(synced));
       r->view.status = IDS_CRFILES_SYNC_WAITING;
       r->view.recovery = r->view.root.AppendASCII(".crfiles-sync").AppendASCII(r->view.id);
       if (jobs.size() >= kMaxRegistrations) return false;
@@ -312,6 +324,10 @@ class SyncService::Impl {
     value.Set("bookmark", r.bookmark); value.Set("role", r.role); value.Set("confirmed", r.confirmed);
     value.Set("paused", r.view.paused); value.Set("removed", r.view.removed);
     value.Set("counter", base::NumberToString(r.counter));
+    value.Set("item_name", r.view.name); value.Set("avatar", r.view.avatar);
+    value.Set("read", r.view.read); value.Set("write", r.view.write);
+    value.Set("started", base::NumberToString(r.view.started.ToDeltaSinceWindowsEpoch().InMicroseconds()));
+    value.Set("last_synced", base::NumberToString(r.view.last_synced.ToDeltaSinceWindowsEpoch().InMicroseconds()));
     Statement row(db, "INSERT OR REPLACE INTO relations VALUES(?,?)");
     return row.Text(1, r.view.id) && row.Text(2, Json(value)) && row.Step() == SQLITE_DONE;
   }
@@ -362,6 +378,9 @@ class SyncService::Impl {
     r->view.root = base::MakeAbsoluteFilePath(info.is_directory ? command.source : command.source.DirName());
     if (r->view.root.empty()) return false;
     r->single = info.is_directory ? "" : CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe());
+    r->view.name = CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe());
+    r->view.avatar = std::clamp(command.avatar, 0, 8); r->view.started = base::Time::Now();
+    r->view.read = command.read; r->view.write = command.write;
     if (!SafeSyncPath(CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe())) ||
         (!r->single.empty() && !SafeSyncPath(r->single)) || Overlaps(r->view.root)) return false;
     SyncFiles files(r->view.root, r->view.id, [] { return false; });
@@ -390,6 +409,9 @@ class SyncService::Impl {
           // a rejected overlap, invalid name, or unavailable source.
           auto r = std::make_unique<Relationship>(); r->view.id = command.id;
           r->view.root = command.source; r->view.peer = command.peer;
+          r->view.name = command.source.BaseName().AsUTF8Unsafe();
+          r->view.avatar = std::clamp(command.avatar, 0, 8);
+          r->view.read = command.read; r->view.write = command.write;
           r->view.status = IDS_CRFILES_SYNC_SOURCE_ERROR; r->view.paused = true;
           jobs.emplace(command.id, std::move(r));
         }
@@ -399,7 +421,9 @@ class SyncService::Impl {
       for (auto& [id, r] : jobs) {
         if (command.kind == 3 ? r->view.fingerprint != command.fingerprint : id != command.id) continue;
         const bool old_removed = r->view.removed;
-        r->view.paused = command.kind == 1 ? command.paused : true;
+        if (command.kind == 4) {
+          r->view.read = command.read; r->view.write = command.write;
+        } else r->view.paused = command.kind == 1 ? command.paused : true;
         r->view.removed = old_removed || command.kind == 2 || command.kind == 3;
         if (!r->view.fingerprint.empty() && !Save(*r)) {
           // A failed durable write must never leave a requested pause/revoke
@@ -489,6 +513,13 @@ class SyncService::Impl {
     r.index[path] = entry; return true;
   }
   bool Scan(Relationship& r, SyncFiles& files) {
+    if (!r.view.write) {
+      Statement pending(db, "SELECT 1 FROM pending WHERE id=? LIMIT 1");
+      if (!pending.Text(1, r.view.id) || pending.Step() != SQLITE_DONE) {
+        // Do not replay a previous receive journal after local Write is revoked.
+        r.view.status = IDS_CRFILES_SYNC_RECOVERY_REQUIRED; return false;
+      }
+    }
     if (!Recover(r, files)) { r.view.status = IDS_CRFILES_SYNC_RECOVERY_REQUIRED; return false; }
     // Events only invalidate a snapshot. Periodic full hashing also catches
     // missed/overflowed notifications and edits made while the app was stopped.
@@ -643,12 +674,31 @@ class SyncService::Impl {
     if (changed) r.dirty->value = true;
     return true;
   }
-  bool Exchange(SyncWire& wire, Relationship& r, SyncFiles& files) {
+  bool Exchange(SyncWire& wire, Relationship& r, SyncFiles& files, bool peer_read, bool peer_write) {
+    const bool send = r.view.read && peer_write;
+    const bool receive = r.view.write && peer_read;
+    // No file/index access when neither direction is permitted.
+    if (!send && !receive) {
+      r.view.status = IDS_CRFILES_SYNC_NO_PERMISSION;
+      return wire.Write(Message("sync-idle")) && Type(wire.Read(), "sync-idle");
+    }
     if (files.Identity() != r.identity || !Scan(r, files)) return false;
     Index remote;
-    if (r.role == 0) {
+    if (send && receive) {
+      if (r.role == 0) {
+        if (!SendIndex(wire, r.index) || !ReadIndex(wire, r, &remote)) return false;
+      } else if (!ReadIndex(wire, r, &remote) || !SendIndex(wire, r.index)) return false;
+    } else if (send) {
       if (!SendIndex(wire, r.index) || !ReadIndex(wire, r, &remote)) return false;
-    } else if (!ReadIndex(wire, r, &remote) || !SendIndex(wire, r.index)) return false;
+    } else {
+      if (!ReadIndex(wire, r, &remote)) return false;
+      Index receipts;
+      // Reveal only whether the advertised source content is already present;
+      // never expose a receiver edit's bytes, hash, version or private names.
+      for (const auto& [path, entry] : remote)
+        receipts.emplace(path, Same(At(r.index, path), entry) ? entry : Entry());
+      if (!SendIndex(wire, receipts)) return false;
+    }
     Plan plan;
     base::ScopedClosureRunner cleanup(base::BindOnce([](Impl* self, Relationship* relation, SyncFiles* files, Plan* plan) {
       std::set<std::string> retained;
@@ -665,8 +715,22 @@ class SyncService::Impl {
       for (const auto& [path, item] : *plan)
         if (!item.operation.empty() && !retained.contains(item.operation)) files->DiscardStage(item.operation);
     }, base::Unretained(this), base::Unretained(&r), base::Unretained(&files), base::Unretained(&plan)));
-    if (!MakePlan(r.role == 0 ? r.index : remote, r.role == 0 ? remote : r.index, &plan)) {
-      r.view.status = IDS_CRFILES_SYNC_SOURCE_ERROR; return false;
+    if (send && receive) {
+      if (!MakePlan(r.role == 0 ? r.index : remote, r.role == 0 ? remote : r.index, &plan)) {
+        r.view.status = IDS_CRFILES_SYNC_SOURCE_ERROR; return false;
+      }
+    } else {
+      // A read-only peer never donates bytes or versions back to the source.
+      // Receiver edits replaced by the source remain in its recovery archive;
+      // receiver-only paths are left alone. Ancestor conflicts fail safely.
+      const auto& source = send ? r.index : remote;
+      std::set<std::u16string> folded;
+      for (const auto& [path, entry] : source) {
+        if (!SafeSyncPath(path) || !folded.insert(base::i18n::FoldCase(base::UTF8ToUTF16(path))).second) return false;
+        if (entry.kind) for (auto parent = Parent(path); !parent.empty(); parent = Parent(parent))
+          if (At(source, parent).kind != 2) return false;
+        plan.emplace(path, Planned{entry, send ? r.role : 1 - r.role, path, {}});
+      }
     }
     uint64_t total = 0;
     for (const auto& [path, item] : plan) if (item.result.kind == 1 &&
@@ -684,15 +748,16 @@ class SyncService::Impl {
     const auto other = wire.Read();
     const auto* digest = other ? other->FindString("hash") : nullptr;
     if (!Type(other, "sync-plan") || !digest || *digest != base::HexEncode(hash) ||
-        !Transfer(wire, r, files, remote, plan) || !Apply(wire, r, files, plan)) return false;
+        !Transfer(wire, r, files, remote, plan) || (receive && !Apply(wire, r, files, plan))) return false;
     if (!wire.Write(Message("sync-committed")) || !Type(wire.Read(), "sync-committed")) return false;
     return true;
   }
   bool Run(SyncWire& wire, bool outgoing, const std::string& id,
-           const std::string& fingerprint, const std::string& peer,
+           const std::string& fingerprint, const std::string& peer, int avatar,
            const base::FilePath& receive_directory) {
     if (!Open() || !IsSyncId(id)) return false;
     Relationship* relation = nullptr;
+    bool peer_read = false, peer_write = false;
     auto it = jobs.find(id);
     if (outgoing) {
       if (it == jobs.end() || it->second->role != 0 || it->second->view.paused || it->second->view.removed ||
@@ -701,18 +766,23 @@ class SyncService::Impl {
       auto open = Message("sync-open"); open.Set("id", id); open.Set("create", !relation->confirmed);
       open.Set("name", relation->single.empty() ? CanonicalSyncPath(relation->view.root.BaseName().AsUTF8Unsafe()) : relation->single);
       open.Set("file", !relation->single.empty());
+      open.Set("permissions", 1); open.Set("read", relation->view.read); open.Set("write", relation->view.write);
       if (!wire.Write(std::move(open))) return false;
       const auto accepted = wire.Read();
       if (Type(accepted, "sync-declined")) {
         relation->view.paused = true; Save(*relation); Publish(); return false;
       }
-      if (!Type(accepted, "sync-accepted")) return false;
+      if (!Type(accepted, "sync-accepted") || accepted->FindInt("permissions") != 1 ||
+          !accepted->FindBool("read") || !accepted->FindBool("write")) return false;
+      peer_read = *accepted->FindBool("read"); peer_write = *accepted->FindBool("write");
       relation->confirmed = true;
       if (!Save(*relation)) return false;
     } else {
       const auto open = wire.Read();
       const auto* remote_id = open ? open->FindString("id") : nullptr;
-      if (!Type(open, "sync-open") || !remote_id || *remote_id != id) return false;
+      if (!Type(open, "sync-open") || !remote_id || *remote_id != id || open->FindInt("permissions") != 1 ||
+          !open->FindBool("read") || !open->FindBool("write")) return false;
+      peer_read = *open->FindBool("read"); peer_write = *open->FindBool("write");
       if (it == jobs.end()) {
         const auto* name = open->FindString("name"); const auto file = open->FindBool("file");
         if (!open->FindBool("create").value_or(false) || !name || !SafeSyncPath(*name) ||
@@ -721,6 +791,8 @@ class SyncService::Impl {
         r->view.id = id; r->view.fingerprint = fingerprint; r->view.peer = peer;
         r->view.root = receive_directory.AppendASCII("Sync-" + id);
         r->single = *file ? *name : ""; r->role = 1; r->confirmed = true;
+        r->view.name = *name; r->view.started = base::Time::Now();
+        r->view.avatar = std::clamp(avatar, 0, 8);
         if (Overlaps(r->view.root) || base::PathExists(r->view.root)) return false;
         if (!wire.Consent(r->view.root, *name)) {
           wire.Write(Message("sync-declined")); return false;
@@ -745,8 +817,12 @@ class SyncService::Impl {
         relation->identity = initial.Identity(); relation->view.recovery = initial.Recovery();
         if (!Save(*relation)) return false;
       }
-      if (!wire.Write(Message("sync-accepted"))) return false;
+      auto accepted = Message("sync-accepted"); accepted.Set("permissions", 1);
+      accepted.Set("read", relation->view.read); accepted.Set("write", relation->view.write);
+      if (!wire.Write(std::move(accepted))) return false;
     }
+    relation->view.peer = peer; relation->view.avatar = std::clamp(avatar, 0, 8);
+    if (!Save(*relation)) return false;
     std::string bookmark;
     if (!base::Base64Decode(relation->bookmark, &bookmark)) return false;
     auto access = ResolveFileAccessBookmark(std::vector<uint8_t>(bookmark.begin(), bookmark.end()));
@@ -754,8 +830,14 @@ class SyncService::Impl {
     relation->view.status = IDS_CRFILES_SYNC_ACTIVE; Publish();
     const bool opened = files.Open();
     if (!opened || files.Identity() != relation->identity) relation->view.status = IDS_CRFILES_SYNC_SOURCE_ERROR;
-    const bool ok = opened && Exchange(wire, *relation, files);
-    if (relation->view.status != IDS_CRFILES_SYNC_RECOVERY_REQUIRED && relation->view.status != IDS_CRFILES_SYNC_SOURCE_ERROR)
+    bool ok = opened && Exchange(wire, *relation, files, peer_read, peer_write);
+    const bool idle = relation->view.status == IDS_CRFILES_SYNC_NO_PERMISSION;
+    if (ok && !idle) {
+      const auto previous = relation->view.last_synced;
+      relation->view.last_synced = base::Time::Now();
+      if (!Save(*relation)) { relation->view.last_synced = previous; ok = false; }
+    }
+    if (!idle && relation->view.status != IDS_CRFILES_SYNC_RECOVERY_REQUIRED && relation->view.status != IDS_CRFILES_SYNC_SOURCE_ERROR)
       relation->view.status = ok ? IDS_CRFILES_SYNC_CURRENT : IDS_CRFILES_SYNC_RETRY;
     relation->failures = ok ? 0 : std::min(relation->failures + 1, 5);
     relation->next = base::TimeTicks::Now() + base::Seconds(ok ? 10 : 10 * (1 << relation->failures)) +
@@ -767,14 +849,18 @@ class SyncService::Impl {
 
 SyncService::SyncService(base::FilePath directory) : impl_(std::make_unique<Impl>(std::move(directory))) {}
 SyncService::~SyncService() = default;
-bool SyncService::Queue(const base::FilePath& source, std::string fingerprint, std::string peer) {
+bool SyncService::Queue(const base::FilePath& source, std::string fingerprint, std::string peer, int avatar, bool write) {
   if (!source.IsAbsolute() || source.ReferencesParent() || fingerprint.size() != 64) return false;
   base::AutoLock lock(impl_->ui_lock);
   if (impl_->commands.size() >= kMaxJobs) return false;
-  impl_->commands.push_back({0, RandomId(), source, std::move(fingerprint), std::move(peer)}); return true;
+  impl_->commands.push_back({0, RandomId(), source, std::move(fingerprint), std::move(peer), false, avatar, true, write}); return true;
 }
 void SyncService::Pause(std::string id, bool paused) {
   base::AutoLock lock(impl_->ui_lock); impl_->commands.push_back({1, std::move(id), {}, {}, {}, paused});
+}
+void SyncService::Permissions(std::string id, bool read, bool write) {
+  base::AutoLock lock(impl_->ui_lock);
+  impl_->commands.push_back({4, std::move(id), {}, {}, {}, false, 0, read, write});
 }
 void SyncService::Remove(std::string id) {
   base::AutoLock lock(impl_->ui_lock); impl_->commands.push_back({2, std::move(id), {}, {}, {}});
@@ -822,10 +908,10 @@ bool SyncService::Authorized(const std::string& id, const std::string& fingerpri
       !it->second->view.removed && it->second->view.fingerprint == fingerprint;
 }
 bool SyncService::Run(SyncWire& wire, bool outgoing, const std::string& id,
-                      const std::string& fingerprint, const std::string& peer,
+                      const std::string& fingerprint, const std::string& peer, int avatar,
                       const base::FilePath& receive_directory) {
   base::AutoLock lock(impl_->io_lock);
-  return impl_->Run(wire, outgoing, id, fingerprint, peer, receive_directory);
+  return impl_->Run(wire, outgoing, id, fingerprint, peer, avatar, receive_directory);
 }
 void SyncService::Failed(const std::string& id) {
   base::AutoLock lock(impl_->io_lock);

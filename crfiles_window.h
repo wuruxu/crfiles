@@ -30,5 +30,6 @@ void ShowCrFilesReceivedDirectory(const base::FilePath& directory);
 void ShowCrFilesHistory();
 void ShowCrFilesTrustedDevices();
 void ShowCrFilesSharingFolders();
+void ShowCrFilesSyncing();
 }
 #endif

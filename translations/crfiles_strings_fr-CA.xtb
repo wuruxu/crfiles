@@ -373,7 +373,6 @@
   <translation id="8779418991368148028">Reconnexion Bluetooth…</translation>
   <translation id="2503209953868057834">La détection des appareils à proximité est indisponible. Vérifiez votre réseau et autorisez crFiles dans Réglages système &gt; Confidentialité et sécurité &gt; Réseau local. Si l’accès est déjà autorisé, désactivez-le puis réactivez-le. Nouvelle tentative automatique en cours.</translation>
   <translation id="7031882061095297553">Synchroniser vers</translation>
-  <translation id="3899107441531918480">Synchronisez un fichier ou dossier avec un autre appareil crFiles lorsque les deux applications sont ouvertes. Les modifications et suppressions se propagent dans les deux sens. Les fichiers en conflit et remplacés sont conservés. Supprimer une relation conserve vos fichiers.</translation>
   <translation id="6917611495261629542">Sélectionnez un fichier ou dossier pour démarrer une synchronisation.</translation>
   <translation id="9097448805928983789">Relations de synchronisation</translation>
   <translation id="9130234759791309317">Aucun appareil compatible avec la synchronisation. Activez le partage à proximité sur les deux appareils.</translation>
@@ -387,6 +386,18 @@
   <translation id="6335248546481182258">Fichiers de récupération</translation>
   <translation id="6956049626921760252">Impossible d’ouvrir ou d’enregistrer la base de synchronisation. Une autre instance de crFiles l’utilise peut-être.</translation>
   <translation id="6663644605798061183">Impossible de synchroniser cet emplacement. Vérifiez l’accès au dossier, les noms et les relations existantes.</translation>
-  <translation id="2116735990264511045">Autoriser la synchronisation bidirectionnelle continue dans ce dossier ? Les deux appareils pourront modifier et supprimer des fichiers. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération. Vous pouvez suspendre ou supprimer cette relation dans « Synchroniser vers ».</translation>
   <translation id="6371951046798553292">Un fichier a changé pendant la récupération. Les originaux et fichiers temporaires sont conservés. Vérifiez le dossier de récupération avant de reprendre.</translation>
+  <translation id="9086302186042011942">Synchronisations</translation>
+  <translation id="4467043784868232357">Synchroniser vers <ph name="DEVICE"/></translation>
+  <translation id="1378015185729583470">Lecture seule</translation>
+  <translation id="8592267278951868125">Lecture et écriture</translation>
+  <translation id="8798449543960971550">Lecture</translation>
+  <translation id="1236731661735898386">Écriture</translation>
+  <translation id="5610152171700512965">Début : <ph name="STARTED"/> · Dernière synchro : <ph name="SYNCED"/></translation>
+  <translation id="2123074103454259350">Aucun enregistrement</translation>
+  <translation id="8487302916007481729">Autoriser l’appareil distant à lire les fichiers locaux.</translation>
+  <translation id="5398621785031221697">Autoriser l’appareil distant à modifier et supprimer les fichiers locaux.</translation>
+  <translation id="5083932160057998629">En attente des autorisations de synchronisation</translation>
+  <translation id="1407590690133810237">Choisissez un appareil et ses droits d’accès à ce fichier ou dossier.</translation>
+  <translation id="6042188701694090072">Autoriser la synchronisation continue dans ce dossier ? L’autre appareil pourra lire, modifier et supprimer les fichiers ici. Les modifications locales ne lui seront transmises que s’il autorise l’écriture. Gérez les autorisations dans Synchronisations. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération.</translation>
 </translationbundle>

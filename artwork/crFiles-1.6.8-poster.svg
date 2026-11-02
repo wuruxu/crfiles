@@ -837,7 +837,7 @@
 <text x="270.0" y="2311" class="family">crPhotos</text>
 <svg xmlns="http://www.w3.org/2000/svg" width="76" height="76" viewBox="0 0 512 512" fill="none" x="412.0" y="2209">
   <title>crDesk — Remote Control</title>
-  <desc>A large blue desktop outline with a transparent screen, three diagonal reflection strokes, and a Chrome-colored remote cursor.</desc>
+  <desc>A large blue desktop outline with a transparent screen, three diagonal reflection strokes, and a remote cursor filled with a smooth red, yellow and green gradient.</desc>
   <defs>
     <linearGradient id="crDesk-signal" x1="44" y1="76" x2="468" y2="438" gradientUnits="userSpaceOnUse">
       <stop stop-color="#5B9AFF" /><stop offset="0.45" stop-color="#4285F4" /><stop offset="1" stop-color="#0284C7" />
@@ -845,12 +845,9 @@
     <linearGradient id="crDesk-reflection" x1="174" y1="168" x2="336" y2="280" gradientUnits="userSpaceOnUse">
       <stop stop-color="#8EC5FF" /><stop offset="1" stop-color="#4285F4" />
     </linearGradient>
-    <linearGradient id="crDesk-chromeBorder" x1="330" y1="280" x2="430" y2="427" gradientUnits="userSpaceOnUse">
+    <linearGradient id="crDesk-pointerFill" x1="330" y1="286" x2="430" y2="427" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#EA4335" />
-      <stop offset="0.32" stop-color="#EA4335" />
-      <stop offset="0.36" stop-color="#FBBC05" />
-      <stop offset="0.64" stop-color="#FBBC05" />
-      <stop offset="0.68" stop-color="#34A853" />
+      <stop offset="0.48" stop-color="#FBBC05" />
       <stop offset="1" stop-color="#34A853" />
     </linearGradient>
   </defs>
@@ -860,7 +857,7 @@
   
   <path d="M174 248L210 185M224 280L288 168M300 248L336 185" stroke="url(#crDesk-reflection)" stroke-width="16" stroke-linecap="round" opacity="0.8" />
   
-  <path d="M330 286L354 414L382 385L411 426Q415 433 422 428L443 413Q450 409 445 402L408 353L451 339Z" fill="#EEF8FF" stroke="url(#crDesk-chromeBorder)" stroke-width="10" stroke-linejoin="round" />
+  <path d="M330 286L354 414L382 385L411 426Q415 433 422 428L443 413Q450 409 445 402L408 353L451 339Z" fill="url(#crDesk-pointerFill)" stroke="#EEF8FF" stroke-width="6" stroke-linejoin="round" />
 </svg>
 <text x="450.0" y="2311" class="family">crDesk</text>
 <svg xmlns="http://www.w3.org/2000/svg" width="76" height="76" viewBox="0 0 512 512" role="img" aria-labelledby="crPlayer-title crPlayer-desc" x="592.0" y="2209">

@@ -130,7 +130,7 @@ END_METADATA
 
 enum MenuCommand {
   kMenuCommandThemeSystem = 1, kMenuCommandThemeLight, kMenuCommandThemeDark,
-  kMenuCommandFullscreen, kMenuCommandHistory, kMenuCommandTrustedDevices, kMenuCommandSharingFolders, kMenuCommandSettings, kMenuCommandAbout, kMenuCommandInstallOnDevice,
+  kMenuCommandFullscreen, kMenuCommandHistory, kMenuCommandTrustedDevices, kMenuCommandSharingFolders, kMenuCommandSyncing, kMenuCommandSettings, kMenuCommandAbout, kMenuCommandInstallOnDevice,
 };
 class OptionsMenuView : public libcr::OptionsMenuView {
   METADATA_HEADER(OptionsMenuView, libcr::OptionsMenuView)
@@ -173,6 +173,10 @@ class OptionsMenuView : public libcr::OptionsMenuView {
           callback.Run(kMenuCommandSharingFolders);
         }, callback_), l10n_util::GetStringUTF16(IDS_CRFILES_SHARING_FOLDERS),
         std::u16string_view(), &vector_icons::kFolderOpenIcon);
+    AddMenuItem(base::BindRepeating([](base::RepeatingCallback<void(int)> callback) {
+          callback.Run(kMenuCommandSyncing);
+        }, callback_), l10n_util::GetStringUTF16(IDS_CRFILES_SYNCING),
+        std::u16string_view(), &vector_icons::kSyncIcon);
     AddMenuItem(base::BindRepeating(
                     [](base::RepeatingCallback<void(int)> callback) {
                       callback.Run(kMenuCommandSettings);
@@ -593,6 +597,7 @@ void HandleOptionsMenuCommand(int command) {
   if (command == kMenuCommandHistory) ShowCrFilesHistory();
   if (command == kMenuCommandTrustedDevices) ShowCrFilesTrustedDevices();
   if (command == kMenuCommandSharingFolders) ShowCrFilesSharingFolders();
+  if (command == kMenuCommandSyncing) ShowCrFilesSyncing();
   if (command == kMenuCommandSettings) ShowCrFilesSettingsDialog(widget_);
   if (command == kMenuCommandAbout) ShowCrFilesAboutDialog(widget_);
 #if BUILDFLAG(IS_LINUX)

@@ -11,6 +11,7 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/values.h"
+#include "base/time/time.h"
 
 namespace crfiles {
 
@@ -34,9 +35,17 @@ struct SyncJob {
   std::string fingerprint;
   base::FilePath root;
   base::FilePath recovery;
+  std::string name;
+  int avatar = 0;
+  base::Time started;
+  base::Time last_synced;
+  // Local grants to the authenticated remote device.
+  bool read = true;
+  bool write = true;
   bool paused = false;
   bool removed = false;
   int status = 0;  // Localized resource ID; never peer-supplied text.
+  bool operator==(const SyncJob&) const = default;
 };
 
 struct SyncEndpoint {
@@ -60,8 +69,9 @@ class SyncService {
   SyncService& operator=(const SyncService&) = delete;
 
   bool Queue(const base::FilePath& source, std::string fingerprint,
-             std::string peer);
+             std::string peer, int avatar, bool write);
   void Pause(std::string id, bool paused);
+  void Permissions(std::string id, bool read, bool write);
   void Remove(std::string id);
   void Revoke(std::string fingerprint);
   std::vector<SyncJob> Snapshot() const;
@@ -73,7 +83,7 @@ class SyncService {
   bool Revoked(const std::string& id, const std::string& fingerprint);
   bool Authorized(const std::string& id, const std::string& fingerprint);
   bool Run(SyncWire& wire, bool outgoing, const std::string& id,
-           const std::string& fingerprint, const std::string& peer,
+           const std::string& fingerprint, const std::string& peer, int avatar,
            const base::FilePath& receive_directory);
   void Failed(const std::string& id);
 

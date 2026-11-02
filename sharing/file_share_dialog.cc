@@ -1495,6 +1495,12 @@ views::View* ShowTrustedDevicesDialog(views::Widget* parent,
   return result;
 }
 
+ui::ImageModel FileShareDeviceAvatar(int avatar, int edge) { return Avatar(avatar, edge); }
+std::unique_ptr<views::View> CreateFileShareDeviceButton(base::RepeatingClosure callback,
+    int avatar, const std::u16string& name) {
+  return std::make_unique<DeviceButton>(std::move(callback), Avatar(avatar), name);
+}
+
 views::View* ShowSharingFoldersDialog(views::Widget* parent,
     base::RepeatingCallback<std::vector<NearbySharing::SharedTarget>()> folders,
     base::RepeatingCallback<void(NearbySharing::SharedTarget)> open,

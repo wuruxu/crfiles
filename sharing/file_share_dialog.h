@@ -9,8 +9,12 @@
 #include "base/files/file_path.h"
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/sharing/share_bubble_anchor.h"
+#include "ui/base/models/image_model.h"
 namespace views { class Widget; class View; }
 namespace crfiles {
+ui::ImageModel FileShareDeviceAvatar(int avatar, int edge = 64);
+std::unique_ptr<views::View> CreateFileShareDeviceButton(base::RepeatingClosure callback,
+    int avatar, const std::u16string& name);
 class ShareSessionToast {
  public:
   virtual ~ShareSessionToast() = default;

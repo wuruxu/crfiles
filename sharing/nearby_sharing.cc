@@ -804,6 +804,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
   hello.Set("version", 1);
   hello.Set("folder_transfer", true);
   hello.Set("sync_v1", true);
+  hello.Set("sync_permissions", 1);
   if (!state->sync_id.empty()) hello.Set("sync", state->sync_id);
   hello.Set("targets", SharedTargetsJson(state));
   hello.Set("name", state->name);
@@ -837,7 +838,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
         pixels.size() == 96 * 96 * 4) custom_avatar = *encoded;
   }
   const bool trusted = IsTrusted(state->trust, fingerprint);
-  state->peer_sync = peer->FindBool("sync_v1").value_or(false);
+  state->peer_sync = peer->FindBool("sync_v1").value_or(false) && peer->FindInt("sync_permissions") == 1;
   if (state->snapshot.receiving) {
     if (const auto* sync_id = peer->FindString("sync")) {
       if (!state->peer_sync || !IsSyncId(*sync_id)) return false;
@@ -1976,6 +1977,7 @@ void ServeIdentities(std::shared_ptr<State> state, ScopedSocket listener,
     identity.Set("port", transfer_port);
     identity.Set("folder_transfer", true);
     identity.Set("sync_v1", true);
+    identity.Set("sync_permissions", 1);
     if (!channel.SendJson(std::move(identity))) continue;
     // Legacy probes read only the small identity frame and close the channel.
     auto targets = Message("targets"); targets.Set("targets", SharedTargetsJson(state));
@@ -2081,7 +2083,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
         if (type_ok && id_ok && port_ok) {
           fingerprint = channel.PeerFingerprint();
           folder_transfer = identity->FindBool("folder_transfer").value_or(false);
-          sync_v1 = identity->FindBool("sync_v1").value_or(false);
+          sync_v1 = identity->FindBool("sync_v1").value_or(false) && identity->FindInt("sync_permissions") == 1;
           if (folder_transfer) {
             const auto catalog = channel.ReadJson(base::Seconds(2));
             if (IsMessage(catalog, "targets")) targets = ParseTargets(*catalog);
@@ -2423,9 +2425,11 @@ void Run(std::shared_ptr<State> state) {
           if (!state->sync_id.empty()) {
             DesktopSyncWire wire(channel, state, generation);
             base::FilePath receive_directory;
-            { base::AutoLock lock(state->lock); receive_directory = state->snapshot.receive_directory; }
+            std::string peer_name; int peer_avatar;
+            { base::AutoLock lock(state->lock); receive_directory = state->snapshot.receive_directory;
+              peer_name = state->snapshot.peer_name; peer_avatar = state->snapshot.peer_avatar; }
             ok = state->sync->Run(wire, outgoing.has_value(), state->sync_id,
-                state->peer_fingerprint, state->snapshot.peer_name, receive_directory);
+                state->peer_fingerprint, peer_name, peer_avatar, receive_directory);
             failure.message_id = IDS_CRFILES_SYNC_RETRY;
           } else {
             ok = outgoing ? SendFiles(channel, std::move(*files), state, generation, failure)
@@ -2670,7 +2674,7 @@ void NearbySharing::CancelSync(const std::string& id) {
   base::AutoLock lock(state_->lock);
   if (state_->snapshot.busy && state_->snapshot.syncing && state_->sync_id == id) ++state_->cancel;
 }
-bool NearbySharing::StartSync(const Peer& peer, const base::FilePath& source) {
+bool NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write) {
   if (!sync_) return false;
   const auto snapshot = GetSnapshot();
   if (!snapshot.enabled || !peer.sync_v1 || peer.phone) return false;
@@ -2678,7 +2682,7 @@ bool NearbySharing::StartSync(const Peer& peer, const base::FilePath& source) {
     return value.address == peer.address && value.sync_v1 && value.identity_expires > base::TimeTicks::Now() &&
         value.verified_fingerprint == peer.verified_fingerprint;
   });
-  return current != snapshot.peers.end() && sync_->Queue(source, peer.verified_fingerprint, peer.name);
+  return current != snapshot.peers.end() && sync_->Queue(source, current->verified_fingerprint, current->name, current->avatar, write);
 }
 
 bool NearbySharing::Send(std::string address, std::vector<base::FilePath> paths,

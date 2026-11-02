@@ -10,6 +10,8 @@ namespace views { class View; class Widget; }
 namespace crfiles {
 class NearbySharing;
 views::View* ShowSyncDialog(views::Widget* parent, std::shared_ptr<NearbySharing> service,
-    std::vector<base::FilePath> paths, base::RepeatingCallback<void(base::FilePath)> open);
+    std::vector<base::FilePath> paths);
+views::View* ShowSyncingDialog(views::Widget* parent, std::shared_ptr<NearbySharing> service,
+    base::RepeatingCallback<void(base::FilePath)> open);
 }  // namespace crfiles
 #endif

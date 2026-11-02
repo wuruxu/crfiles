@@ -1227,16 +1227,21 @@ Quick Share progress uses the current payload filename and introduction index, p
 ## Two-way synchronization
 
 Right-click one file or folder and choose **Sync to**, immediately below **Share to**.
-Select another crFiles device and approve continuing two-way access on the receiver.
-The first copy goes into a fresh directory under its configured receive location;
-subsequent changes and deletions flow in both directions while both applications
-are running. Conflicting versions are preserved as separate files, and replaced
+Select another crFiles device by its avatar. The permission popup defaults to
+**ReadOnly**; choose **Read and Write** to also allow remote changes back, then
+confirm with the check icon and approve continuing access on the receiver.
+The first copy goes into a fresh directory under its configured receive location.
+Subsequent changes follow each endpoint's permissions while both applications
+are running. Two-way conflicts are preserved as separate files, and replaced
 or deleted files are retained in a local recovery directory.
 
-Sync to also manages existing relationships: pause/resume, remove without deleting
-files, open the local root, and inspect recovery files. It is available from the
-empty-area context menu as well. The first version supports one-to-one desktop
-relationships, whole-file updates, directory watching and periodic reconciliation.
+The titlebar menu's **Syncing** item, below **Sharing folders**, opens a separate
+relationship manager styled like **Trusted devices**. Rows show the remote avatar,
+start/last-sync times, the selected name and editable **Read**/**Write** grants to
+the remote device. The avatar opens the local root; trailing icons pause/resume,
+open recovery files and remove a relationship without deleting files. Both peers
+must support the permissions extension. The first version supports one-to-one
+desktop relationships, whole-file updates, directory watching and periodic reconciliation.
 See [sync-v1 protocol, recovery and acceptance steps](sharing/SYNC_PROTOCOL.md) for
 limits, conflict behavior, restart recovery, and the checks still requiring a build
 and two-device validation.

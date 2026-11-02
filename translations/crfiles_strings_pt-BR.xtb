@@ -373,7 +373,6 @@
   <translation id="8779418991368148028">Reconectando o Bluetooth…</translation>
   <translation id="2503209953868057834">Não é possível descobrir dispositivos próximos. Verifique a rede e permita o acesso do crFiles em Ajustes do Sistema &gt; Privacidade e Segurança &gt; Rede Local. Se o acesso já estiver permitido, desative-o e ative-o novamente. Uma nova tentativa está sendo feita automaticamente.</translation>
   <translation id="7031882061095297553">Sincronizar com</translation>
-  <translation id="3899107441531918480">Mantenha um arquivo ou pasta sincronizado com outro dispositivo crFiles enquanto os dois aplicativos estiverem abertos. Alterações e exclusões são transmitidas nos dois sentidos. Arquivos em conflito e substituídos são mantidos. Remover uma relação mantém seus arquivos.</translation>
   <translation id="6917611495261629542">Selecione um arquivo ou pasta para iniciar uma sincronização.</translation>
   <translation id="9097448805928983789">Relações de sincronização</translation>
   <translation id="9130234759791309317">Nenhum dispositivo compatível com sincronização. Ative o compartilhamento por proximidade nos dois dispositivos.</translation>
@@ -387,6 +386,18 @@
   <translation id="6335248546481182258">Arquivos de recuperação</translation>
   <translation id="6956049626921760252">Não foi possível abrir ou salvar o banco de dados de sincronização. Outra instância do crFiles pode estar usando-o.</translation>
   <translation id="6663644605798061183">Não é possível sincronizar este local. Verifique o acesso à pasta, os nomes e as relações existentes.</translation>
-  <translation id="2116735990264511045">Permitir a sincronização bidirecional contínua nesta pasta? Os dois dispositivos poderão alterar e excluir arquivos. Os arquivos substituídos e excluídos são mantidos na pasta de recuperação. Você pode pausar ou remover esta relação em “Sincronizar com”.</translation>
   <translation id="6371951046798553292">Um arquivo mudou durante a recuperação. Os originais e arquivos temporários foram preservados. Verifique a pasta de recuperação antes de retomar.</translation>
+  <translation id="9086302186042011942">Sincronizações</translation>
+  <translation id="4467043784868232357">Sincronizar com <ph name="DEVICE"/></translation>
+  <translation id="1378015185729583470">Somente leitura</translation>
+  <translation id="8592267278951868125">Leitura e gravação</translation>
+  <translation id="8798449543960971550">Leitura</translation>
+  <translation id="1236731661735898386">Gravação</translation>
+  <translation id="5610152171700512965">Início: <ph name="STARTED"/> · Última sincronização: <ph name="SYNCED"/></translation>
+  <translation id="2123074103454259350">Sem registros</translation>
+  <translation id="8487302916007481729">Permitir que o dispositivo remoto leia arquivos locais.</translation>
+  <translation id="5398621785031221697">Permitir que o dispositivo remoto altere e exclua arquivos locais.</translation>
+  <translation id="5083932160057998629">Aguardando permissões de sincronização</translation>
+  <translation id="1407590690133810237">Escolha um dispositivo e suas permissões de acesso a este arquivo ou pasta.</translation>
+  <translation id="6042188701694090072">Permitir a sincronização contínua nesta pasta? O outro dispositivo poderá ler, alterar e excluir arquivos aqui. As alterações locais só serão enviadas de volta se ele conceder permissão de gravação. Gerencie as permissões em Sincronizações. Arquivos substituídos e excluídos são mantidos na pasta de recuperação.</translation>
 </translationbundle>

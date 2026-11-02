@@ -373,7 +373,6 @@
   <translation id="8779418991368148028">正在重新連接藍牙…</translation>
   <translation id="2503209953868057834">無法探索附近裝置。請檢查網絡，並在「系統設定 &gt; 私隱與保安 &gt; 區域網絡」中允許 crFiles 存取。如果已允許，請關閉後重新開啟。正在自動重試。</translation>
   <translation id="7031882061095297553">同步至</translation>
-  <translation id="3899107441531918480">在兩端應用程式運行時，將一個檔案或資料夾與另一部 crFiles 裝置保持同步。修改及刪除會雙向傳遞。衝突檔案和被取代的檔案會保留。解除同步關係不會刪除檔案。</translation>
   <translation id="6917611495261629542">選取一個檔案或資料夾以開始新的同步。</translation>
   <translation id="9097448805928983789">同步關係</translation>
   <translation id="9130234759791309317">沒有支援同步的可用裝置。請在兩部裝置啟用附近分享。</translation>
@@ -387,6 +386,18 @@
   <translation id="6335248546481182258">還原檔案</translation>
   <translation id="6956049626921760252">無法開啟或儲存同步資料庫，另一個 crFiles 執行個體可能正在使用它。</translation>
   <translation id="6663644605798061183">無法同步此位置。請檢查資料夾存取權限、名稱及現有同步關係。</translation>
-  <translation id="2116735990264511045">允許在此資料夾持續雙向同步嗎？兩部裝置均可修改及刪除檔案。被取代和刪除的檔案會保留在還原資料夾中。你可以在「同步至」中暫停或解除此關係。</translation>
   <translation id="6371951046798553292">還原期間檔案發生變更。原始檔案及暫存檔案均已保留。請檢查還原資料夾後再繼續。</translation>
+  <translation id="9086302186042011942">同步中</translation>
+  <translation id="4467043784868232357">同步至 <ph name="DEVICE"/></translation>
+  <translation id="1378015185729583470">唯讀</translation>
+  <translation id="8592267278951868125">讀寫</translation>
+  <translation id="8798449543960971550">讀取</translation>
+  <translation id="1236731661735898386">寫入</translation>
+  <translation id="5610152171700512965">開始：<ph name="STARTED"/> · 最近同步：<ph name="SYNCED"/></translation>
+  <translation id="2123074103454259350">尚無記錄</translation>
+  <translation id="8487302916007481729">允許遠端裝置讀取本機檔案。</translation>
+  <translation id="5398621785031221697">允許遠端裝置修改及刪除本機檔案。</translation>
+  <translation id="5083932160057998629">正在等候同步權限</translation>
+  <translation id="1407590690133810237">選擇裝置及其對此檔案或資料夾的存取權限。</translation>
+  <translation id="6042188701694090072">允許在此資料夾中持續同步嗎？另一部裝置可讀取、修改及刪除此處的檔案。只有對方授予寫入權限時，本機變更才會同步回去。可在「同步中」管理權限。被取代及刪除的檔案會保留在復原資料夾中。</translation>
 </translationbundle>
