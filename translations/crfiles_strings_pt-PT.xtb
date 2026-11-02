@@ -372,4 +372,21 @@
   <translation id="8385154793237841987">Isto irá desligar brevemente outros serviços Bluetooth deste dispositivo.</translation>
   <translation id="8779418991368148028">A restabelecer a ligação Bluetooth…</translation>
   <translation id="2503209953868057834">Não é possível detetar dispositivos próximos. Verifique a rede e permita o acesso do crFiles em Definições do Sistema &gt; Privacidade e segurança &gt; Rede local. Se o acesso já estiver permitido, desative-o e volte a ativá-lo. A tentar novamente de forma automática.</translation>
+  <translation id="7031882061095297553">Sincronizar com</translation>
+  <translation id="3899107441531918480">Mantenha um ficheiro ou pasta sincronizado com outro dispositivo crFiles enquanto ambas as aplicações estiverem abertas. As alterações e eliminações são transmitidas nos dois sentidos. Os ficheiros em conflito e substituídos são guardados. Remover uma relação mantém os seus ficheiros.</translation>
+  <translation id="6917611495261629542">Selecione um ficheiro ou pasta para iniciar uma sincronização.</translation>
+  <translation id="9097448805928983789">Relações de sincronização</translation>
+  <translation id="9130234759791309317">Nenhum dispositivo compatível com sincronização. Ative a partilha por proximidade nos dois dispositivos.</translation>
+  <translation id="1613657715385222389">Ainda não existem relações de sincronização.</translation>
+  <translation id="2170145650202433581">A aguardar o outro dispositivo</translation>
+  <translation id="5829649908290113115">A sincronizar…</translation>
+  <translation id="659339563617986839">Atualizado</translation>
+  <translation id="5895244416504545165">Sincronização interrompida. Será efetuada uma nova tentativa automaticamente. Verifique a ligação, o acesso à pasta e o espaço disponível.</translation>
+  <translation id="5119780910075847424">Sincronização em pausa</translation>
+  <translation id="6738366024175938707">Remover sincronização</translation>
+  <translation id="6335248546481182258">Ficheiros de recuperação</translation>
+  <translation id="6956049626921760252">Não foi possível abrir ou guardar a base de dados de sincronização. Outra instância do crFiles poderá estar a utilizá-la.</translation>
+  <translation id="6663644605798061183">Não é possível sincronizar esta localização. Verifique o acesso à pasta, os nomes e as relações existentes.</translation>
+  <translation id="2116735990264511045">Permitir a sincronização bidirecional contínua nesta pasta? Ambos os dispositivos poderão alterar e eliminar ficheiros. Os ficheiros substituídos e eliminados são guardados na pasta de recuperação. Pode pausar ou remover esta relação em «Sincronizar com».</translation>
+  <translation id="6371951046798553292">Um ficheiro foi alterado durante a recuperação. Os originais e ficheiros temporários foram preservados. Verifique a pasta de recuperação antes de retomar.</translation>
 </translationbundle>

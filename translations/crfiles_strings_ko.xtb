@@ -372,4 +372,21 @@
   <translation id="8385154793237841987">이 기기의 다른 Bluetooth 서비스 연결이 잠시 끊어집니다.</translation>
   <translation id="8779418991368148028">Bluetooth에 다시 연결하는 중…</translation>
   <translation id="2503209953868057834">주변 기기를 검색할 수 없습니다. 네트워크를 확인하고 시스템 설정 &gt; 개인정보 보호 및 보안 &gt; 로컬 네트워크에서 crFiles의 접근을 허용하세요. 이미 허용된 경우 접근을 껐다가 다시 켜세요. 자동으로 다시 시도하고 있습니다.</translation>
+  <translation id="7031882061095297553">동기화 대상</translation>
+  <translation id="3899107441531918480">두 앱이 실행 중일 때 파일 또는 폴더 하나를 다른 crFiles 기기와 동기화합니다. 변경 및 삭제 사항은 양방향으로 전달됩니다. 충돌한 파일과 교체된 파일은 보관됩니다. 동기화 관계를 해제해도 파일은 유지됩니다.</translation>
+  <translation id="6917611495261629542">새 동기화를 시작하려면 파일 또는 폴더 하나를 선택하세요.</translation>
+  <translation id="9097448805928983789">동기화 관계</translation>
+  <translation id="9130234759791309317">동기화를 지원하는 기기가 없습니다. 두 기기에서 근처 공유를 켜세요.</translation>
+  <translation id="1613657715385222389">아직 동기화 관계가 없습니다.</translation>
+  <translation id="2170145650202433581">다른 기기를 기다리는 중</translation>
+  <translation id="5829649908290113115">동기화 중…</translation>
+  <translation id="659339563617986839">최신 상태</translation>
+  <translation id="5895244416504545165">동기화가 중단되었습니다. 자동으로 다시 시도합니다. 연결, 폴더 접근 권한 및 여유 공간을 확인하세요.</translation>
+  <translation id="5119780910075847424">동기화 일시중지됨</translation>
+  <translation id="6738366024175938707">동기화 해제</translation>
+  <translation id="6335248546481182258">복구 파일</translation>
+  <translation id="6956049626921760252">동기화 데이터베이스를 열거나 저장할 수 없습니다. 다른 crFiles 인스턴스에서 사용 중일 수 있습니다.</translation>
+  <translation id="6663644605798061183">이 위치를 동기화할 수 없습니다. 폴더 접근 권한, 이름 및 기존 동기화 관계를 확인하세요.</translation>
+  <translation id="2116735990264511045">이 폴더의 지속적인 양방향 동기화를 허용할까요? 두 기기 모두 파일을 변경하고 삭제할 수 있습니다. 교체되거나 삭제된 파일은 복구 폴더에 보관됩니다. “동기화 대상”에서 관계를 일시중지하거나 해제할 수 있습니다.</translation>
+  <translation id="6371951046798553292">복구 중 파일이 변경되었습니다. 원본과 임시 파일은 보존되었습니다. 다시 시작하기 전에 복구 폴더를 확인하세요.</translation>
 </translationbundle>

@@ -54,6 +54,7 @@ class ShareService {
     uint8_t quick_share_application = 0;
     uint8_t device_type = 0;  // Quick Share's advertised type; 0 means unknown.
     std::vector<SharedTarget> targets = {};
+    bool sync_v1 = false;
     bool operator==(const Peer&) const = default;
   };
   struct TrustedDevice {
@@ -71,6 +72,8 @@ class ShareService {
     bool discovery_ready = false;
     bool busy = false;
     bool receiving = false;
+    bool syncing = false;
+    bool sync_background = false;
     bool trust_error = false;
     // macOS Quick Share only: explicit recovery for a failed Bluetooth setup.
     bool can_reconnect_bluetooth = false;

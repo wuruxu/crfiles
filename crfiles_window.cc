@@ -135,6 +135,7 @@
 #include "crFiles/sharing/quick_share_adapter.h"
 #endif
 #include "crFiles/sharing/file_share_dialog.h"
+#include "crFiles/sharing/sync_dialog.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
@@ -4775,7 +4776,7 @@ enum ContextCommand {
   kContextOpen = 10000, kContextCut, kContextCopy, kContextMoveTo, kContextCopyTo,
   kContextRename, kContextCompress, kContextTrash, kContextTerminal, kContextPath,
   kContextProperties, kContextNewTab, kContextSplit, kContextOpenWith, kContextPaste,
-  kContextSplitLeft, kContextSplitRight, kContextSplitTop, kContextSplitBottom, kContextShare, kContextQuickShare,
+  kContextSplitLeft, kContextSplitRight, kContextSplitTop, kContextSplitBottom, kContextShare, kContextSync, kContextQuickShare,
   kContextExtractHere, kContextExtractFolder, kContextExtractTo,
   kContextShowPackageContents, kContextNewFolder, kContextSortBy, kContextSelectAll,
   kContextAddTags, kContextDeleteTag,
@@ -5858,6 +5859,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (command_id == kContextDeleteTag) return tag_id_ == 0 && !context_paths_.empty();
       if (tag_id_ == 0 && command_id != kContextOpen && command_id != kContextSelectAll && command_id != kContextNewFolder) return false;
       if (tag_id_ == 0 && command_id == kContextNewFolder) return true;
+      if (command_id == kContextSync) return tag_id_ != 0;
       if (command_id == kContextSelectAll) return !displayed_entries_.empty() && !order_pending_;
       if (IsTagListing() && (command_id == kContextNewFolder || command_id == kContextPaste ||
           (context_paths_.empty() && (command_id == kContextProperties || command_id == kContextTerminal)))) return false;
@@ -6236,6 +6238,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (tag_id_ != 0) {
         context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
         add(kContextTerminal, IDS_CRFILES_OPEN_TERMINAL, &kCodeIcon);
+        add(kContextSync, IDS_CRFILES_SYNC_TO, &vector_icons::kScreenShareIcon);
         context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
         add(kContextProperties, IDS_CRFILES_PROPERTIES, &kInfoIcon);
       }
@@ -6277,6 +6280,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       add(kContextAddTags, IDS_CRFILES_TAGS, &kTagsIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
       add(kContextShare, IDS_CRFILES_SHARE_TO, &vector_icons::kScreenShareIcon);
+      add(kContextSync, IDS_CRFILES_SYNC_TO, &vector_icons::kScreenShareIcon);
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
       context_menu_->AddItemWithIcon(kContextQuickShare, Text(IDS_CRFILES_QUICK_SHARE),
           ui::ImageModel::FromVectorIcon(kQuickShareAndroidIcon, ui::kColorSysTertiary, 18));
@@ -6531,6 +6535,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
                 (root_ ? root_.get() : this)->weak_.GetWeakPtr(), context_paths_));
         break;
 #endif
+      case kContextSync:
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+            base::BindOnce(&FilesView::ShowSyncing,
+                (root_ ? root_.get() : this)->weak_.GetWeakPtr(), context_paths_));
+        break;
       case kContextShare:
         // Finish native context-menu dispatch before opening a modal window.
         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
@@ -10237,6 +10246,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
     quick_sharing_dialog_.SetView(ShowFileShareDialog(GetWidget(), quick_sharing_, std::move(paths)));
   }
 #endif
+  void ShowSyncing(std::vector<base::FilePath> paths) {
+    if (auto* view = sync_dialog_.view(); view && view->GetWidget() && !view->GetWidget()->IsClosed()) {
+      view->GetWidget()->Show(); view->GetWidget()->Activate(); return;
+    }
+    sync_dialog_.SetView(ShowSyncDialog(GetWidget(), sharing_, std::move(paths),
+        base::BindRepeating([](base::WeakPtr<FilesView> view, base::FilePath path) {
+          if (!view) return;
+          view->AddPaneTab(std::move(path));
+          if (auto* dialog = view->sync_dialog_.view(); dialog && dialog->GetWidget()) dialog->GetWidget()->Close();
+        }, weak_.GetWeakPtr())));
+  }
   void ShowSharing(std::vector<base::FilePath> paths) {
     if (auto* view = sharing_dialog_.view(); view && view->GetWidget() && !view->GetWidget()->IsClosed()) {
       if (!paths.empty()) SetFileShareSelection(view, std::move(paths));
@@ -10407,7 +10427,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::vector<base::WeakPtr<views::View>> dragging_rows_;
   std::unique_ptr<FileDragCursorObserver> file_drag_cursor_observer_;
   std::unique_ptr<ShareSessionToast> session_toast_;
-  views::ViewTracker sharing_dialog_, trusted_dialog_, sharing_folders_dialog_;
+  views::ViewTracker sharing_dialog_, trusted_dialog_, sharing_folders_dialog_, sync_dialog_;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   std::shared_ptr<ShareService> quick_sharing_;
   std::unique_ptr<ShareSessionToast> quick_session_toast_;

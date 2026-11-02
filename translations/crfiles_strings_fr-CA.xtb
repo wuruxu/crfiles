@@ -372,4 +372,21 @@
   <translation id="8385154793237841987">Les autres services Bluetooth de cet appareil seront brièvement déconnectés.</translation>
   <translation id="8779418991368148028">Reconnexion Bluetooth…</translation>
   <translation id="2503209953868057834">La détection des appareils à proximité est indisponible. Vérifiez votre réseau et autorisez crFiles dans Réglages système &gt; Confidentialité et sécurité &gt; Réseau local. Si l’accès est déjà autorisé, désactivez-le puis réactivez-le. Nouvelle tentative automatique en cours.</translation>
+  <translation id="7031882061095297553">Synchroniser vers</translation>
+  <translation id="3899107441531918480">Synchronisez un fichier ou dossier avec un autre appareil crFiles lorsque les deux applications sont ouvertes. Les modifications et suppressions se propagent dans les deux sens. Les fichiers en conflit et remplacés sont conservés. Supprimer une relation conserve vos fichiers.</translation>
+  <translation id="6917611495261629542">Sélectionnez un fichier ou dossier pour démarrer une synchronisation.</translation>
+  <translation id="9097448805928983789">Relations de synchronisation</translation>
+  <translation id="9130234759791309317">Aucun appareil compatible avec la synchronisation. Activez le partage à proximité sur les deux appareils.</translation>
+  <translation id="1613657715385222389">Aucune relation de synchronisation.</translation>
+  <translation id="2170145650202433581">En attente de l’autre appareil</translation>
+  <translation id="5829649908290113115">Synchronisation…</translation>
+  <translation id="659339563617986839">À jour</translation>
+  <translation id="5895244416504545165">Synchronisation interrompue. Nouvelle tentative automatique. Vérifiez la connexion, l’accès au dossier et l’espace disponible.</translation>
+  <translation id="5119780910075847424">Synchronisation suspendue</translation>
+  <translation id="6738366024175938707">Supprimer la synchronisation</translation>
+  <translation id="6335248546481182258">Fichiers de récupération</translation>
+  <translation id="6956049626921760252">Impossible d’ouvrir ou d’enregistrer la base de synchronisation. Une autre instance de crFiles l’utilise peut-être.</translation>
+  <translation id="6663644605798061183">Impossible de synchroniser cet emplacement. Vérifiez l’accès au dossier, les noms et les relations existantes.</translation>
+  <translation id="2116735990264511045">Autoriser la synchronisation bidirectionnelle continue dans ce dossier ? Les deux appareils pourront modifier et supprimer des fichiers. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération. Vous pouvez suspendre ou supprimer cette relation dans « Synchroniser vers ».</translation>
+  <translation id="6371951046798553292">Un fichier a changé pendant la récupération. Les originaux et fichiers temporaires sont conservés. Vérifiez le dossier de récupération avant de reprendre.</translation>
 </translationbundle>

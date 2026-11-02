@@ -372,4 +372,21 @@
   <translation id="8385154793237841987">這會暫時中斷此裝置上的其他藍牙服務。</translation>
   <translation id="8779418991368148028">正在重新連線藍牙…</translation>
   <translation id="2503209953868057834">無法探索附近裝置。請檢查網路，並在「系統設定 &gt; 隱私權與安全性 &gt; 區域網路」中允許 crFiles 存取。如果已允許，請關閉後重新開啟。正在自動重試。</translation>
+  <translation id="7031882061095297553">同步至</translation>
+  <translation id="3899107441531918480">在兩端應用程式執行時，將一個檔案或資料夾與另一台 crFiles 裝置保持同步。修改及刪除會雙向傳遞。衝突檔案和被取代的檔案會保留。移除同步關係不會刪除檔案。</translation>
+  <translation id="6917611495261629542">選取一個檔案或資料夾以開始新的同步。</translation>
+  <translation id="9097448805928983789">同步關係</translation>
+  <translation id="9130234759791309317">沒有支援同步的可用裝置。請在兩台裝置上啟用鄰近分享。</translation>
+  <translation id="1613657715385222389">尚無同步關係。</translation>
+  <translation id="2170145650202433581">正在等待另一台裝置</translation>
+  <translation id="5829649908290113115">正在同步…</translation>
+  <translation id="659339563617986839">已同步</translation>
+  <translation id="5895244416504545165">同步中斷，將自動重試。請檢查連線、資料夾存取權限及可用空間。</translation>
+  <translation id="5119780910075847424">同步已暫停</translation>
+  <translation id="6738366024175938707">移除同步</translation>
+  <translation id="6335248546481182258">復原檔案</translation>
+  <translation id="6956049626921760252">無法開啟或儲存同步資料庫，另一個 crFiles 執行個體可能正在使用它。</translation>
+  <translation id="6663644605798061183">無法同步此位置。請檢查資料夾存取權限、名稱及現有同步關係。</translation>
+  <translation id="2116735990264511045">允許在此資料夾持續雙向同步嗎？兩台裝置均可修改及刪除檔案。被取代和刪除的檔案會保留在復原資料夾中。你可以在「同步至」中暫停或移除此關係。</translation>
+  <translation id="6371951046798553292">復原期間檔案發生變更。原始檔案及暫存檔案皆已保留。請檢查復原資料夾後再繼續。</translation>
 </translationbundle>

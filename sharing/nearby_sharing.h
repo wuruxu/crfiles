@@ -18,6 +18,7 @@
 #include "crFiles/sharing/connect_discovery.h"
 #include "ui/gfx/image/image_skia.h"
 #include "crFiles/sharing/share_service.h"
+#include "crFiles/sharing/sync_service.h"
 
 namespace crfiles {
 
@@ -55,11 +56,16 @@ class NearbySharing : public ShareService {
   // Ignore cancellation from a UI displaying a different transfer.
   void CancelSession(uint64_t session) override;
 
+  bool StartSync(const Peer& peer, const base::FilePath& source);
+  void CancelSync(const std::string& id);
+  std::shared_ptr<SyncService> sync_service() const { return sync_; }
+
   struct State;
   struct TrustStore;
 
  private:
   std::shared_ptr<State> state_;
+  std::shared_ptr<SyncService> sync_;
   std::shared_ptr<TrustStore> trust_;
   std::unique_ptr<ConnectDiscovery> connect_discovery_;
 };

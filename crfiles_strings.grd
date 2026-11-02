@@ -419,6 +419,25 @@
       <message name="IDS_CRFILES_TAG_DELETE" desc="Custom file tag context menu and deletion.">Delete Tag</message>
       <message name="IDS_CRFILES_TAG_DELETE_ERROR" desc="Custom file tag context menu and deletion.">Tags could not be deleted.</message>
       <message name="IDS_CRFILES_TAG_DELETE_CONFIRM" desc="Confirmation before deleting tags; selected virtual tag paths are listed below.">Delete the tags listed below and remove them from all associated files and folders? The files and folders themselves will be kept.</message>
+      <message name="IDS_CRFILES_SYNC_TO" desc="Two-way file synchronization interface.">Sync to</message>
+      <message name="IDS_CRFILES_SYNC_HINT" desc="Two-way file synchronization interface.">Keep one file or folder in sync with another crFiles device while both apps are running. Changes and deletions travel both ways. Conflicts and replaced files are kept. Removing a relationship keeps your files.</message>
+      <message name="IDS_CRFILES_SYNC_SELECT_ONE" desc="Two-way file synchronization interface.">Select one file or folder to start a new sync.</message>
+      <message name="IDS_CRFILES_SYNC_RELATIONSHIPS" desc="Two-way file synchronization interface.">Sync relationships</message>
+      <message name="IDS_CRFILES_SYNC_NO_DEVICES" desc="Two-way file synchronization interface.">No devices supporting sync are available. Enable nearby sharing on both devices.</message>
+      <message name="IDS_CRFILES_SYNC_NONE" desc="Two-way file synchronization interface.">No sync relationships yet.</message>
+      <message name="IDS_CRFILES_SYNC_WAITING" desc="Two-way file synchronization interface.">Waiting for the other device</message>
+      <message name="IDS_CRFILES_SYNC_ACTIVE" desc="Two-way file synchronization interface.">Syncing…</message>
+      <message name="IDS_CRFILES_SYNC_CURRENT" desc="Two-way file synchronization interface.">Up to date</message>
+      <message name="IDS_CRFILES_SYNC_RETRY" desc="Two-way file synchronization interface.">Sync interrupted. Retrying automatically; check the connection, folder access and available space.</message>
+      <message name="IDS_CRFILES_SYNC_PAUSED" desc="Two-way file synchronization interface.">Sync paused</message>
+      <message name="IDS_CRFILES_SYNC_PAUSE" desc="Two-way file synchronization interface.">Pause</message>
+      <message name="IDS_CRFILES_SYNC_RESUME" desc="Two-way file synchronization interface.">Resume</message>
+      <message name="IDS_CRFILES_SYNC_REMOVE" desc="Two-way file synchronization interface.">Remove sync</message>
+      <message name="IDS_CRFILES_SYNC_RECOVERY" desc="Two-way file synchronization interface.">Recovery files</message>
+      <message name="IDS_CRFILES_SYNC_STORAGE_ERROR" desc="Two-way file synchronization interface.">Cannot open or save the sync database. Another crFiles instance may be using it.</message>
+      <message name="IDS_CRFILES_SYNC_SOURCE_ERROR" desc="Two-way file synchronization interface.">Cannot sync this location. Check folder access, names and existing sync relationships.</message>
+      <message name="IDS_CRFILES_SYNC_CONSENT" desc="Two-way file synchronization interface.">Allow ongoing two-way sync in this folder? Both devices can change and delete files. Replaced and deleted files are kept in the recovery folder. You can pause or remove this relationship in Sync to.</message>
+      <message name="IDS_CRFILES_SYNC_RECOVERY_REQUIRED" desc="Two-way file synchronization interface.">A file changed during recovery. Originals and staged files are preserved. Review the recovery folder before resuming.</message>
 </messages>
   </release>
 </grit>

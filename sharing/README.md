@@ -123,3 +123,13 @@ an extension-capable receiver; they are never flattened or silently sent as a
 legacy media transfer. Existing crPhotos clients keep their original default
 receive target and supported media types; selecting named panes and directory
 transfer require a client implementing these extensions.
+
+## Optional two-way synchronization
+
+crFiles now additionally advertises `sync-v1` and negotiates it in the authenticated
+hello. Normal Share transfers continue to use their existing messages. Sync uses
+a separate relationship-scoped protocol, durable revision index and filesystem
+journal; it never treats a trusted ordinary Share as ongoing sync authorization.
+See [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md) for message ordering, persistence, conflict
+and recovery rules, limits, and manual acceptance steps. This extension has not
+yet been built or verified between devices.

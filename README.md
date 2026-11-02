@@ -290,7 +290,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
 
 ## Android Quick Share (Linux, Windows and macOS)
 
-Right-click selected files and choose **Quick Share**, directly below **Share to**.
+Right-click selected files and choose **Quick Share**, below **Sync to** and **Share to**.
 The dialog reuses crFiles' device list, code comparison, progress and cancellation
 UI, with a separate service backed by `//crQuickShare:protocol`. It does not launch
 the standalone crQuickShare application. The existing Share to transport remains
@@ -1223,3 +1223,20 @@ engine. Actual compilation, linking and runtime validation are still required;
 GN checks only verify the declared build graph.
 
 Quick Share progress uses the current payload filename and introduction index, per-file and total bytes, and completed payload count (including empty files). Transfer speed and remaining time use a recent sampling window that excludes pairing and confirmation. Sent bytes are transport writes, not delivery receipts; received payload completion does not replace the final batch commit.
+
+## Two-way synchronization
+
+Right-click one file or folder and choose **Sync to**, immediately below **Share to**.
+Select another crFiles device and approve continuing two-way access on the receiver.
+The first copy goes into a fresh directory under its configured receive location;
+subsequent changes and deletions flow in both directions while both applications
+are running. Conflicting versions are preserved as separate files, and replaced
+or deleted files are retained in a local recovery directory.
+
+Sync to also manages existing relationships: pause/resume, remove without deleting
+files, open the local root, and inspect recovery files. It is available from the
+empty-area context menu as well. The first version supports one-to-one desktop
+relationships, whole-file updates, directory watching and periodic reconciliation.
+See [sync-v1 protocol, recovery and acceptance steps](sharing/SYNC_PROTOCOL.md) for
+limits, conflict behavior, restart recovery, and the checks still requiring a build
+and two-device validation.

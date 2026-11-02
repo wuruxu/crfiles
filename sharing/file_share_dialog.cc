@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/sharing/file_share_dialog.h"
 #include "crFiles/crfiles_dialog.h"
+#include "crFiles/crfiles_file_access.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -318,7 +319,14 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (accept && (stage_ == NearbySharing::Stage::kReceivingOffer ||
         (service_->IsQuickShare() && stage_ == NearbySharing::Stage::kPairing && displayed_state_ && displayed_state_->receiving)))
       accepted_session_ = session_;
-    service_->Decide(session_, stage_, accept, trust_ && trust_->GetChecked(), conflict_id_);
+    if (accept && displayed_state_ && displayed_state_->syncing &&
+        stage_ == NearbySharing::Stage::kReceivingOffer) {
+      EnsureDirectoryAccess(owner_.get(), displayed_state_->receive_directory, true,
+          base::BindOnce([](std::shared_ptr<ShareService> service, uint64_t session,
+                           NearbySharing::Stage stage, bool allowed) {
+            service->Decide(session, stage, allowed);
+          }, service_, session_, stage_));
+    } else service_->Decide(session_, stage_, accept, trust_ && trust_->GetChecked(), conflict_id_);
     if (accept_) accept_->SetEnabled(false);
     if (reject_) reject_->SetEnabled(false);
   }
@@ -445,7 +453,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     auto* name = Label(name_row, base::UTF8ToUTF16(state.peer_name)); name->SetMaximumWidth(248);
     if (service_->IsQuickShare() && state.peer_quick_share_application)
       Label(identity_text, QuickShareDeviceType(state.peer_device_type, state.peer_quick_share_application));
-    if (!code_notice) Label(contents.get(), Text(state.receiving ? IDS_CRFILES_HISTORY_RECEIVE : IDS_CRFILES_HISTORY_SEND));
+    if (!code_notice) Label(contents.get(), Text(state.syncing ? IDS_CRFILES_SYNC_TO : state.receiving ? IDS_CRFILES_HISTORY_RECEIVE : IDS_CRFILES_HISTORY_SEND));
     if (transfer) {
       filename_ = Label(contents.get(), std::u16string());
       filename_->SetMultiLine(false); filename_->SetElideBehavior(gfx::ELIDE_MIDDLE);
@@ -499,7 +507,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       Label(summary, Text(IDS_CRFILES_FILES) + u": " + base::NumberToString16(state.files.size() - folders) +
           u"   ·   " + Text(IDS_CRFILES_FOLDERS) + u": " + base::NumberToString16(folders));
       Label(summary, Text(IDS_CRFILES_TOTAL_SIZE) + u": " + ui::FormatBytes(base::ByteSize(state.total)));
-      Label(contents.get(), Text(IDS_CRFILES_RECEIVE_PROMPT));
+      Label(contents.get(), Text(state.syncing ? IDS_CRFILES_SYNC_CONSENT : IDS_CRFILES_RECEIVE_PROMPT));
+      if (state.syncing) Label(contents.get(), state.receive_directory.AsUTF16Unsafe());
     }
     auto* actions = contents->AddChildView(std::make_unique<views::View>());
     actions->SetVisible(!code_notice);
@@ -619,6 +628,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (!owner_ || owner_->IsClosed()) { result_close_timer_.Stop(); timer_.Stop(); Close(); return; }
     if (dismiss_) { dismiss_ = false; Close(); }
     const auto state = service_->GetSnapshot();
+    if (state.syncing && state.sync_background) { Close(); return; }
     using Stage = NearbySharing::Stage;
     if (!state.discovery_resume_at.is_null() &&
         base::TimeTicks::Now() >= state.discovery_resume_at) {
