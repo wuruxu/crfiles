@@ -68,7 +68,8 @@ class SyncService {
   SyncService(const SyncService&) = delete;
   SyncService& operator=(const SyncService&) = delete;
 
-  bool Queue(const base::FilePath& source, std::string fingerprint,
+  // Returns the queued request ID; registration and connection may still fail.
+  std::string Queue(const base::FilePath& source, std::string fingerprint,
              std::string peer, int avatar, bool write);
   void Pause(std::string id, bool paused);
   void Permissions(std::string id, bool read, bool write);

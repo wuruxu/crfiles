@@ -120,13 +120,24 @@ class SyncView : public views::View {
                 if (!view) return;
                 view->requesting_ = false; view->device_key_.clear();
                 if (!allowed) return;
-                view->queued_ = view->service_->StartSync(peer, view->paths_[0], write);
+                view->request_id_ = view->service_->StartSync(peer, view->paths_[0], write);
+                view->queued_ = !view->request_id_.empty();
                 view->status_->SetText(Text(view->queued_ ? IDS_CRFILES_SYNC_WAITING : IDS_CRFILES_SYNC_SOURCE_ERROR));
               }, view, std::move(peer), write));
         }, weak_.GetWeakPtr(), std::move(peer), write));
   }
   void Refresh() {
     const auto state = service_->GetSnapshot();
+    if (!request_id_.empty()) {
+      // Queue acceptance is not registration or delivery. Follow this exact
+      // request so source/database/transport errors cannot look like waiting.
+      for (const auto& job : service_->sync_service()->Snapshot()) {
+        if (job.id == request_id_ || (job.id.empty() && job.status == IDS_CRFILES_SYNC_STORAGE_ERROR)) {
+          status_->SetText(Text(job.status ? job.status : IDS_CRFILES_SYNC_WAITING));
+          break;
+        }
+      }
+    }
     if (!state.enabled) status_->SetText(Text(IDS_CRFILES_NEARBY_OFF));
     else if (!queued_ && status_->GetText() == Text(IDS_CRFILES_NEARBY_OFF)) status_->SetText({});
     std::string key = state.enabled ? "on" : "off";
@@ -162,7 +173,7 @@ class SyncView : public views::View {
   std::unique_ptr<views::BubbleDialogDelegate> popup_delegate_;
   std::unique_ptr<views::Widget> popup_widget_;
   bool queued_ = false, requesting_ = false;
-  std::string device_key_;
+  std::string device_key_, request_id_;
   base::RepeatingTimer timer_;
   base::WeakPtrFactory<SyncView> weak_{this};
 };

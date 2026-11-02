@@ -56,7 +56,7 @@ class NearbySharing : public ShareService {
   // Ignore cancellation from a UI displaying a different transfer.
   void CancelSession(uint64_t session) override;
 
-  bool StartSync(const Peer& peer, const base::FilePath& source, bool write = false);
+  std::string StartSync(const Peer& peer, const base::FilePath& source, bool write = false);
   void CancelSync(const std::string& id);
   std::shared_ptr<SyncService> sync_service() const { return sync_; }
 

@@ -21,6 +21,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -357,12 +358,16 @@ class SyncService::Impl {
     }
     base::AutoLock lock(ui_lock); snapshot = std::move(views);
   }
-  bool Overlaps(const base::FilePath& root, const std::string& ignore_id = {}) {
+  bool Overlaps(const base::FilePath& root, const std::string& ignore_id = {}, bool single_file = false) {
     // Disallow overlapping roots, including single files sharing a parent. This
     // keeps restoration folders and filesystem locks unambiguous in v1.
     for (const auto& [id, r] : jobs) if (id != ignore_id && !r->view.removed && !r->view.fingerprint.empty() &&
         (r->view.root == root || r->view.root.IsParent(root) || root.IsParent(r->view.root))) return true;
-    return root == directory || root.IsParent(directory) || directory.IsParent(root);
+    // A single file uses its parent for pinning/recovery, but only indexes that
+    // file and its conflict copies. In particular, ~/file.txt does not include the
+    // database under ~/.config or ~/Library in its synchronization scope.
+    // Files inside the database directory remain forbidden.
+    return root == directory || directory.IsParent(root) || (!single_file && root.IsParent(directory));
   }
   bool Full() const {
     return jobs.size() >= kMaxRegistrations || static_cast<size_t>(std::ranges::count_if(jobs, [](const auto& pair) {
@@ -382,7 +387,7 @@ class SyncService::Impl {
     r->view.avatar = std::clamp(command.avatar, 0, 8); r->view.started = base::Time::Now();
     r->view.read = command.read; r->view.write = command.write;
     if (!SafeSyncPath(CanonicalSyncPath(command.source.BaseName().AsUTF8Unsafe())) ||
-        (!r->single.empty() && !SafeSyncPath(r->single)) || Overlaps(r->view.root)) return false;
+        (!r->single.empty() && !SafeSyncPath(r->single)) || Overlaps(r->view.root, {}, !r->single.empty())) return false;
     SyncFiles files(r->view.root, r->view.id, [] { return false; });
     if (!files.Open()) return false;
     r->identity = files.Identity(); r->view.recovery = files.Recovery();
@@ -396,7 +401,9 @@ class SyncService::Impl {
   void Poll() {
     if (!Open()) {
       base::AutoLock lock(ui_lock);
-      if (snapshot.empty()) snapshot.emplace_back();
+      // Include a service-wide error for newly queued requests that could not
+      // be registered, even when older relationships already have snapshots.
+      if (std::ranges::none_of(snapshot, [](const auto& job) { return job.id.empty(); })) snapshot.emplace_back();
       for (auto& job : snapshot) job.status = IDS_CRFILES_SYNC_STORAGE_ERROR;
       return;
     }
@@ -849,11 +856,14 @@ class SyncService::Impl {
 
 SyncService::SyncService(base::FilePath directory) : impl_(std::make_unique<Impl>(std::move(directory))) {}
 SyncService::~SyncService() = default;
-bool SyncService::Queue(const base::FilePath& source, std::string fingerprint, std::string peer, int avatar, bool write) {
-  if (!source.IsAbsolute() || source.ReferencesParent() || fingerprint.size() != 64) return false;
+std::string SyncService::Queue(const base::FilePath& source, std::string fingerprint, std::string peer, int avatar, bool write) {
+  if (!source.IsAbsolute() || source.ReferencesParent() || fingerprint.size() != 64) return {};
   base::AutoLock lock(impl_->ui_lock);
-  if (impl_->commands.size() >= kMaxJobs) return false;
-  impl_->commands.push_back({0, RandomId(), source, std::move(fingerprint), std::move(peer), false, avatar, true, write}); return true;
+  if (impl_->commands.size() >= kMaxJobs) return {};
+  const auto id = RandomId();
+  impl_->commands.push_back({0, id, source, std::move(fingerprint), std::move(peer), false, avatar, true, write});
+  LOG(INFO) << "[crFiles sync] queued id=" << id;
+  return id;
 }
 void SyncService::Pause(std::string id, bool paused) {
   base::AutoLock lock(impl_->ui_lock); impl_->commands.push_back({1, std::move(id), {}, {}, {}, paused});

@@ -2674,15 +2674,16 @@ void NearbySharing::CancelSync(const std::string& id) {
   base::AutoLock lock(state_->lock);
   if (state_->snapshot.busy && state_->snapshot.syncing && state_->sync_id == id) ++state_->cancel;
 }
-bool NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write) {
-  if (!sync_) return false;
+std::string NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write) {
+  if (!sync_) return {};
   const auto snapshot = GetSnapshot();
-  if (!snapshot.enabled || !peer.sync_v1 || peer.phone) return false;
+  if (!snapshot.enabled || !peer.sync_v1 || peer.phone) return {};
   const auto current = std::ranges::find_if(snapshot.peers, [&](const auto& value) {
     return value.address == peer.address && value.sync_v1 && value.identity_expires > base::TimeTicks::Now() &&
         value.verified_fingerprint == peer.verified_fingerprint;
   });
-  return current != snapshot.peers.end() && sync_->Queue(source, current->verified_fingerprint, current->name, current->avatar, write);
+  if (current == snapshot.peers.end()) return {};
+  return sync_->Queue(source, current->verified_fingerprint, current->name, current->avatar, write);
 }
 
 bool NearbySharing::Send(std::string address, std::vector<base::FilePath> paths,

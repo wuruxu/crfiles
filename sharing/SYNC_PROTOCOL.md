@@ -248,7 +248,10 @@ database or recovery directory to clear an error while a relationship is active.
   file requires a new relationship. Renaming/replacing a selected directory root
   likewise requires a new registration.
 - Overlapping roots are rejected, including selected single files sharing one
-  parent. Sync state cannot be placed inside a synchronized root.
+  parent. A synchronized directory must not contain the sync database. A single
+  file such as `~/001.txt` may use an ancestor of the database as its pinning root:
+  only the selected file and its conflict copies are indexed. Selecting files
+  inside the database directory itself remains forbidden.
 - Links, special files, nested mounted filesystems, permission bits, extended
   attributes, alternate data streams and file ownership are not synchronized.
 - NFC names are used on the wire. Existing decomposed spellings are resolved
@@ -291,5 +294,9 @@ Use `autoninja` for any subsequently authorized build. No unit-test source was a
    disk errors during saving controls are visible and stop local synchronization.
 10. Exercise missing drives, replaced roots, permission failures, full disks,
     links/junctions, canonical/case collisions, Unicode names and overlapping roots.
+    Register `~/001.txt` while the database is under the same home directory and
+    verify the receiver is prompted. Selecting the whole home directory or a file
+    inside the sync database directory must still be rejected. Check that a failed
+    registration updates the originating Sync to dialog rather than waiting forever.
     A scan failure must not propagate mass deletions. Verify macOS sandbox access
     prompts and persistent access after restart, and Windows locked-file behavior.
