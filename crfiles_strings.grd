@@ -96,6 +96,7 @@
       <message name="IDS_CRFILES_NEARBY" desc="crFiles file manager interface.">Nearby devices</message>
       <message name="IDS_CRFILES_NEARBY_OFF" desc="crFiles file manager interface.">Sharing is off.</message>
       <message name="IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE" desc="Local device discovery is unavailable and will retry">Device discovery is unavailable. Check your network and local-network permissions. Retrying automatically; you can still use a device address.</message>
+      <message name="IDS_CRFILES_NEARBY_MAC_NETWORK_UNAVAILABLE" desc="macOS Nearby Sharing discovery repeatedly failed; network and Local Network permission troubleshooting, without asserting permission denial.">Nearby device discovery is unavailable. Check your network and allow crFiles in System Settings &gt; Privacy &amp; Security &gt; Local Network. If already allowed, turn access off and on. Retrying automatically.</message>
       <message name="IDS_CRFILES_NEARBY_READY" desc="crFiles file manager interface.">Devices on your local network appear here.</message>
       <message name="IDS_CRFILES_REOPEN_CLOSED_TAB" desc="Titlebar context menu command.">Reopen closed tab</message>
       <message name="IDS_CRFILES_BOOKMARK_ALL_TABS" desc="Titlebar context menu command.">Bookmark all tabs</message>

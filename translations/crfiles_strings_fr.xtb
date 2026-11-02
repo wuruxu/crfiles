@@ -371,4 +371,5 @@
   <translation id="3541874791069107603">Reconnecter et réessayer</translation>
   <translation id="8385154793237841987">Les autres services Bluetooth de cet appareil seront brièvement déconnectés.</translation>
   <translation id="8779418991368148028">Reconnexion Bluetooth…</translation>
+  <translation id="2503209953868057834">La détection des appareils à proximité est indisponible. Vérifiez votre réseau et autorisez crFiles dans Réglages Système &gt; Confidentialité et sécurité &gt; Réseau local. Si l’accès est déjà autorisé, désactivez-le puis réactivez-le. Nouvelle tentative automatique en cours.</translation>
 </translationbundle>

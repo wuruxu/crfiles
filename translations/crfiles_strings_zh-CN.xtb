@@ -371,4 +371,5 @@
   <translation id="3541874791069107603">重新连接并重试</translation>
   <translation id="8385154793237841987">这会暂时断开此设备上的其他蓝牙服务。</translation>
   <translation id="8779418991368148028">正在重新连接蓝牙…</translation>
+  <translation id="2503209953868057834">无法发现附近设备。请检查网络，并在“系统设置 &gt; 隐私与安全性 &gt; 本地网络”中允许 crFiles 访问。如果已允许，请关闭后重新开启。正在自动重试。</translation>
 </translationbundle>

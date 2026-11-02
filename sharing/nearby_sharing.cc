@@ -1512,10 +1512,9 @@ std::string Advertisement(const State& state, uint16_t port,
   return out;
 }
 
-void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
-  base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::WILL_BLOCK);
+ScopedSocket CreateDiscoverySocket() {
   auto socket_fd = CreateSocket(SOCK_DGRAM);
-  if (!socket_fd.is_valid()) return;
+  if (!socket_fd.is_valid()) return {};
   const int one = 1;
 #if BUILDFLAG(IS_MAC)
   const unsigned char ttl = 255;
@@ -1523,7 +1522,7 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   // allows each multicast listener to receive its own copy of the packets.
   if (SetOption(socket_fd.get(), SOL_SOCKET, SO_REUSEPORT, one) != 0) {
     PLOG(ERROR) << "Could not share the nearby discovery port";
-    return;
+    return {};
   }
 #else
   const int ttl = 255;
@@ -1531,7 +1530,7 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   if (SetOption(socket_fd.get(), SOL_SOCKET, SO_REUSEADDR, one) != 0 ||
       SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_TTL, ttl) != 0) {
     LOG(ERROR) << "Could not configure nearby discovery: " << SocketError();
-    return;
+    return {};
   }
   sockaddr_in bind_address{};
   bind_address.sin_family = AF_INET;
@@ -1539,8 +1538,17 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   if (bind(socket_fd.get(), reinterpret_cast<sockaddr*>(&bind_address),
            sizeof(bind_address)) != 0) {
     LOG(ERROR) << "Could not bind nearby discovery port: " << SocketError();
-    return;
+    return {};
   }
+  return socket_fd;
+}
+
+void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
+  base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::WILL_BLOCK);
+  auto socket_fd = CreateDiscoverySocket();
+#if !BUILDFLAG(IS_MAC)
+  if (!socket_fd.is_valid()) return;
+#endif
   sockaddr_in multicast{};
   multicast.sin_family = AF_INET;
   multicast.sin_port = htons(5353);
@@ -1613,26 +1621,121 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   std::map<std::string, Seen> seen;
   base::TimeTicks last_sent;
   base::TimeTicks last_response;
+#if BUILDFLAG(IS_MAC)
+  int failed_cycles = 0;
+  auto retry_delay = base::Seconds(5);
+  bool recreate_socket = false;
+  bool probe_required = true;
+  bool awaiting_peer_response = false;
+  bool receive_failed = false;
+  auto receive_failure = [&](int error) {
+    if (!receive_failed)
+      LOG(WARNING) << "crFiles macOS nearby discovery receive failed; error=" << error;
+    receive_failed = true;
+  };
+  // A successful send validates the local path, not the presence of a peer.
+  // Do not keep an error visible merely because no other device is advertising.
+  auto probe = [&] {
+    std::string question;
+    for (uint16_t value : {0, 0, 1, 0, 0, 0}) Number(question, value, 2);
+    question += DnsName(kService);
+    Number(question, 12, 2);
+    Number(question, 1, 2);
+    bool sent = false;
+    for (const auto& [address, local] : interfaces) {
+      if (SetOption(socket_fd.get(), IPPROTO_IP, IP_MULTICAST_IF, local) != 0) continue;
+      if (sendto(socket_fd.get(), question.data(), static_cast<int>(question.size()), kSendFlags,
+          reinterpret_cast<sockaddr*>(&multicast), sizeof(multicast)) ==
+          static_cast<int>(question.size())) sent = true;
+    }
+    return sent;
+  };
+#endif
   std::array<uint8_t, 4096> buffer;
   while (!state->stop) {
     const auto now = base::TimeTicks::Now();
+#if BUILDFLAG(IS_MAC)
+    if (now - last_sent >= retry_delay) {
+      if (recreate_socket) {
+        // Retry failed setup or sustained failure of the entire discovery path.
+        // Keep the peer cache and its original expiry across socket replacement.
+        socket_fd.reset();
+        socket_fd = CreateDiscoverySocket();
+        interfaces.clear();
+        join_failures.clear();
+        send_failures.clear();
+        last_response = {};
+        probe_required = true;
+        awaiting_peer_response = false;
+        receive_failed = false;
+        recreate_socket = false;
+        LOG(INFO) << "crFiles macOS nearby discovery socket retry; ready="
+                  << socket_fd.is_valid() << "; delay_ms=" << retry_delay.InMilliseconds();
+      }
+#else
     if (now - last_sent >= base::Seconds(5)) {
+#endif
       // Reconcile memberships independently. Failed joins and sends are retried
       // without restarting healthy interfaces or discarding unexpired peers.
-      refresh_interfaces();
-      const bool published = publish(15);
+      if (socket_fd.is_valid()) refresh_interfaces();
+      bool published = socket_fd.is_valid() && publish(15);
+#if BUILDFLAG(IS_MAC)
+      published = published && !receive_failed;
+      if (published && probe_required) {
+        published = probe();
+        if (published) {
+          probe_required = false;
+          awaiting_peer_response = true;
+          LOG(INFO) << "crFiles macOS nearby discovery probe sent; peer_response_confirmed=0";
+        }
+      }
+      if (published) {
+        if (failed_cycles)
+          LOG(INFO) << "crFiles macOS nearby discovery local path recovered; failed_cycles="
+                    << failed_cycles << "; peer_response_confirmed=0";
+        failed_cycles = 0;
+        retry_delay = base::Seconds(5);
+      } else {
+        probe_required = true;
+        failed_cycles = std::min(failed_cycles + 1, 3);
+        recreate_socket = !socket_fd.is_valid();
+        if (failed_cycles >= 3) {
+          recreate_socket = true;
+          retry_delay = std::min(retry_delay * 2, base::Seconds(30));
+        }
+      }
+#endif
       {
         base::AutoLock lock(state->lock);
         state->snapshot.discovery_ready = !state->stop && published;
+#if BUILDFLAG(IS_MAC)
+        if (state->stop || published) state->snapshot.discovery_message_id = 0;
+        else if (failed_cycles >= 3)
+          state->snapshot.discovery_message_id = IDS_CRFILES_NEARBY_MAC_NETWORK_UNAVAILABLE;
+#endif
       }
       last_sent = now;
     }
     PollFd pfd{socket_fd.get(), POLLIN, 0};
-    if (Poll(&pfd, 1, 200) > 0) {
+    const int poll_result = socket_fd.is_valid() ? Poll(&pfd, 1, 200) : Poll(nullptr, 0, 200);
+#if BUILDFLAG(IS_MAC)
+    if (poll_result < 0 && !RetrySocket()) {
+      receive_failure(SocketError());
+      Poll(nullptr, 0, 200);
+    }
+    if (poll_result > 0 && (pfd.revents & (POLLERR | POLLNVAL | POLLHUP))) {
+      receive_failure(PendingError(socket_fd.get()));
+      Poll(nullptr, 0, 200);
+    }
+#endif
+    if (poll_result > 0) {
       sockaddr_in source{};
       SocketLength source_size = sizeof(source);
       const auto length = recvfrom(socket_fd.get(), reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()),
           0, reinterpret_cast<sockaddr*>(&source), &source_size);
+#if BUILDFLAG(IS_MAC)
+      if (length < 0 && !RetrySocket()) receive_failure(SocketError());
+#endif
       if (length >= 12 && length < static_cast<int>(buffer.size()) &&
           source.sin_port == htons(5353)) {
         auto packet = base::span(buffer).first(static_cast<size_t>(length));
@@ -1709,6 +1812,12 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
                 inet_ntop(AF_INET, &source.sin_addr, ip.data(), ip.size())) {
               if (!ptr.ttl) seen.erase(id);
               else {
+#if BUILDFLAG(IS_MAC)
+                if (awaiting_peer_response) {
+                  awaiting_peer_response = false;
+                  LOG(INFO) << "crFiles macOS nearby discovery peer traffic verified; peer_traffic_confirmed=1";
+                }
+#endif
                 const std::string address = std::string(ip.begin(), std::ranges::find(ip, '\0')) +
                     ":" + base::NumberToString(peer_port);
                 seen[id] = {{id, name, address, avatar,
@@ -1742,7 +1851,7 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
       });
     }
   }
-  publish(0);
+  if (socket_fd.is_valid()) publish(0);
 }
 
 void Discovery(std::shared_ptr<State> state, uint16_t port) {
@@ -2358,6 +2467,9 @@ void NearbySharing::Disable() {
   base::AutoLock lock(state_->lock);
   state_->snapshot.enabled = false;
   state_->snapshot.discovery_ready = false;
+#if BUILDFLAG(IS_MAC)
+  state_->snapshot.discovery_message_id = 0;
+#endif
   state_->snapshot.busy = false;
   state_->snapshot.port = 0;
   state_->snapshot.stage = Stage::kOff;

@@ -371,4 +371,5 @@
   <translation id="3541874791069107603">再接続して再試行</translation>
   <translation id="8385154793237841987">このデバイスの他の Bluetooth サービスが一時的に切断されます。</translation>
   <translation id="8779418991368148028">Bluetooth に再接続しています…</translation>
+  <translation id="2503209953868057834">近くのデバイスを検出できません。ネットワークを確認し、「システム設定 &gt; プライバシーとセキュリティ &gt; ローカルネットワーク」で crFiles のアクセスを許可してください。許可済みの場合は、一度オフにしてからオンにしてください。自動的に再試行しています。</translation>
 </translationbundle>

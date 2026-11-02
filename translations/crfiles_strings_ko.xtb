@@ -371,4 +371,5 @@
   <translation id="3541874791069107603">다시 연결하고 재시도</translation>
   <translation id="8385154793237841987">이 기기의 다른 Bluetooth 서비스 연결이 잠시 끊어집니다.</translation>
   <translation id="8779418991368148028">Bluetooth에 다시 연결하는 중…</translation>
+  <translation id="2503209953868057834">주변 기기를 검색할 수 없습니다. 네트워크를 확인하고 시스템 설정 &gt; 개인정보 보호 및 보안 &gt; 로컬 네트워크에서 crFiles의 접근을 허용하세요. 이미 허용된 경우 접근을 껐다가 다시 켜세요. 자동으로 다시 시도하고 있습니다.</translation>
 </translationbundle>

@@ -1270,7 +1270,14 @@ class FileShareView : public views::View, public ui::EventObserver {
     else if (state.stage == Stage::kCanceled) message = IDS_CRFILES_CANCELED;
     else if (state.busy) message = IDS_CRFILES_TRANSFERRING;
     status_->SetText(Text(send_error_ && !state.busy ? IDS_CRFILES_SEND_ERROR : message));
-    status_->SetVisible(message != IDS_CRFILES_NEARBY_READY || (send_error_ && !state.busy));
+    bool show_status = message != IDS_CRFILES_NEARBY_READY || (send_error_ && !state.busy);
+#if BUILDFLAG(IS_MAC)
+    // Use the multiline discovery hint instead of duplicating the generic error.
+    if (!service_->IsQuickShare() && state.enabled && state.discovery_message_id &&
+        message == IDS_CRFILES_NEARBY_DISCOVERY_UNAVAILABLE && !(send_error_ && !state.busy))
+      show_status = false;
+#endif
+    status_->SetVisible(show_status);
     status_row_->SetVisible(status_->GetVisible());
     std::u16string status_detail;
     if (service_->IsQuickShare() && state.busy && state.status_message_id != IDS_CRFILES_QS_RESTORING_NETWORK) {
@@ -1284,7 +1291,11 @@ class FileShareView : public views::View, public ui::EventObserver {
     status_detail_->SetVisible(!status_detail.empty());
     const bool show_discovery_status = state.discovery_message_id != 0 &&
         (!service_->IsQuickShare() || state.discovery_message_id != IDS_CRFILES_QUICK_SHARE_BLE_HINT);
-    discovery_status_->SetVisible(!service_->IsQuickShare() && show_discovery_status);
+    bool separate_discovery_status = !service_->IsQuickShare() && show_discovery_status;
+#if BUILDFLAG(IS_MAC)
+    separate_discovery_status &= state.enabled;
+#endif
+    discovery_status_->SetVisible(separate_discovery_status);
     if (service_->IsQuickShare()) {
       if (auto* widget = GetWidget()) {
         const auto title = Text(show_discovery_status ? state.discovery_message_id : IDS_CRFILES_QUICK_SHARE);

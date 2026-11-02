@@ -44,6 +44,17 @@ remains open so discovery can resume when an interface becomes available.
 Join failures and publishing failures are logged once per address until recovery
 or address removal; successful joins and interface removals are also logged.
 
+On macOS only, three consecutive failed discovery cycles show a Local Network
+permission/network troubleshooting hint. The discovery socket is then recreated
+with 10-, 20-, and at most 30-second retry intervals, preserving unexpired peers
+and identity proofs. Socket setup failures and nontransient receive errors also
+enter this recovery path. A successful announcement and PTR query clear the hint
+and restore the normal five-second interval; a separate diagnostic records the
+first valid peer announcement afterward. No peer response is required to clear
+the local failure hint, since an empty network is not a permission error. The app
+does not change macOS permissions. Linux and Windows keep their existing retry
+and UI behavior.
+
 The macOS port has not yet been compiled or tested between devices. When testing
 macOS, leave Bonjour running, verify discovery with Wi-Fi and Ethernet, and
 disconnect a peer during a transfer to check that the app stays running. Also
@@ -69,6 +80,13 @@ test application.
    Start offline, then connect to the LAN and verify discovery resumes without an
    application restart. These membership changes require device validation after
    an authorized build.
+8. On macOS, deny Local Network access and verify the detailed hint appears after
+   sustained failure. Allow access again (toggle it off/on if the OS setting is
+   already enabled but ineffective), then verify recovery within the next retry,
+   receipt of a peer advertisement, and removal of the hint. Also verify that a
+   working LAN plus an unusable VPN does not trigger whole-socket recovery, and
+   that disabling sharing or quitting cancels the retry promptly. These recovery
+   changes have not yet been compiled or exercised on a device.
 
 For the upstream packet and security details, consult
 `../../crPhotos/sharing/PROTOCOL.md` and `../../crPhotos/sharing/MDNS_INTEROP.md`.

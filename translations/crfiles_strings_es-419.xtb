@@ -371,4 +371,5 @@
   <translation id="3541874791069107603">Reconectar y reintentar</translation>
   <translation id="8385154793237841987">Esto desconectará brevemente otros servicios Bluetooth de este dispositivo.</translation>
   <translation id="8779418991368148028">Reconectando Bluetooth…</translation>
+  <translation id="2503209953868057834">No se pueden detectar dispositivos cercanos. Revisa la red y permite el acceso de crFiles en Configuración del Sistema &gt; Privacidad y seguridad &gt; Red local. Si ya está permitido, desactívalo y vuelve a activarlo. Se está reintentando automáticamente.</translation>
 </translationbundle>
