@@ -235,10 +235,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
   follows the window size. There is no bottom status text; loading and errors
   appear in the image area. Left/Right or the toolbar arrows switch between images
   from the same directory in the current filtered list order, captured when the
-  window opens. Home or 0 resets the view and +/− zoom. F toggles native fullscreen;
-  Q or Esc exits fullscreen. Outside fullscreen, Q does nothing and Esc closes
-  the viewer. Native fullscreen availability also depends on the platform's
-  modal-window support, particularly macOS sheets.
+  window opens. Home or 0 resets the view, +/− zoom, and Esc closes the viewer.
   Images load asynchronously; switching or closing cancels obsolete requests.
   The preview uses 6 DIP outer padding and a 4 DIP toolbar gap. Switching images
   fades the old image out over 120 ms and the new image in over 160 ms; decoding

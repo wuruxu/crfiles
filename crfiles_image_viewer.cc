@@ -246,7 +246,7 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
     status_->SetMultiLine(true); status_->SetCanProcessEventsWithinSubtree(false);
     layout->SetFlexForView(surface, 1);
     SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
-    for (auto key : {ui::VKEY_LEFT, ui::VKEY_RIGHT, ui::VKEY_ESCAPE, ui::VKEY_F, ui::VKEY_Q, ui::VKEY_HOME,
+    for (auto key : {ui::VKEY_LEFT, ui::VKEY_RIGHT, ui::VKEY_ESCAPE, ui::VKEY_HOME,
                     ui::VKEY_OEM_PLUS, ui::VKEY_ADD, ui::VKEY_OEM_MINUS, ui::VKEY_SUBTRACT, ui::VKEY_0})
       AddAccelerator(ui::Accelerator(key, ui::EF_NONE));
     AddAccelerator(ui::Accelerator(ui::VKEY_OEM_PLUS, ui::EF_SHIFT_DOWN));
@@ -258,17 +258,10 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
   views::View* focus_view() const { return canvas_; }
   void HandleEscape() {
     if (!GetWidget() || GetWidget()->IsClosed()) return;
-    if (GetWidget()->IsFullscreen()) { GetWidget()->SetFullscreen(false); return; }
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
         base::BindOnce([](base::WeakPtr<views::Widget> widget) {
           if (widget && !widget->IsClosed()) widget->Close();
         }, GetWidget()->GetWeakPtr()));
-  }
-  base::RepeatingCallback<bool()> EscapeCallback() {
-    return base::BindRepeating([](base::WeakPtr<ImageViewer> viewer) {
-      if (viewer) viewer->HandleEscape();
-      return false;
-    }, weak_.GetWeakPtr());
   }
   gfx::Size GetMinimumSize() const override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
@@ -395,12 +388,6 @@ bool ImageViewer::AcceleratorPressed(const ui::Accelerator& accelerator) {
     case ui::VKEY_HOME: case ui::VKEY_0: Fit(); break;
     case ui::VKEY_OEM_PLUS: case ui::VKEY_ADD: Zoom(1.2f); break;
     case ui::VKEY_OEM_MINUS: case ui::VKEY_SUBTRACT: Zoom(1.f / 1.2f); break;
-    case ui::VKEY_F:
-      if (GetWidget()) GetWidget()->SetFullscreen(!GetWidget()->IsFullscreen());
-      break;
-    case ui::VKEY_Q:
-      if (GetWidget() && GetWidget()->IsFullscreen()) GetWidget()->SetFullscreen(false);
-      break;
     case ui::VKEY_ESCAPE:
       HandleEscape();
       break;
@@ -436,13 +423,8 @@ void ShowCrFilesImageViewer(views::Widget* parent, std::vector<base::FilePath> p
   dialog->SetModalType(ui::mojom::ModalType::kWindow);
   dialog->set_draggable(true);
   dialog->SetCanResize(true); dialog->SetCanMaximize(true); dialog->SetShowCloseButton(true);
-  dialog->SetCanFullscreen(true);
   auto viewer = std::make_unique<ImageViewer>(std::move(paths), index);
   dialog->SetInitiallyFocusedView(viewer->focus_view());
-  // DialogClientView also owns an Esc accelerator; route both paths through
-  // the viewer so Escape exits fullscreen before it can close the dialog.
-  dialog->set_esc_should_cancel_dialog_override(true);
-  dialog->SetCancelCallbackWithClose(viewer->EscapeCallback());
   const auto parent_bounds = parent->GetWindowBoundsInScreen();
   const auto work_area = display::Screen::Get()->GetDisplayNearestWindow(parent->GetNativeWindow()).work_area();
   const gfx::Size size(std::min(work_area.width(), std::max(360,
