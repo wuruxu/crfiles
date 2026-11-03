@@ -400,4 +400,5 @@
   <translation id="3026848479191650761">允許將接收端的更新同步回建立端。</translation>
   <translation id="752612961231969308">允許在此資料夾中持續同步嗎？同步權限由建立端控制。你可以在「同步中」暫停或移除此關係。被取代及刪除的檔案會保留在復原資料夾中。</translation>
   <translation id="369053807563392520">選擇裝置以同步此檔案或資料夾。</translation>
+  <translation id="6406506848690869874">同步</translation>
 </translationbundle>

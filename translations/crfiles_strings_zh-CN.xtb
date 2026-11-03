@@ -400,4 +400,5 @@
   <translation id="3026848479191650761">允许将接收端的更新同步回创建端。</translation>
   <translation id="752612961231969308">允许在此文件夹中持续同步吗？同步权限由创建端控制。你可以在“同步中”暂停或解除此关系。被替换和删除的文件会保留在恢复文件夹中。</translation>
   <translation id="369053807563392520">选择设备以同步此文件或文件夹。</translation>
+  <translation id="6406506848690869874">同步</translation>
 </translationbundle>

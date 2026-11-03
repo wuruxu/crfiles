@@ -214,6 +214,7 @@ struct Relationship {
   std::string bookmark;
   int role = 0;
   bool confirmed = false;
+  bool removal_pending = false;
   uint64_t counter = 0;
   Index index;
   std::shared_ptr<Dirty> dirty = std::make_shared<Dirty>();
@@ -261,12 +262,12 @@ class SyncService::Impl {
     sqlite3_busy_timeout(db, 5000);
     {
       Statement version(db, "PRAGMA user_version");
-      if (version.Step() != SQLITE_ROW || (version.Column(0) != "0" && version.Column(0) != "1" && version.Column(0) != "2" && version.Column(0) != "3")) return false;
+      if (version.Step() != SQLITE_ROW || (version.Column(0) != "0" && version.Column(0) != "1" && version.Column(0) != "2" && version.Column(0) != "3" && version.Column(0) != "4")) return false;
     }
     if (!Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"
         "CREATE TABLE IF NOT EXISTS relations(id TEXT PRIMARY KEY,value TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS entries(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path));"
-        "CREATE TABLE IF NOT EXISTS pending(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path)); PRAGMA user_version=3;")) return false;
+        "CREATE TABLE IF NOT EXISTS pending(id TEXT,path TEXT,value TEXT NOT NULL,PRIMARY KEY(id,path)); PRAGMA user_version=4;")) return false;
     jobs.clear();
     Statement rows(db, "SELECT id,value FROM relations");
     int step;
@@ -286,6 +287,9 @@ class SyncService::Impl {
       r->view.fingerprint = *pin; r->view.peer = *name; r->identity = *identity; r->single = *single; r->bookmark = *bookmark;
       r->view.paused = value->FindBool("paused").value_or(true);
       r->view.removed = value->FindBool("removed").value_or(true);
+      if (value->contains("removal_pending") && !value->FindBool("removal_pending")) return false;
+      // Upgrade old tombstones too: their remote list entries may still exist.
+      r->removal_pending = r->view.removed && value->FindBool("removal_pending").value_or(true);
       r->confirmed = value->FindBool("confirmed").value_or(false);
       r->view.name = value->FindString("item_name") ? *value->FindString("item_name") :
           (r->single.empty() ? r->view.root.BaseName().AsUTF8Unsafe() : r->single);
@@ -329,6 +333,7 @@ class SyncService::Impl {
     value.Set("name", r.view.peer); value.Set("single", r.single); value.Set("identity", r.identity);
     value.Set("bookmark", r.bookmark); value.Set("role", r.role); value.Set("confirmed", r.confirmed);
     value.Set("paused", r.view.paused); value.Set("removed", r.view.removed);
+    value.Set("removal_pending", r.removal_pending);
     value.Set("counter", base::NumberToString(r.counter));
     value.Set("item_name", r.view.name); value.Set("avatar", r.view.avatar);
     value.Set("read", r.view.read); value.Set("write", r.view.write);
@@ -433,13 +438,21 @@ class SyncService::Impl {
       bool retry = false;
       for (auto& [id, r] : jobs) {
         if (command.kind == 3 ? r->view.fingerprint != command.fingerprint : id != command.id) continue;
+        if (command.kind == 5 && r->view.fingerprint != command.fingerprint) continue;
         const bool old_removed = r->view.removed;
-        if (command.kind == 4) {
+        if (command.kind == 6) {
+          if (r->role != 0 || r->view.removed || r->view.fingerprint != command.fingerprint) continue;
+          r->view.paused = false; r->view.read = true; r->view.write = command.write;
+          r->view.permissions_known = true;
+        } else if (command.kind == 4) {
           // UI disabling is not authorization: only the creator can edit policy.
           if (r->role != 0 || r->view.removed) continue;
           r->view.read = command.read; r->view.write = command.write; r->view.permissions_known = true;
         } else r->view.paused = command.kind == 1 ? command.paused : true;
-        r->view.removed = old_removed || command.kind == 2 || command.kind == 3;
+        r->view.removed = old_removed || command.kind == 2 || command.kind == 3 || command.kind == 5;
+        if (!old_removed && (command.kind == 2 || command.kind == 3)) r->removal_pending = true;
+        if (command.kind == 5) r->removal_pending = false;
+        if (r->view.removed) r->watcher.reset();
         if (!r->view.fingerprint.empty() && !Save(*r)) {
           // A failed durable write must never leave a requested pause/revoke
           // active in this process. Keep the command for a later storage retry.
@@ -458,6 +471,60 @@ class SyncService::Impl {
       return pair.second->view.removed && pair.second->view.fingerprint.empty();
     });
     Publish();
+  }
+  bool ReceiveRemoval(const std::string& id, const std::string& fingerprint) {
+    const auto it = jobs.find(id);
+    // An unknown ID has no files/relationship to remove. Acknowledge without
+    // creating records; unaffiliated peers cannot fill the database with IDs.
+    if (it == jobs.end()) return true;
+    auto& r = *it->second;
+    if (r.view.fingerprint != fingerprint) return false;
+    r.view.paused = true; r.view.removed = true; r.removal_pending = false;
+    r.watcher.reset(); r.next = {}; r.failures = 0;
+    const bool saved = Save(r);
+    r.view.status = saved ? IDS_CRFILES_SYNC_WAITING : IDS_CRFILES_SYNC_STORAGE_ERROR;
+    if (!saved) {
+      // Stop locally even on disk errors, retry the durable tombstone, and do
+      // not acknowledge the peer until it can be saved. No synced files are opened.
+      base::AutoLock lock(ui_lock);
+      if (std::ranges::none_of(commands, [&](const auto& command) { return command.kind == 5 && command.id == id; }))
+        commands.push_back({5, id, {}, fingerprint, {}});
+    }
+    Publish(); return saved;
+  }
+  bool RemovalAllowed(const std::string& id, const std::string& fingerprint, bool outgoing) {
+    if (!loaded || !IsSyncId(id) || fingerprint.size() != 64) return false;
+    const auto it = jobs.find(id);
+    if (it == jobs.end()) return !outgoing;
+    return it->second->view.fingerprint == fingerprint &&
+        (!outgoing || (it->second->view.removed && it->second->removal_pending));
+  }
+  bool RemoveOverWire(SyncWire& wire, bool outgoing, const std::string& id, const std::string& fingerprint) {
+    Poll();
+    if (!RemovalAllowed(id, fingerprint, outgoing) || wire.Canceled()) return false;
+    if (outgoing) {
+      auto& r = *jobs.at(id);
+      // A local removal must be durable before notifying another device.
+      if (!Save(r)) { r.view.status = IDS_CRFILES_SYNC_STORAGE_ERROR; Publish(); return false; }
+      auto request = Message("sync-remove"); request.Set("id", id);
+      if (!wire.Write(std::move(request))) return false;
+      const auto reply = wire.Read();
+      const auto* received_id = reply ? reply->FindString("id") : nullptr;
+      if (!Type(reply, "sync-removed") || !received_id || *received_id != id || wire.Canceled()) return false;
+      r.removal_pending = false;
+      if (!Save(r)) {
+        // Lost local acknowledgement state is safe: the peer handles retries.
+        r.removal_pending = true; r.view.status = IDS_CRFILES_SYNC_STORAGE_ERROR;
+        Publish(); return false;
+      }
+      r.view.status = IDS_CRFILES_SYNC_WAITING; r.failures = 0; Publish(); return true;
+    }
+    const auto request = wire.Read();
+    const auto* received_id = request ? request->FindString("id") : nullptr;
+    if (!Type(request, "sync-remove") || !received_id || *received_id != id || wire.Canceled() ||
+        !ReceiveRemoval(id, fingerprint)) return false;
+    auto reply = Message("sync-removed"); reply.Set("id", id);
+    return wire.Write(std::move(reply));
   }
   bool Interrupted(const std::string& id, SyncWire& wire) {
     if (wire.Canceled()) return true;
@@ -786,7 +853,12 @@ class SyncService::Impl {
       if (!wire.Write(std::move(open))) return false;
       const auto accepted = wire.Read();
       if (Type(accepted, "sync-declined")) {
-        relation->view.paused = true; Save(*relation); Publish(); return false;
+        relation->view.paused = true;
+        if (!Save(*relation)) {
+          relation->view.status = IDS_CRFILES_SYNC_STORAGE_ERROR;
+          base::AutoLock lock(ui_lock); commands.push_back({1, id, {}, {}, {}, true});
+        }
+        Publish(); return false;
       }
       if (!Type(accepted, "sync-accepted") || accepted->FindInt("permissions") != 2 ||
           accepted->FindBool("read") != relation->view.read ||
@@ -881,6 +953,16 @@ std::string SyncService::Queue(const base::FilePath& source, std::string fingerp
   LOG(INFO) << "[crFiles sync] queued id=" << id;
   return id;
 }
+bool SyncService::Retry(const std::string& id, const std::string& fingerprint, bool write) {
+  base::AutoLock lock(impl_->ui_lock);
+  if (impl_->commands.size() >= kMaxJobs || fingerprint.size() != 64) return false;
+  const auto job = std::ranges::find_if(impl_->snapshot, [&](const auto& value) {
+    return value.id == id && value.creator && !value.removed && value.fingerprint == fingerprint;
+  });
+  if (job == impl_->snapshot.end()) return false;
+  impl_->commands.push_back({6, id, {}, fingerprint, {}, false, 0, true, write});
+  return true;
+}
 void SyncService::Pause(std::string id, bool paused) {
   base::AutoLock lock(impl_->ui_lock); impl_->commands.push_back({1, std::move(id), {}, {}, {}, paused});
 }
@@ -904,11 +986,15 @@ std::optional<SyncRequest> SyncService::Next(const std::vector<SyncEndpoint>& pe
   if (!impl_->loaded) return std::nullopt;
   const auto now = base::TimeTicks::Now();
   for (auto& [id, r] : impl_->jobs) {
-    if (r->role != 0 || r->view.paused || r->view.removed || r->next > now || r->view.fingerprint.empty()) continue;
-    const auto peer = std::ranges::find(peers, r->view.fingerprint, &SyncEndpoint::fingerprint);
-    if (peer == peers.end()) { r->view.status = IDS_CRFILES_SYNC_WAITING; continue; }
+    const bool removal = r->view.removed && r->removal_pending;
+    if ((!removal && (r->role != 0 || r->view.paused || r->view.removed)) ||
+        r->next > now || r->view.fingerprint.empty()) continue;
+    const auto peer = std::ranges::find_if(peers, [&](const auto& endpoint) {
+      return endpoint.fingerprint == r->view.fingerprint && (!removal || endpoint.removal);
+    });
+    if (peer == peers.end()) { if (!r->view.removed) r->view.status = IDS_CRFILES_SYNC_WAITING; continue; }
     r->next = now + base::Seconds(30);
-    return SyncRequest{id, peer->address, peer->fingerprint};
+    return SyncRequest{id, peer->address, peer->fingerprint, removal};
   }
   impl_->Publish(); return std::nullopt;
 }
@@ -923,8 +1009,28 @@ bool SyncService::CanConnect(const std::string& id, const std::string& fingerpri
 bool SyncService::Revoked(const std::string& id, const std::string& fingerprint) {
   base::AutoLock lock(impl_->io_lock);
   auto it = impl_->jobs.find(id);
-  return impl_->loaded && it != impl_->jobs.end() && it->second->view.removed &&
-      it->second->view.fingerprint == fingerprint;
+  if (!impl_->loaded || it == impl_->jobs.end() || !it->second->view.removed ||
+      it->second->view.fingerprint != fingerprint) return false;
+  // A sync-revoked reply also tells the peer to remove its entry. Never send
+  // that reply for an in-memory tombstone whose durable save has failed.
+  if (!impl_->Save(*it->second)) {
+    it->second->view.status = IDS_CRFILES_SYNC_STORAGE_ERROR; impl_->Publish(); return false;
+  }
+  return true;
+}
+bool SyncService::CanRemove(const std::string& id, const std::string& fingerprint, bool outgoing) {
+  base::AutoLock lock(impl_->io_lock);
+  impl_->Poll();
+  return impl_->RemovalAllowed(id, fingerprint, outgoing);
+}
+bool SyncService::RemoteRemoved(const std::string& id, const std::string& fingerprint) {
+  base::AutoLock lock(impl_->io_lock);
+  impl_->Poll();
+  return impl_->RemovalAllowed(id, fingerprint, false) && impl_->ReceiveRemoval(id, fingerprint);
+}
+bool SyncService::RunRemoval(SyncWire& wire, bool outgoing, const std::string& id, const std::string& fingerprint) {
+  base::AutoLock lock(impl_->io_lock);
+  return impl_->RemoveOverWire(wire, outgoing, id, fingerprint);
 }
 bool SyncService::Authorized(const std::string& id, const std::string& fingerprint) {
   base::AutoLock lock(impl_->io_lock);
@@ -943,9 +1049,14 @@ void SyncService::Failed(const std::string& id) {
   base::AutoLock lock(impl_->io_lock);
   auto it = impl_->jobs.find(id);
   if (it == impl_->jobs.end()) return;
-  if (it->second->view.status != IDS_CRFILES_SYNC_RECOVERY_REQUIRED && it->second->view.status != IDS_CRFILES_SYNC_SOURCE_ERROR)
-    it->second->view.status = IDS_CRFILES_SYNC_RETRY;
-  it->second->next = std::max(it->second->next, base::TimeTicks::Now() + base::Seconds(30) +
+  if (it->second->view.status != IDS_CRFILES_SYNC_RECOVERY_REQUIRED && it->second->view.status != IDS_CRFILES_SYNC_SOURCE_ERROR &&
+      it->second->view.status != IDS_CRFILES_SYNC_STORAGE_ERROR) it->second->view.status = IDS_CRFILES_SYNC_RETRY;
+  int delay = 30;
+  if (it->second->view.removed && it->second->removal_pending) {
+    it->second->failures = std::min(it->second->failures + 1, 5);
+    delay = 10 * (1 << it->second->failures);
+  }
+  it->second->next = std::max(it->second->next, base::TimeTicks::Now() + base::Seconds(delay) +
       base::Milliseconds(base::RandIntInclusive(0, 1500)));
   impl_->Publish();
 }

@@ -54,12 +54,14 @@ struct SyncJob {
 struct SyncEndpoint {
   std::string address;
   std::string fingerprint;
+  bool removal = false;
 };
 
 struct SyncRequest {
   std::string id;
   std::string address;
   std::string fingerprint;
+  bool removal = false;
 };
 
 // The UI only queues commands and reads snapshots. The existing desktop worker
@@ -74,6 +76,8 @@ class SyncService {
   // Returns the queued request ID; registration and connection may still fail.
   std::string Queue(const base::FilePath& source, std::string fingerprint,
              std::string peer, int avatar, bool write);
+  // Retry the same relationship, preserving its original source and peer.
+  bool Retry(const std::string& id, const std::string& fingerprint, bool write);
   void Pause(std::string id, bool paused);
   void Permissions(std::string id, bool read, bool write);
   void Remove(std::string id);
@@ -85,6 +89,11 @@ class SyncService {
   std::optional<SyncRequest> Next(const std::vector<SyncEndpoint>& peers);
   bool CanConnect(const std::string& id, const std::string& fingerprint);
   bool Revoked(const std::string& id, const std::string& fingerprint);
+  // Removal-only authorization never grants access to files or ordinary sharing.
+  bool CanRemove(const std::string& id, const std::string& fingerprint, bool outgoing);
+  bool RemoteRemoved(const std::string& id, const std::string& fingerprint);
+  bool RunRemoval(SyncWire& wire, bool outgoing, const std::string& id,
+                  const std::string& fingerprint);
   bool Authorized(const std::string& id, const std::string& fingerprint);
   bool Run(SyncWire& wire, bool outgoing, const std::string& id,
            const std::string& fingerprint, const std::string& peer, int avatar,

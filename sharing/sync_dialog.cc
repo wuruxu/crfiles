@@ -28,6 +28,7 @@
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
@@ -88,7 +89,8 @@ class SyncView : public views::View {
     layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     update_from_remote_ = contents->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_SYNC_UPDATE_FROM_REMOTE)));
     update_from_remote_->SetChecked(false);
-    IconButton(contents.get(), base::BindRepeating(&SyncView::Confirm, weak_.GetWeakPtr(), peer), kCheckIcon, IDS_CRFILES_SYNC_TO);
+    contents->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&SyncView::Confirm, weak_.GetWeakPtr(), peer), Text(IDS_CRFILES_SYNC_START)));
     popup_delegate_ = std::make_unique<views::BubbleDialogDelegate>(
         anchors_.at(peer.verified_fingerprint), views::BubbleBorder::TOP_CENTER);
     popup_delegate_->SetTitle(l10n_util::GetStringFUTF16(IDS_CRFILES_SYNC_TO_DEVICE, base::UTF8ToUTF16(peer.name)));
@@ -116,24 +118,46 @@ class SyncView : public views::View {
           EnsureDirectoryAccess(view->GetWidget(), directory, true, base::BindOnce(
               [](base::WeakPtr<SyncView> view, NearbySharing::Peer peer, bool write, bool allowed) {
                 if (!view) return;
-                view->requesting_ = false; view->device_key_.clear();
-                if (!allowed) return;
-                view->request_id_ = view->service_->StartSync(peer, view->paths_[0], write);
-                view->queued_ = !view->request_id_.empty();
+                view->device_key_.clear();
+                if (!allowed) { view->requesting_ = false; return; }
+                std::string retry_id;
+                for (const auto& job : view->service_->sync_service()->Snapshot()) {
+                  if (job.id == view->request_id_ && job.creator && !job.removed &&
+                      job.fingerprint == peer.verified_fingerprint) retry_id = job.id;
+                }
+                const auto id = view->service_->StartSync(peer, view->paths_[0], write, retry_id);
+                view->queued_ = !id.empty();
                 view->status_->SetText(Text(view->queued_ ? IDS_CRFILES_SYNC_WAITING : IDS_CRFILES_SYNC_SOURCE_ERROR));
+                if (id.empty()) { view->requesting_ = false; return; }
+                view->request_id_ = id;
+                // Wait for command processing before inspecting the previous
+                // paused snapshot, otherwise a retry immediately unlocks again.
+                base::ThreadPool::PostTaskAndReply(FROM_HERE, {base::MayBlock()}, base::BindOnce(
+                    [](std::shared_ptr<SyncService> sync) { sync->Poll(); }, view->service_->sync_service()),
+                    base::BindOnce([](base::WeakPtr<SyncView> view) {
+                      if (!view) return;
+                      view->requesting_ = false; view->device_key_.clear(); view->Refresh();
+                    }, view));
               }, view, std::move(peer), write));
         }, weak_.GetWeakPtr(), std::move(peer), write));
   }
   void Refresh() {
     const auto state = service_->GetSnapshot();
     if (!request_id_.empty()) {
+      bool found = false;
       // Queue acceptance is not registration or delivery. Follow this exact
       // request so source/database/transport errors cannot look like waiting.
       for (const auto& job : service_->sync_service()->Snapshot()) {
         if (job.id == request_id_ || (job.id.empty() && job.status == IDS_CRFILES_SYNC_STORAGE_ERROR)) {
+          found = true;
           status_->SetText(Text(job.status ? job.status : IDS_CRFILES_SYNC_WAITING));
+          if (!requesting_ && (job.paused || job.removed || job.status == IDS_CRFILES_SYNC_RETRY ||
+              job.status == IDS_CRFILES_SYNC_SOURCE_ERROR || job.status == IDS_CRFILES_SYNC_STORAGE_ERROR)) queued_ = false;
           break;
         }
+      }
+      if (!found && !requesting_) {
+        queued_ = false; request_id_.clear(); status_->SetText({});
       }
     }
     if (!state.enabled) status_->SetText(Text(IDS_CRFILES_NEARBY_OFF));

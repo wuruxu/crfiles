@@ -400,4 +400,5 @@
   <translation id="3026848479191650761">Autoriser les mises à jour de l’appareil destinataire vers l’appareil créateur.</translation>
   <translation id="752612961231969308">Autoriser la synchronisation continue dans ce dossier ? L’appareil créateur contrôle les autorisations de synchronisation. Vous pouvez suspendre ou supprimer cette relation dans Synchronisations. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération.</translation>
   <translation id="369053807563392520">Choisissez un appareil pour synchroniser ce fichier ou dossier.</translation>
+  <translation id="6406506848690869874">Synchroniser</translation>
 </translationbundle>

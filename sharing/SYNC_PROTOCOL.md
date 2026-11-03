@@ -13,7 +13,7 @@ Select one regular file or directory, then choose **Sync to**, immediately below
 **Share to**. Only desktop peers advertising the sync extension through the
 identity probe are listed. Select a device avatar to open **Sync to <device>**.
 Leave **Update from remote** unchecked for A-to-B updates only, or check it
-for two-way synchronization, then confirm with the check icon. Compare pairing codes if needed and approve continuing access on the receiver.
+for two-way synchronization, then confirm with **Sync**. Compare pairing codes if needed and approve continuing access on the receiver.
 Normal trusted-send acceptance does not substitute for this initial sync consent.
 
 The receiver creates a fresh `Sync-<relationship-id>` directory under its configured
@@ -33,10 +33,14 @@ root; trailing icons pause/resume, open recovery
 files and remove the relationship. Device and status details are available in
 tooltips; errors also appear inline. Management remains available after a selected
 file is gone.
-Removing a relationship leaves files and recovery data on disk. The removed ID
-is retained as a revocation record; it cannot be silently reactivated by a peer.
-An authenticated retry against that ID receives `sync-revoked` in place of the
-normal pairing acknowledgement, which pauses the originating relationship.
+Removing a relationship on either device removes that device's Syncing entry and
+queues an authenticated removal notification to the other device. After receipt,
+the other entry disappears as well. Files and recovery data remain on both disks.
+Offline notifications survive restarts and retry when the pinned device is available.
+The removed ID remains a revocation record and cannot be silently reactivated.
+An authenticated data-sync retry against a durably removed ID receives `sync-revoked`
+in place of the normal pairing acknowledgement; the caller also removes its local
+entry and retains a tombstone instead of merely pausing.
 Declining initial consent pauses the originating request instead of repeatedly
 prompting. Canceling the initial transfer pauses that local relationship.
 
@@ -49,12 +53,18 @@ identity keys and legacy hello version remain unchanged. Discovery adds
 hello as well as the identity probe. Peers implementing only the original sync-v1
 or the previous per-device permissions extension are excluded and rejected. They
 must not interpret creator-controlled permissions as independent local grants. Normal Share
-compatibility is unchanged. Discovery and identity-probe records are routing/capability hints only.
+compatibility is unchanged. The independent `sync_removal: 1` capability in the
+identity frame and authenticated hello enables proactive removal notifications.
+A pending notification waits for that capability; normal data sync remains
+compatible with peers supporting creator-controlled permissions only. Both peers
+must update for automatic remote entry removal. Discovery and identity-probe
+records are routing/capability hints only.
 
 A sync initiator adds `sync: "<32 uppercase hexadecimal characters>"` to hello.
 The transfer certificate must match the peer fingerprint selected at registration
 and recorded in the relationship. A known paused, removed or mismatched
-relationship is rejected. Existing sync consent permits subsequent connections
+relationship rejects data sessions. A separate removal-only session may revoke
+an existing paused/removed relationship after matching its stored fingerprint. Existing sync consent permits subsequent connections
 for that relationship without another pairing prompt. It does not grant general
 Share access or authorize a different directory. Forgetting a trusted device
 also queues revocation of its sync relationships and cancels the active session.
@@ -71,7 +81,7 @@ Manual Share sends queued before scheduling a sync session take priority.
 ## State and change detection
 
 `nearby/sync/sync.sqlite3`, under the existing private crFiles identity location,
-stores schema version 3, relationship settings, per-path versions and a pending
+stores schema version 4, relationship settings, per-path versions and a pending
 filesystem journal. SQLite uses WAL and FULL synchronous commits. A separate
 filesystem lock excludes another process from using this sync store concurrently.
 UI commands are queued; database and protocol operations are serialized across
@@ -154,9 +164,47 @@ JSON `permissions: 2` marker distinguishes a saved creator-controlled policy fro
 legacy values. The role is retained and determines which endpoint owns the policy.
 Missing timestamps remain unknown until a successful sync; missing display names
 fall back to the stored single-file name or root basename. Both peers must upgrade.
-SQLite user_version is raised to 3 with existing tables retained. Versions 1/2
-upgrade on open; older apps reject version 3, preventing a downgrade from reverting
-to editable per-device grants.
+SQLite user_version is raised to 4 with existing tables retained. Versions 1–3
+upgrade on open; older apps reject version 4, preventing a downgrade from losing
+pending removal notifications or reverting to editable per-device grants.
+
+## Relationship removal
+
+Local removal first saves `removed=true`, `paused=true`, `removal_pending=true`
+in the relationship JSON. It stops watchers and removes the normal list entry.
+The scheduler handles pending removals from either role, independently of pause
+and data-sync permissions, using a current identity probe and the original
+certificate fingerprint. It never falls back to sending files. Connection failures
+retry with bounded exponential backoff and jitter; restarts preserve the pending
+flag. Old tombstones without that field are treated as pending notifications so
+previously stranded peer entries can also be cleared after upgrading.
+
+The connection adds `sync_remove: true` alongside the relationship ID in hello.
+Both authenticated hellos must advertise `sync_removal: 1`. This selects a dedicated
+worker branch before any ordinary sync messages, consent, root access, hashing,
+journal replay or file transfer. Known relationships must match the saved identity,
+including after device trust was forgotten. The removal exception never adds a
+trusted device or authorizes ordinary Share/data-sync access. The handshake does
+not prompt for pairing again and uses a short acknowledgement timeout.
+
+1. The removing device durably saves its tombstone before sending
+   `sync-remove {id}`. Either A or B may initiate this control session.
+2. The peer matches the frame ID to the authenticated hello, sets the matching
+   relationship to removed/paused, stops its watcher, clears its notification flag
+   and saves the tombstone. Only then does it send `sync-removed {id}`.
+3. The initiator validates the acknowledgement ID and saves
+   `removal_pending=false`. If that save fails, it retains the pending flag and
+   retries. Repeated notifications and simultaneous removals are idempotent.
+
+An unknown ID is acknowledged as a no-op without creating database entries or
+filesystem objects. A known ID with a different fingerprint is rejected. Removing
+an old ID cannot affect a newly created relationship for the same filename.
+A failed tombstone write stops local synchronization, exposes the storage error,
+queues a durable-write retry, and withholds acknowledgement. `sync-revoked` replies
+on ordinary data sessions also require a durable tombstone before being sent.
+No removal path deletes user files, recovery archives or the retained revocation ID.
+Disabling nearby sharing or quitting the app postpones delivery until it is running
+and sharing is enabled again; no system background daemon is introduced.
 
 ## Session messages
 
@@ -170,6 +218,13 @@ is inserted into a raw byte stream.
    until A durably records acceptance. B either looks up the existing authorized
    relationship or obtains initial consent for a fresh root. B saves registration
    before responding `sync-accepted`. Initial rejection returns `sync-declined`.
+   A sync pairing rejection can also return `sync-declined` instead of `paired`.
+   Rejection keeps the channel open only to send the negative reply; it never
+   permits file I/O. A pauses the relationship durably and the Sync to dialog
+   re-enables device selection. Retrying the same device reuses the ID and original
+   source, applies the selected permission and requests consent again. Removed
+   relationships cannot be resumed. Failed pause writes remain paused in memory
+   and retry persistence; transient transport failures retain automatic retry.
 2. Each side opens/pins its root, replays its journal and obtains a current index.
    For two-way access A sends its index, then B sends its index; for one-way
    access the source sends first and the receiver returns receipts. `sync-index` contains `entries`
@@ -287,7 +342,7 @@ Use `autoninja` for any subsequently authorized build. No unit-test source was a
 2. Pair two devices, reject initial sync consent, and check that the sender pauses.
    Resume and accept; verify the exact destination and that unrelated files remain.
 3. Verify both dialogs, device avatars, the unchecked Update from remote checkbox,
-   the check button, localized dates and the titlebar menu ordering. Sync a file,
+   the **Sync** button, localized dates and the titlebar menu ordering. Sync a file,
    nested folders, empty files and empty directories. With the checkbox off,
    verify updates flow A-to-B only and both lists show Read checked, Write unchecked.
    B's checkboxes must be disabled. With it on, verify two-way convergence and both
@@ -308,9 +363,16 @@ Use `autoninja` for any subsequently authorized build. No unit-test source was a
    error with preserved data, never an unchecked overwrite.
 8. Edit an original while a large incoming file is staging. Check that the local
    edit is retained or creates a conflict, including editor atomic-save patterns.
-9. Pause/remove from either side, revoke device trust, disable nearby sharing, and
-   restart. Verify stopped/revoked relationships cannot silently resume. Check that
-   disk errors during saving controls are visible and stop local synchronization.
+9. Remove on A with B online: both list entries must disappear and both files and
+   recovery archives must remain. Repeat from B, with the peer paused, with a missing
+   root, and with both devices removing simultaneously. Remove while the peer is
+   offline, restart both apps, reconnect and verify delivery. Lose the acknowledgement
+   and repeat the notification; verify idempotence. Create a new relationship for the
+   same filename before the old removal arrives; the new ID must remain untouched.
+   Exercise mismatched fingerprints/IDs, unknown IDs, old peers lacking sync_removal,
+   forgotten device trust and disk errors before each durable save. Failed saves
+   must not acknowledge removal or restart data sync; pending notifications must
+   resume after recovery. Verify normal Share and ongoing nonremoved sync still work.
 10. Exercise missing drives, replaced roots, permission failures, full disks,
     links/junctions, canonical/case collisions, Unicode names and overlapping roots.
     Register `~/001.txt` while the database is under the same home directory and
@@ -319,3 +381,11 @@ Use `autoninja` for any subsequently authorized build. No unit-test source was a
     registration updates the originating Sync to dialog rather than waiting forever.
     A scan failure must not propagate mass deletions. Verify macOS sandbox access
     prompts and persistent access after restart, and Windows locked-file behavior.
+
+11. Keep the Sync to dialog open, reject the request on B, and verify A pauses
+    without automatic consent prompts. Click the avatar again, change Update from
+    remote, and press Sync. Verify the same ID is reused, B is prompted again, and
+    approval starts copying with the newly selected permission. Repeat rejection
+    at pairing and folder consent, with trusted/untrusted peers, and with a fast
+    response before the next UI refresh. Verify normal Share rejection still cancels
+    immediately and removing a paused relation cannot be undone by a queued retry.

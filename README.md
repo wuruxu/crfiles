@@ -1230,7 +1230,10 @@ Right-click one file or folder and choose **Sync to**, immediately below **Share
 Select another crFiles device by its avatar. The popup has one checkbox,
 **Update from remote**, unchecked by default. Leave it off for updates from the
 creating device A to receiver B, or check it for two-way synchronization. Confirm
-with the check icon and approve continuing access on the receiver.
+with **Sync** and approve continuing access on the receiver.
+If the receiver rejects the request, the relationship pauses and the avatar becomes
+clickable again. Select it and press **Sync** to retry the same relationship with
+the newly selected permission; the receiver must approve again.
 The first copy goes into a fresh directory under its configured receive location.
 Subsequent changes follow the creator's permissions while both applications
 are running. Two-way conflicts are preserved as separate files, and replaced
@@ -1242,8 +1245,11 @@ start/last-sync times, the selected name and **Read**/**Write** permissions. Bot
 ends show A's grants to B: Read allows A-to-B updates; Write allows B-to-A updates.
 Only A can change them. B's checkboxes are disabled and update from A on connection.
 The avatar opens the local root; trailing icons on either end pause/resume, open
-recovery files and remove a relationship without deleting files. Both peers
-must support the creator-controlled permissions extension. The first version supports one-to-one
+recovery files and remove a relationship without deleting files. Removing a
+relationship also removes the peer's list entry after an authenticated notification;
+offline notifications persist and retry after reconnection. Actual files and recovery
+data remain on both devices. Both peers must support the creator-controlled permissions
+extension, plus `sync_removal` for proactive removal notifications. The first version supports one-to-one
 desktop relationships, whole-file updates, directory watching and periodic reconciliation.
 See [sync-v1 protocol, recovery and acceptance steps](sharing/SYNC_PROTOCOL.md) for
 limits, conflict behavior, restart recovery, and the checks still requiring a build

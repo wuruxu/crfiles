@@ -419,6 +419,7 @@
       <message name="IDS_CRFILES_TAG_DELETE" desc="Custom file tag context menu and deletion.">Delete Tag</message>
       <message name="IDS_CRFILES_TAG_DELETE_ERROR" desc="Custom file tag context menu and deletion.">Tags could not be deleted.</message>
       <message name="IDS_CRFILES_TAG_DELETE_CONFIRM" desc="Confirmation before deleting tags; selected virtual tag paths are listed below.">Delete the tags listed below and remove them from all associated files and folders? The files and folders themselves will be kept.</message>
+      <message name="IDS_CRFILES_SYNC_START" desc="Button that starts or retries sync with the selected device.">Sync</message>
       <message name="IDS_CRFILES_SYNC_TO" desc="Two-way file synchronization interface.">Sync to</message>
       <message name="IDS_CRFILES_SYNC_SELECT_ONE" desc="Two-way file synchronization interface.">Select one file or folder to start a new sync.</message>
       <message name="IDS_CRFILES_SYNC_RELATIONSHIPS" desc="Two-way file synchronization interface.">Sync relationships</message>

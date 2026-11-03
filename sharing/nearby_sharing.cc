@@ -106,6 +106,7 @@ struct NearbySharing::State {
     std::string target_id;
     std::string sync_id = {};
     std::string sync_fingerprint = {};
+    bool sync_remove = false;
   };
   mutable base::Lock lock;
   Snapshot snapshot;
@@ -121,6 +122,7 @@ struct NearbySharing::State {
     bool folder_transfer = false;
     std::vector<SharedTarget> targets = {};
     bool sync_v1 = false;
+    bool sync_removal = false;
   };
   std::map<std::string, IdentityResult> identities;
   std::shared_ptr<NearbySharing::TrustStore> trust;
@@ -130,6 +132,7 @@ struct NearbySharing::State {
   std::shared_ptr<SyncService> sync;
   std::string sync_id;
   std::string sync_fingerprint;
+  bool sync_remove = false;
   base::FilePath receive_root;
   bool peer_sync = false;
   std::string outgoing_target;
@@ -805,7 +808,9 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
   hello.Set("folder_transfer", true);
   hello.Set("sync_v1", true);
   hello.Set("sync_permissions", 2);
+  hello.Set("sync_removal", 1);
   if (!state->sync_id.empty()) hello.Set("sync", state->sync_id);
+  if (state->sync_remove) hello.Set("sync_remove", true);
   hello.Set("targets", SharedTargetsJson(state));
   hello.Set("name", state->name);
   hello.Set("avatar", state->avatar);
@@ -845,12 +850,24 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
       state->sync_id = *sync_id;
     }
   } else if (!state->sync_id.empty() && (!state->peer_sync || fingerprint != state->sync_fingerprint)) return false;
-  if (!state->sync_id.empty() && !state->sync->CanConnect(state->sync_id, fingerprint)) {
+  const bool peer_removal = peer->FindInt("sync_removal") == 1;
+  if (state->snapshot.receiving) {
+    const auto remove = peer->FindBool("sync_remove");
+    if (peer->contains("sync_remove") && (!remove || state->sync_id.empty() || !peer_removal)) return false;
+    state->sync_remove = remove.value_or(false);
+  }
+  if (state->sync_remove) {
+    failure.reason = "sync_removal_not_authorized";
+    if (!peer_removal || !state->sync->CanRemove(state->sync_id, fingerprint, !state->snapshot.receiving)) return false;
+  } else if (!state->sync_id.empty() && !state->sync->CanConnect(state->sync_id, fingerprint)) {
     if (state->snapshot.receiving && state->sync->Revoked(state->sync_id, fingerprint))
       channel.SendJson(Message("sync-revoked"));
     return false;
   }
-  const bool sync_authorized = !state->sync_id.empty() && state->sync->Authorized(state->sync_id, fingerprint);
+  // This exception is scoped to the removal-only worker branch. It cannot
+  // authorize file transfer, initial consent, or adding a trusted device.
+  const bool sync_authorized = state->sync_remove ||
+      (!state->sync_id.empty() && state->sync->Authorized(state->sync_id, fingerprint));
   {
     base::AutoLock lock(state->lock);
     if (state->snapshot.receiving) {
@@ -875,17 +892,30 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
   }
   failure.reason = "local_pairing_not_approved_or_disconnected";
   if (!trusted && !sync_authorized &&
-      !AwaitDecision(channel, state, generation, Stage::kPairing)) return false;
+      !AwaitDecision(channel, state, generation, Stage::kPairing)) {
+    if (!state->sync_id.empty() && !state->sync_remove) {
+      channel.SendJson(Message("sync-declined"), false, base::Seconds(2));
+      state->sync->Pause(state->sync_id, true);
+      state->sync->Poll();
+    }
+    return false;
+  }
   failure.reason = "paired_send_failed";
   if (!channel.SendJson(Message("paired"))) return false;
   SetStage(state, Stage::kWaiting);
   failure.reason = "peer_pairing_not_confirmed";
-  const auto paired = channel.ReadJson(base::Seconds(130));
+  const auto paired = channel.ReadJson(state->sync_remove ? base::Seconds(15) : base::Seconds(130));
   if (!state->sync_id.empty() && IsMessage(paired, "sync-revoked")) {
+    state->sync->RemoteRemoved(state->sync_id, fingerprint);
+    return false;
+  }
+  if (!state->sync_id.empty() && !state->sync_remove && IsMessage(paired, "sync-declined")) {
     state->sync->Pause(state->sync_id, true);
+    state->sync->Poll();
     return false;
   }
   if (!IsMessage(paired, "paired") || IsCanceled(*state, generation)) return false;
+  if (state->sync_remove) return true;
   bool remember;
   {
     base::AutoLock lock(state->lock);
@@ -1978,6 +2008,7 @@ void ServeIdentities(std::shared_ptr<State> state, ScopedSocket listener,
     identity.Set("folder_transfer", true);
     identity.Set("sync_v1", true);
     identity.Set("sync_permissions", 2);
+    identity.Set("sync_removal", 1);
     if (!channel.SendJson(std::move(identity))) continue;
     // Legacy probes read only the small identity frame and close the channel.
     auto targets = Message("targets"); targets.Set("targets", SharedTargetsJson(state));
@@ -2059,6 +2090,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
     bool identity_mismatch = false;
     bool folder_transfer = false;
     bool sync_v1 = false;
+    bool sync_removal = false;
     std::vector<NearbySharing::SharedTarget> targets;
     if (fd.is_valid()) {
       Channel channel(std::move(fd), context.get(), false, state, generation, true);
@@ -2084,6 +2116,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
           fingerprint = channel.PeerFingerprint();
           folder_transfer = identity->FindBool("folder_transfer").value_or(false);
           sync_v1 = identity->FindBool("sync_v1").value_or(false) && identity->FindInt("sync_permissions") == 2;
+          sync_removal = sync_v1 && identity->FindInt("sync_removal") == 1;
           if (folder_transfer) {
             const auto catalog = channel.ReadJson(base::Seconds(2));
             if (IsMessage(catalog, "targets")) targets = ParseTargets(*catalog);
@@ -2106,7 +2139,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
         } else {
           const auto expires = fingerprint.empty() ? now : now + base::Seconds(60);
           cached = {std::move(fingerprint), expires,
-                    now + base::Seconds(20), folder_transfer, std::move(targets), sync_v1};
+                    now + base::Seconds(20), folder_transfer, std::move(targets), sync_v1, sync_removal};
         }
       }
     }
@@ -2289,7 +2322,7 @@ void Run(std::shared_ptr<State> state) {
           auto proof = state->identities.find(IdentityKey(peer));
           if (proof != state->identities.end() && proof->second.sync_v1 &&
               proof->second.expires > base::TimeTicks::Now())
-            endpoints.push_back({peer.address, proof->second.fingerprint});
+            endpoints.push_back({peer.address, proof->second.fingerprint, proof->second.sync_removal});
         }
       }
       auto request = state->sync->Next(endpoints);
@@ -2298,7 +2331,7 @@ void Run(std::shared_ptr<State> state) {
         // Manual sends queued during a database scan take priority.
         if (!state->outgoing && !state->stop) {
           outgoing = State::Outgoing{request->address, {}, state->cancel.load(), {}, std::nullopt, {},
-                                     request->id, request->fingerprint};
+                                     request->id, request->fingerprint, request->removal};
           state->snapshot.session = ++g_session;
           state->snapshot.started_at = base::TimeTicks::Now();
           state->snapshot.finished_at = {};
@@ -2379,6 +2412,7 @@ void Run(std::shared_ptr<State> state) {
       state->snapshot.receive_directory = state->receive_root;
       state->snapshot.receiving = !outgoing;
       state->sync_id = outgoing ? outgoing->sync_id : std::string();
+      state->sync_remove = outgoing && outgoing->sync_remove;
       state->sync_fingerprint = outgoing ? outgoing->sync_fingerprint : std::string();
       state->snapshot.syncing = !state->sync_id.empty();
       state->snapshot.sync_background = state->snapshot.syncing;
@@ -2428,14 +2462,22 @@ void Run(std::shared_ptr<State> state) {
             std::string peer_name; int peer_avatar;
             { base::AutoLock lock(state->lock); receive_directory = state->snapshot.receive_directory;
               peer_name = state->snapshot.peer_name; peer_avatar = state->snapshot.peer_avatar; }
-            ok = state->sync->Run(wire, outgoing.has_value(), state->sync_id,
-                state->peer_fingerprint, peer_name, peer_avatar, receive_directory);
+            if (state->sync_remove) {
+              failure.phase = "sync_removal";
+              failure.reason = "sync_removal_not_acknowledged";
+              ok = state->sync->RunRemoval(wire, outgoing.has_value(), state->sync_id, state->peer_fingerprint);
+            } else {
+              ok = state->sync->Run(wire, outgoing.has_value(), state->sync_id,
+                  state->peer_fingerprint, peer_name, peer_avatar, receive_directory);
+            }
             failure.message_id = IDS_CRFILES_SYNC_RETRY;
           } else {
             ok = outgoing ? SendFiles(channel, std::move(*files), state, generation, failure)
                           : ReceiveFiles(channel, state, generation, failure);
           }
-          if (!ok && failure.notify_peer && !failure.peer_reported &&
+          bool declined;
+          { base::AutoLock lock(state->lock); declined = state->snapshot.syncing && state->decision < 0; }
+          if (!ok && !declined && failure.notify_peer && !failure.peer_reported &&
               !IsCanceled(*state, generation)) {
             auto error = Message("error");
             error.Set("reason", failure.reason);
@@ -2448,7 +2490,7 @@ void Run(std::shared_ptr<State> state) {
     if (!ok && !state->sync_id.empty()) state->sync->Failed(state->sync_id);
     base::AutoLock lock(state->lock);
     state->snapshot.stage = state->stop ? Stage::kOff : ok ? Stage::kComplete :
-        IsCanceled(*state, generation) ? Stage::kCanceled : Stage::kError;
+        (IsCanceled(*state, generation) || (state->snapshot.syncing && state->decision < 0)) ? Stage::kCanceled : Stage::kError;
     state->snapshot.status_message_id = state->snapshot.stage == Stage::kError ?
         failure.message_id : 0;
     state->snapshot.busy = false;
@@ -2674,7 +2716,8 @@ void NearbySharing::CancelSync(const std::string& id) {
   base::AutoLock lock(state_->lock);
   if (state_->snapshot.busy && state_->snapshot.syncing && state_->sync_id == id) ++state_->cancel;
 }
-std::string NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write) {
+std::string NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write,
+                                    const std::string& retry_id) {
   if (!sync_) return {};
   const auto snapshot = GetSnapshot();
   if (!snapshot.enabled || !peer.sync_v1 || peer.phone) return {};
@@ -2683,6 +2726,11 @@ std::string NearbySharing::StartSync(const Peer& peer, const base::FilePath& sou
         value.verified_fingerprint == peer.verified_fingerprint;
   });
   if (current == snapshot.peers.end()) return {};
+  if (!retry_id.empty()) {
+    if (!sync_->Retry(retry_id, current->verified_fingerprint, write)) return {};
+    CancelSync(retry_id);
+    return retry_id;
+  }
   return sync_->Queue(source, current->verified_fingerprint, current->name, current->avatar, write);
 }
 
@@ -2751,7 +2799,10 @@ void NearbySharing::Decide(uint64_t session, Stage prompt, bool accept, bool tru
         conflict_id == state_->snapshot.conflict_id))) {
     state_->decision = accept ? 1 : -1;
     if (prompt == Stage::kPairing) state_->trust_requested = accept && trust;
-    if (!accept) ++state_->cancel;
+    // Sync must deliver its negative acknowledgement before closing the channel.
+    // AwaitDecision still returns false, so rejecting never authorizes file I/O.
+    if (!accept && !(state_->snapshot.syncing &&
+        (prompt == Stage::kPairing || prompt == Stage::kReceivingOffer))) ++state_->cancel;
   }
 }
 void NearbySharing::Cancel() { ++state_->cancel; }
