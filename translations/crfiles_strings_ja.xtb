@@ -17,7 +17,7 @@
   <translation id="18184745306897069">デバイス名（UTF-8 で最大 64 バイト）と受信フォルダの絶対パスを入力してください。設定を保存できる必要があります。</translation>
   <translation id="4573310231718438740">アクセスが拒否または取り消されました。スマートフォンの権限を確認し、必要に応じて再度ペア設定してください。</translation>
   <translation id="8394920281168265545">スマートフォンの証明書が一致しません。認証情報は送信されませんでした。</translation>
-  <translation id="4367709536909201158">タブと crPhotos 互換の近隣共有に対応したファイルマネージャー。</translation>
+  <translation id="5870292518687487910">タブと Android の Quick Share に対応したファイルマネージャー。</translation>
   <translation id="5787420647064736989">デバイス名</translation>
   <translation id="7425986746526961766">近隣共有を無効にする</translation>
   <translation id="4759238208242260848">ダウンロード</translation>
@@ -401,4 +401,20 @@
   <translation id="752612961231969308">このフォルダの継続的な同期を許可しますか？同期の権限は作成元のデバイスが管理します。「同期中」でこの関係を一時停止または削除できます。置き換えられたファイルや削除されたファイルは復元フォルダに保存されます。</translation>
   <translation id="369053807563392520">このファイルまたはフォルダを同期するデバイスを選択してください。</translation>
   <translation id="6406506848690869874">同期</translation>
+  <translation id="4635264759968989553">この場所は既存の同期と重複しています。既存の同期関係を確認してください。</translation>
+  <translation id="8717853395357624361">同期フォルダを準備できません。フォルダへのアクセス権、空き容量、他のアプリで使用されていないかを確認してください。</translation>
+  <translation id="112353091401681759">このデバイスは現在同期に利用できません。再表示されたら選択してください。</translation>
+  <translation id="9024022335183653196">同期リクエストを開始できませんでした。既存の同期関係を確認して、もう一度お試しください。</translation>
+  <translation id="5036404633067063740">同期関係または保留中のリクエストの上限に達しました。</translation>
+  <translation id="1139054157857398343">パスを左にスクロール</translation>
+  <translation id="9082767689988059179">パスを右にスクロール</translation>
+  <translation id="3195890836285742116">画像プレビュー</translation>
+  <translation id="8343272671728642074">画像を読み込み中…</translation>
+  <translation id="7941243322888784931">前の画像</translation>
+  <translation id="6165094457612892917">次の画像</translation>
+  <translation id="8903921497873541725">拡大</translation>
+  <translation id="5975083100439434680">縮小</translation>
+  <translation id="8003143398148180105">ウィンドウに合わせる</translation>
+  <translation id="529022811275906337">システムアプリで開く</translation>
+  <translation id="605298658602194245">プレビュー画質です。元の解像度で表示するにはシステムアプリで開いてください。</translation>
 </translationbundle>

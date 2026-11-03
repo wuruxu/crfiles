@@ -11,7 +11,7 @@
   <translation id="18184745306897069">Introduzca un nombre (hasta 64 bytes UTF-8) y una ruta absoluta de recepción. Debe poder guardar los ajustes.</translation>
   <translation id="4573310231718438740">Acceso denegado o revocado. Revisa los permisos del teléfono y vuelve a vincularlo si es necesario.</translation>
   <translation id="8394920281168265545">El certificado del teléfono no coincide. No se enviaron credenciales.</translation>
-  <translation id="4367709536909201158">Un gestor de archivos con pestañas y uso compartido cercano compatible con crPhotos.</translation>
+  <translation id="5870292518687487910">Un administrador de archivos con pestañas compatible con Quick Share en Android.</translation>
   <translation id="5787420647064736989">Nombre del dispositivo</translation>
   <translation id="7425986746526961766">Desactivar el uso compartido cercano</translation>
   <translation id="4759238208242260848">Descargas</translation>
@@ -401,4 +401,20 @@
   <translation id="752612961231969308">¿Permitir la sincronización continua en esta carpeta? El dispositivo creador controla los permisos de sincronización. Puedes pausar o eliminar esta relación en Sincronizaciones. Los archivos reemplazados y eliminados se conservan en la carpeta de recuperación.</translation>
   <translation id="369053807563392520">Elige un dispositivo para sincronizar este archivo o carpeta.</translation>
   <translation id="6406506848690869874">Sincronizar</translation>
+  <translation id="4635264759968989553">Esta ubicación se superpone con una sincronización existente. Revisa las relaciones de sincronización existentes.</translation>
+  <translation id="8717853395357624361">No se puede preparar la carpeta de sincronización. Revisa los permisos de acceso, el espacio disponible y si otra aplicación la está usando.</translation>
+  <translation id="112353091401681759">Este dispositivo ya no está disponible para sincronizar. Vuelve a seleccionarlo cuando aparezca.</translation>
+  <translation id="9024022335183653196">No se pudo iniciar esta solicitud de sincronización. Revisa las relaciones de sincronización existentes y vuelve a intentarlo.</translation>
+  <translation id="5036404633067063740">Se alcanzó el límite de relaciones de sincronización o solicitudes pendientes.</translation>
+  <translation id="1139054157857398343">Desplazar la ruta a la izquierda</translation>
+  <translation id="9082767689988059179">Desplazar la ruta a la derecha</translation>
+  <translation id="3195890836285742116">Vista previa de imagen</translation>
+  <translation id="8343272671728642074">Cargando imagen…</translation>
+  <translation id="7941243322888784931">Imagen anterior</translation>
+  <translation id="6165094457612892917">Imagen siguiente</translation>
+  <translation id="8903921497873541725">Acercar</translation>
+  <translation id="5975083100439434680">Alejar</translation>
+  <translation id="8003143398148180105">Ajustar a la ventana</translation>
+  <translation id="529022811275906337">Abrir en la aplicación del sistema</translation>
+  <translation id="605298658602194245">Calidad de vista previa. Abre la imagen en la aplicación del sistema para verla a resolución completa.</translation>
 </translationbundle>

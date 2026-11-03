@@ -90,6 +90,7 @@
 #include "crFiles/crfiles_app_icon.h"
 #include "crFiles/crfiles_file_icons.h"
 #include "crFiles/crfiles_image_preview.h"
+#include "crFiles/crfiles_image_viewer.h"
 #include "crFiles/crfiles_heic_thumbnail.h"
 #include "crFiles/crfiles_text_thumbnail.h"
 #include "crFiles/crfiles_video_thumbnail.h"
@@ -116,6 +117,9 @@
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_targeter.h"
 #include "ui/views/animation/animation_delegate_views.h"
+#include "ui/views/controls/button/button_controller.h"
+#include "ui/views/controls/button/image_button.h"
+#include "ui/views/repeat_controller.h"
 #include "ui/views/view_targeter_delegate.h"
 #include "ui/views/rect_based_targeting_utils.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -2396,25 +2400,76 @@ gfx::ImageSkia ThumbnailImage(const gfx::ImageSkia& image, int edge) {
   return gfx::ImageSkiaOperations::CreateResizedImage(
       image, skia::ImageOperations::RESIZE_BEST, size);
 }
-class NavigationScrollView : public views::ScrollView {
+class NavigationScrollView : public views::ScrollView, public views::AnimationDelegateViews {
   METADATA_HEADER(NavigationScrollView, views::ScrollView)
  public:
   explicit NavigationScrollView(base::RepeatingClosure edit)
-      : views::ScrollView(ScrollWithLayers::kEnabled), handler_(this, std::move(edit)) {
+      : views::ScrollView(ScrollWithLayers::kEnabled), views::AnimationDelegateViews(this), handler_(std::move(edit)) {
+    SetUseContentsPreferredSize(true);
+    SetBackgroundColor(std::nullopt);
+    SetVerticalScrollBarMode(ScrollBarMode::kDisabled);
+    SetHorizontalScrollBarMode(ScrollBarMode::kHiddenButEnabled);
+    SetTreatAllScrollEventsAsHorizontal(true);
     AddPreTargetHandler(&handler_);
+    scroll_subscription_ = AddContentsScrolledCallback(base::BindRepeating(
+        &NavigationScrollView::ExternalScroll, base::Unretained(this)));
   }
-  ~NavigationScrollView() override { RemovePreTargetHandler(&handler_); }
+  ~NavigationScrollView() override { StopScrolling(); RemovePreTargetHandler(&handler_); }
+  float MaxOffset() const {
+    return contents() ? static_cast<float>(std::max(0, contents()->width() - GetVisibleRect().width())) : 0.f;
+  }
+  void StopScrolling() { animation_.Stop(); }
+  void ScrollPage(int direction) {
+    if (!contents() || !IsDrawn()) return;
+    const float current = CurrentOffset().x();
+    const float previous_target = animation_.is_animating() && (target_ - current) * direction > 0 ? target_ : current;
+    const float step = std::max(32.f, GetVisibleRect().width() * 0.7f);
+    StopScrolling();
+    start_ = current;
+    target_ = std::clamp(previous_target + direction * step, 0.f, MaxOffset());
+    if (target_ == current) return;
+    if (!gfx::Animation::ShouldRenderRichAnimation() ||
+        !gfx::Animation::ScrollAnimationsEnabledBySystem() || gfx::Animation::PrefersReducedMotion()) {
+      ApplyOffset(target_); return;
+    }
+    animation_.Start();
+  }
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override {
+    StopScrolling();
+    return views::ScrollView::OnMouseWheel(event);
+  }
+  void OnScrollEvent(ui::ScrollEvent* event) override {
+    StopScrolling();
+    views::ScrollView::OnScrollEvent(event);
+  }
  private:
+  void ApplyOffset(float offset) {
+    last_offset_ = gfx::PointF(std::clamp(offset, 0.f, MaxOffset()), 0);
+    applying_ = true;
+    ScrollToOffset(last_offset_);
+    applying_ = false;
+  }
+  void ExternalScroll() {
+    // Keyboard focus and native/compositor scrolling take priority over arrows.
+    if (!applying_ && CurrentOffset() != last_offset_) StopScrolling();
+  }
+  void AnimationProgressed(const gfx::Animation*) override {
+    if (!contents() || !IsDrawn()) { StopScrolling(); return; }
+    target_ = std::clamp(target_, 0.f, MaxOffset());
+    const double t = animation_.GetCurrentValue();
+    ApplyOffset(start_ + (target_ - start_) * static_cast<float>(1 - std::pow(1 - t, 3)));
+  }
+  void AnimationEnded(const gfx::Animation*) override { if (contents()) ApplyOffset(target_); }
   class DoubleClickHandler : public ui::EventHandler {
    public:
-    DoubleClickHandler(views::View* owner, base::RepeatingClosure edit)
-        : owner_(owner), edit_(std::move(edit)) {}
+    explicit DoubleClickHandler(base::RepeatingClosure edit) : edit_(std::move(edit)) {}
     void OnMouseEvent(ui::MouseEvent* event) override {
       if (event->type() != ui::EventType::kMousePressed || !event->IsOnlyLeftMouseButton()) return;
-      auto point = event->location();
-      views::View::ConvertPointToTarget(static_cast<views::View*>(event->target()), owner_, &point);
+      const auto point = event->root_location();
       // Navigation may rebuild the clicked segment. Track clicks on the stable
       // path bar instead of relying on the identity of that temporary button.
+      // Root coordinates also survive arrows appearing/disappearing after the
+      // first click changes the path and shifts the scroll viewport.
       const bool double_click = !last_press_.is_null() &&
           event->time_stamp() - last_press_ <= views::GetDoubleClickInterval() &&
           std::abs(point.x() - last_point_.x()) <= 4 && std::abs(point.y() - last_point_.y()) <= 4;
@@ -2428,14 +2483,144 @@ class NavigationScrollView : public views::ScrollView {
       }
     }
    private:
-    raw_ptr<views::View> owner_;
     base::TimeTicks last_press_;
     gfx::Point last_point_;
     base::RepeatingClosure edit_;
   };
   DoubleClickHandler handler_;
+  float start_ = 0, target_ = 0;
+  bool applying_ = false;
+  gfx::PointF last_offset_;
+  gfx::LinearAnimation animation_{base::Milliseconds(160), gfx::LinearAnimation::kDefaultFrameRate, this};
+  base::CallbackListSubscription scroll_subscription_;
 };
 BEGIN_METADATA(NavigationScrollView)
+END_METADATA
+class NavigationScrollButton : public views::ImageButton {
+  METADATA_HEADER(NavigationScrollButton, views::ImageButton)
+ public:
+  NavigationScrollButton(base::RepeatingClosure scroll, const gfx::VectorIcon& icon, int label)
+      : views::ImageButton(scroll), scroll_(std::move(scroll)),
+        repeater_(base::BindRepeating(&NavigationScrollButton::Repeat, base::Unretained(this))) {
+    button_controller()->set_notify_action(views::ButtonController::NotifyAction::kOnPress);
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    SetFlipCanvasOnPaintForRTLUI(false);
+    SetTooltipText(Text(label)); SetAccessibleName(Text(label));
+    SetImageHorizontalAlignment(ALIGN_CENTER); SetImageVerticalAlignment(ALIGN_MIDDLE);
+    for (auto state : {STATE_NORMAL, STATE_HOVERED, STATE_PRESSED, STATE_DISABLED})
+      SetImageModel(state, ui::ImageModel::FromVectorIcon(icon, ui::kColorSysOnSurface, 16));
+    SetPreferredSize(gfx::Size(24, 28));
+    SetPaintToLayer(); layer()->SetFillsBoundsOpaquely(false);
+    layer()->SetOpacity(0.f);
+    SetAvailable(false);
+  }
+  void SetAvailable(bool available) {
+    SetEnabled(available);
+    SetFocusBehavior(available ? FocusBehavior::ALWAYS : FocusBehavior::NEVER);
+    SetCanProcessEventsWithinSubtree(available);
+    GetViewAccessibility().SetIsIgnored(!available);
+    if (!available) repeater_.Stop();
+    const float opacity = available ? 1.f : 0.f;
+    if (layer()->GetTargetOpacity() == opacity) return;
+    if (!IsDrawn() || !gfx::Animation::ShouldRenderRichAnimation() || gfx::Animation::PrefersReducedMotion()) {
+      layer()->GetAnimator()->AbortAllAnimations();
+      layer()->SetOpacity(opacity);
+      return;
+    }
+    // Keep the button's layout slot while fading, so the path does not shift.
+    ui::ScopedLayerAnimationSettings animation(layer()->GetAnimator());
+    animation.SetTransitionDuration(base::Milliseconds(160));
+    animation.SetTweenType(gfx::Tween::EASE_OUT);
+    animation.SetPreemptionStrategy(ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
+    layer()->SetOpacity(opacity);
+  }
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    const bool handled = views::ImageButton::OnMousePressed(event);
+    if (handled && event.IsOnlyLeftMouseButton() && GetEnabled()) repeater_.Start();
+    return handled;
+  }
+  void OnMouseReleased(const ui::MouseEvent& event) override {
+    repeater_.Stop(); views::ImageButton::OnMouseReleased(event);
+  }
+  void OnMouseCaptureLost() override {
+    repeater_.Stop(); views::ImageButton::OnMouseCaptureLost();
+  }
+ private:
+  void Repeat() {
+    if (!IsDrawn() || !GetEnabled() || GetState() != STATE_PRESSED) { repeater_.Stop(); return; }
+    scroll_.Run();
+  }
+  base::RepeatingClosure scroll_;
+  views::RepeatController repeater_;
+};
+BEGIN_METADATA(NavigationScrollButton)
+END_METADATA
+class NavigationPathView : public views::View {
+  METADATA_HEADER(NavigationPathView, views::View)
+ public:
+  explicit NavigationPathView(base::RepeatingClosure edit) {
+    scroll_ = AddChildView(std::make_unique<NavigationScrollView>(std::move(edit)));
+    left_ = AddChildView(std::make_unique<NavigationScrollButton>(
+        base::BindRepeating(&NavigationPathView::Scroll, base::Unretained(this), -1),
+        kKeyboardArrowLeftIcon, IDS_CRFILES_SCROLL_PATH_LEFT));
+    right_ = AddChildView(std::make_unique<NavigationScrollButton>(
+        base::BindRepeating(&NavigationPathView::Scroll, base::Unretained(this), 1),
+        kKeyboardArrowRightIcon, IDS_CRFILES_SCROLL_PATH_RIGHT));
+    left_->SetVisible(false); right_->SetVisible(false);
+    scroll_subscription_ = scroll_->AddContentsScrolledCallback(base::BindRepeating(
+        &NavigationPathView::UpdateButtons, base::Unretained(this)));
+  }
+  views::View* contents() const { return scroll_->contents(); }
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override { return scroll_->OnMouseWheel(event); }
+  void OnScrollEvent(ui::ScrollEvent* event) override { scroll_->OnScrollEvent(event); }
+  void SetContents(std::unique_ptr<views::View> contents) {
+    scroll_->StopScrolling();
+    scroll_->SetContents(std::move(contents));
+    reveal_current_ = true;
+    InvalidateLayout();
+  }
+  void Layout(PassKey) override {
+    if (!scroll_synchronizer_) scroll_synchronizer_ = scroll_->EnableScrollSynchronization();
+    const bool overflow = contents() && contents()->GetPreferredSize({}).width() > width();
+    const int edge = overflow ? std::min(24, std::max(0, width() / 3)) : 0;
+    left_->SetVisible(overflow); right_->SetVisible(overflow);
+    // Child bounds are mirrored by Views under RTL; keep physical arrow sides.
+    left_->SetBounds(base::i18n::IsRTL() ? width() - edge : 0, 0, edge, height());
+    right_->SetBounds(base::i18n::IsRTL() ? 0 : width() - edge, 0, edge, height());
+    scroll_->SetBounds(edge, 0, std::max(0, width() - 2 * edge), height());
+    LayoutSuperclass<views::View>(this);
+    scroll_->DeprecatedLayoutImmediately();
+    if (contents()) contents()->DeprecatedLayoutImmediately();
+    if (contents()) {
+      const float offset = std::clamp(scroll_->CurrentOffset().x(), 0.f, scroll_->MaxOffset());
+      if (offset != scroll_->CurrentOffset().x()) {
+        scroll_->StopScrolling();
+        scroll_->ScrollToOffset(gfx::PointF(offset, 0));
+      }
+    }
+    if (reveal_current_ && contents() && !contents()->children().empty() &&
+        scroll_->GetVisibleRect().width() > 0) {
+      reveal_current_ = false;
+      auto* current = contents()->children().back().get();
+      current->ScrollRectToVisible(current->GetLocalBounds());
+    }
+    UpdateButtons();
+  }
+ private:
+  void Scroll(int direction) { scroll_->ScrollPage(base::i18n::IsRTL() ? -direction : direction); }
+  void UpdateButtons() {
+    const float offset = scroll_->CurrentOffset().x(), max_offset = scroll_->MaxOffset();
+    const bool before = offset > 0.5f, after = offset < max_offset - 0.5f;
+    left_->SetAvailable(base::i18n::IsRTL() ? after : before);
+    right_->SetAvailable(base::i18n::IsRTL() ? before : after);
+  }
+  raw_ptr<NavigationScrollView> scroll_ = nullptr;
+  raw_ptr<NavigationScrollButton> left_ = nullptr, right_ = nullptr;
+  bool reveal_current_ = false;
+  std::unique_ptr<views::ScrollView::ScopedScrollSynchronizer> scroll_synchronizer_;
+  base::CallbackListSubscription scroll_subscription_;
+};
+BEGIN_METADATA(NavigationPathView)
 END_METADATA
 class BreadcrumbDivider : public views::View {
   METADATA_HEADER(BreadcrumbDivider, views::View)
@@ -4916,13 +5101,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     path_area->SetLayoutManager(std::make_unique<views::FillLayout>());
     path_area->SetPreferredSize(gfx::Size(240, 32));
     tools->SetFlexForView(path_area, 1);
-    crumbs_scroll_ = path_area->AddChildView(std::make_unique<NavigationScrollView>(
+    crumbs_scroll_ = path_area->AddChildView(std::make_unique<NavigationPathView>(
         Deferred(base::BindRepeating(&FilesView::EditAddress, weak_.GetWeakPtr()))));
-    crumbs_scroll_->SetUseContentsPreferredSize(true);
-    crumbs_scroll_->SetBackgroundColor(std::nullopt);
     crumbs_scroll_->SetPaintToLayer();
     crumbs_scroll_->layer()->SetFillsBoundsOpaquely(false);
-    crumbs_scroll_->SetVerticalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
     address_ = path_area->AddChildView(std::make_unique<PathTextfield>(
         Deferred(base::BindRepeating(&FilesView::EndAddressEditing, weak_.GetWeakPtr()))));
     address_->SetAccessibleName(Text(IDS_CRFILES_LOCATION));
@@ -5184,6 +5366,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
              ui::Accelerator(ui::VKEY_TAB, ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN),
              ui::Accelerator(ui::VKEY_LEFT, ui::EF_ALT_DOWN),
              ui::Accelerator(ui::VKEY_RIGHT, ui::EF_ALT_DOWN),
+             ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE),
              ui::Accelerator(ui::VKEY_F5, ui::EF_NONE),
              ui::Accelerator(ui::VKEY_F11, ui::EF_NONE)}) AddAccelerator(accelerator);
 #if BUILDFLAG(IS_MAC)
@@ -5806,10 +5989,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
         Deferred(base::BindRepeating(&FilesView::CloseActivePaneOrTab,
                                      weak_.GetWeakPtr())).Run();
         break;
-      case ui::VKEY_L: ToggleSidebar(); break;
+      case ui::VKEY_L: EditAddress(); break;
       case ui::VKEY_TAB: SelectTab(tabs_[(active_ + tabs_.size() + (a.IsShiftDown() ? -1 : 1)) % tabs_.size()].id); break;
       case ui::VKEY_LEFT: History(-1); break;
       case ui::VKEY_RIGHT: History(1); break;
+      case ui::VKEY_ESCAPE:
+        if (!GetWidget() || !GetWidget()->IsFullscreen()) return false;
+        ExitFullscreen();
+        break;
       case ui::VKEY_F5: Refresh(); break;
       case ui::VKEY_F11: GetWidget()->SetFullscreen(!GetWidget()->IsFullscreen()); break;
       default: return false;
@@ -8621,7 +8808,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void EndAddressEditing() { TransitionPath(false); }
   void EditAddress() {
-    if (ActivePane()->tag_id_ >= 0) return;
+    if (!toolbar_ || !toolbar_->GetVisible() || ActivePane()->tag_id_ >= 0) return;
     if (!address_editing_) {
       address_->SetInvalid(false);
       address_->SetText(NavigationPath(ActivePane()->Current().path));
@@ -10214,6 +10401,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
 #endif
     if (directory) { Navigate(path); return; }
+    const auto found = std::ranges::find(Current().entries, path, &Entry::path);
+    if (IsImageViewerFile(path, found == Current().entries.end() ? std::string_view() : found->mime)) {
+      std::vector<base::FilePath> images;
+      for (const auto index : displayed_entries_) {
+        const auto& entry = Current().entries[index];
+        if (!entry.directory && !Current().removed.contains(entry.path) && entry.path.DirName() == path.DirName() &&
+            IsImageViewerFile(entry.path, entry.mime)) images.push_back(entry.path);
+      }
+      ShowCrFilesImageViewer(GetWidget(), std::move(images), path);
+      return;
+    }
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives()}, base::BindOnce([](base::FilePath file) {
       FileOperationLog log("open_file", "menu", file.AsUTF8Unsafe(), "");
 #if BUILDFLAG(IS_WIN)
@@ -10583,7 +10781,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::unique_ptr<views::BubbleDialogDelegate> options_delegate_;
   std::unique_ptr<views::Widget> options_widget_;
   std::optional<NavigationStyle> rendered_navigation_style_;
-  raw_ptr<NavigationScrollView> crumbs_scroll_ = nullptr;
+  raw_ptr<NavigationPathView> crumbs_scroll_ = nullptr;
   raw_ptr<views::ScrollView> files_ = nullptr;
   raw_ptr<views::Textfield> address_ = nullptr;
   std::unique_ptr<PathCompletion> address_completion_;

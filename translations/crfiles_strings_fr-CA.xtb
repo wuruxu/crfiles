@@ -11,7 +11,7 @@
   <translation id="18184745306897069">Saisissez un nom d’appareil (64 octets UTF-8 maximum) et un chemin absolu de réception. Les paramètres doivent être accessibles en écriture.</translation>
   <translation id="4573310231718438740">Accès refusé ou révoqué. Vérifiez les autorisations du téléphone et associez-le à nouveau si nécessaire.</translation>
   <translation id="8394920281168265545">Le certificat du téléphone ne correspond pas. Aucun identifiant n’a été envoyé.</translation>
-  <translation id="4367709536909201158">Un gestionnaire de fichiers à onglets avec partage à proximité compatible avec crPhotos.</translation>
+  <translation id="5870292518687487910">Un gestionnaire de fichiers à onglets prenant en charge Quick Share sur Android.</translation>
   <translation id="5787420647064736989">Nom de l’appareil</translation>
   <translation id="7425986746526961766">Désactiver le partage à proximité</translation>
   <translation id="4759238208242260848">Téléchargements</translation>
@@ -401,4 +401,20 @@
   <translation id="752612961231969308">Autoriser la synchronisation continue dans ce dossier ? L’appareil créateur contrôle les autorisations de synchronisation. Vous pouvez suspendre ou supprimer cette relation dans Synchronisations. Les fichiers remplacés et supprimés sont conservés dans le dossier de récupération.</translation>
   <translation id="369053807563392520">Choisissez un appareil pour synchroniser ce fichier ou dossier.</translation>
   <translation id="6406506848690869874">Synchroniser</translation>
+  <translation id="4635264759968989553">Cet emplacement chevauche une synchronisation existante. Vérifiez les relations de synchronisation existantes.</translation>
+  <translation id="8717853395357624361">Impossible de préparer le dossier de synchronisation. Vérifiez les droits d’accès au dossier, l’espace disponible et si une autre application l’utilise.</translation>
+  <translation id="112353091401681759">Cet appareil n’est plus disponible pour la synchronisation. Sélectionnez-le à nouveau lorsqu’il réapparaît.</translation>
+  <translation id="9024022335183653196">Impossible de lancer cette demande de synchronisation. Vérifiez les relations de synchronisation existantes et réessayez.</translation>
+  <translation id="5036404633067063740">La limite de relations de synchronisation ou de demandes en attente a été atteinte.</translation>
+  <translation id="1139054157857398343">Faire défiler le chemin vers la gauche</translation>
+  <translation id="9082767689988059179">Faire défiler le chemin vers la droite</translation>
+  <translation id="3195890836285742116">Aperçu de l’image</translation>
+  <translation id="8343272671728642074">Chargement de l’image…</translation>
+  <translation id="7941243322888784931">Image précédente</translation>
+  <translation id="6165094457612892917">Image suivante</translation>
+  <translation id="8903921497873541725">Zoom avant</translation>
+  <translation id="5975083100439434680">Zoom arrière</translation>
+  <translation id="8003143398148180105">Adapter à la fenêtre</translation>
+  <translation id="529022811275906337">Ouvrir dans l’application système</translation>
+  <translation id="605298658602194245">Qualité d’aperçu. Ouvrez l’image dans l’application système pour la voir en pleine résolution.</translation>
 </translationbundle>

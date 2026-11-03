@@ -229,7 +229,12 @@ bool OpenFileWith(const base::FilePath& path, const std::string& application) {
   FileOperationLog log("open_file", "menu", path.AsUTF8Unsafe(), application);
   bool ok = false;
 #if BUILDFLAG(IS_LINUX)
-  if (auto* app = g_desktop_app_info_new(application.c_str())) {
+  if (application.empty()) {
+    GFile* file = g_file_new_for_path(path.value().c_str());
+    char* uri = g_file_get_uri(file);
+    ok = uri && g_app_info_launch_default_for_uri(uri, nullptr, nullptr);
+    g_free(uri); g_object_unref(file);
+  } else if (auto* app = g_desktop_app_info_new(application.c_str())) {
     GFile* file = g_file_new_for_path(path.value().c_str());
     GList* files = g_list_append(nullptr, file);
     ok = g_app_info_launch(G_APP_INFO(app), files, nullptr, nullptr);

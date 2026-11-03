@@ -55,6 +55,9 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -69,6 +72,7 @@
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
@@ -251,7 +255,8 @@ class CountdownCloseButton : public views::MdTextButton {
 BEGIN_METADATA(CountdownCloseButton)
 END_METADATA
 
-class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObserver {
+class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObserver,
+                              public ui::SelectFileDialog::Listener {
  public:
   ShareSessionToastImpl(views::Widget* owner, std::shared_ptr<ShareService> service,
                         base::RepeatingCallback<ShareBubbleAnchor(const NearbySharing::Snapshot&)> anchor)
@@ -296,6 +301,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     Close();
   }
   void Close() {
+    if (folder_dialog_) { folder_dialog_->ListenerDestroyed(); folder_dialog_.reset(); }
+    receive_path_ = nullptr; receive_error_ = nullptr; choose_receive_folder_ = nullptr;
     anchor_observation_.Reset();
     parent_widget_.reset();
     accept_ = nullptr; reject_ = nullptr; trust_ = nullptr;
@@ -314,21 +321,60 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     label->SetMaximumWidth(336); return label;
   }
   void Decide(bool accept) {
-    if (decided_ || base::TimeTicks::Now() < ready_) return;
+    if (decided_ || folder_dialog_ || base::TimeTicks::Now() < ready_) return;
     decided_ = true;
+    if (choose_receive_folder_) choose_receive_folder_->SetEnabled(false);
     if (accept && (stage_ == NearbySharing::Stage::kReceivingOffer ||
         (service_->IsQuickShare() && stage_ == NearbySharing::Stage::kPairing && displayed_state_ && displayed_state_->receiving)))
       accepted_session_ = session_;
     if (accept && displayed_state_ && displayed_state_->syncing &&
         stage_ == NearbySharing::Stage::kReceivingOffer) {
-      EnsureDirectoryAccess(owner_.get(), displayed_state_->receive_directory, true,
+      EnsureDirectoryAccess(owner_.get(), displayed_state_->receive_directory.DirName(), true,
           base::BindOnce([](std::shared_ptr<ShareService> service, uint64_t session,
-                           NearbySharing::Stage stage, bool allowed) {
-            service->Decide(session, stage, allowed);
-          }, service_, session_, stage_));
+                           NearbySharing::Stage stage, uint64_t prompt, bool allowed) {
+            service->Decide(session, stage, allowed, false, prompt);
+          }, service_, session_, stage_, conflict_id_));
     } else service_->Decide(session_, stage_, accept, trust_ && trust_->GetChecked(), conflict_id_);
     if (accept_) accept_->SetEnabled(false);
     if (reject_) reject_->SetEnabled(false);
+  }
+  void ChooseReceiveFolder() {
+    if (decided_ || folder_dialog_ || !owner_ || !widget_ || widget_->IsClosed()) return;
+    const auto state = service_->GetSnapshot();
+    if (state.session != session_ || !state.busy || !state.receiving || !state.syncing ||
+        state.stage != NearbySharing::Stage::kReceivingOffer) return;
+    folder_session_ = state.session;
+    folder_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+    if (accept_) accept_->SetEnabled(false);
+    if (reject_) reject_->SetEnabled(false);
+    if (choose_receive_folder_) choose_receive_folder_->SetEnabled(false);
+    // The picker belongs to the consent bubble, not the main window. Parenting
+    // it to the main window can activate that window above the independent bubble.
+    folder_dialog_->SelectFile(ui::SelectFileDialog::SELECT_FOLDER, Text(IDS_CRFILES_RECEIVE_DIRECTORY),
+        state.receive_directory.DirName(), nullptr, 0, {}, widget_->GetNativeWindow(), nullptr);
+  }
+  void FileSelected(const ui::SelectedFileInfo& file, int) override {
+    folder_dialog_.reset();
+    if (service_->SetSyncReceiveDirectory(folder_session_, file.path())) RememberFileAccess(file.path());
+    RestoreAfterFolderPicker();
+  }
+  void FileSelectionCanceled() override {
+    folder_dialog_.reset();
+    RestoreAfterFolderPicker();
+  }
+  void RestoreAfterFolderPicker() {
+    // Allow native picker teardown to finish before refreshing/reparenting its
+    // owner. A withdrawn request must not be revived by this delayed callback.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce([](base::WeakPtr<ShareSessionToastImpl> self, uint64_t session) {
+          if (!self || self->folder_dialog_) return;
+          self->stacking_dirty_ = true;
+          self->Refresh();
+          if (self->widget_ && !self->widget_->IsClosed() && self->session_ == session &&
+              self->stage_ == NearbySharing::Stage::kReceivingOffer &&
+              !self->transfer_view_ && !self->decided_)
+            self->widget_->Activate();
+        }, weak_.GetWeakPtr(), folder_session_));
   }
   void CancelOrClose() {
     const auto state = service_->GetSnapshot();
@@ -508,7 +554,23 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
           u"   ·   " + Text(IDS_CRFILES_FOLDERS) + u": " + base::NumberToString16(folders));
       Label(summary, Text(IDS_CRFILES_TOTAL_SIZE) + u": " + ui::FormatBytes(base::ByteSize(state.total)));
       Label(contents.get(), Text(state.syncing ? IDS_CRFILES_SYNC_CONSENT : IDS_CRFILES_RECEIVE_PROMPT));
-      if (state.syncing) Label(contents.get(), state.receive_directory.AsUTF16Unsafe());
+      if (state.syncing) {
+        if (state.warning_message_id) receive_error_ = Label(contents.get(), Text(state.warning_message_id));
+        auto* destination = contents->AddChildView(std::make_unique<views::View>());
+        auto* destination_layout = destination->SetLayoutManager(std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+        destination_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+        receive_path_ = Label(destination, state.receive_directory.AsUTF16Unsafe());
+        receive_path_->SetMultiLine(false);
+        receive_path_->SetElideBehavior(gfx::ELIDE_MIDDLE);
+        receive_path_->SetTooltipText(state.receive_directory.AsUTF16Unsafe());
+        destination_layout->SetFlexForView(receive_path_, 1);
+        choose_receive_folder_ = destination->AddChildView(views::ImageButton::CreateIconButton(
+            base::BindRepeating(&ShareSessionToastImpl::ChooseReceiveFolder, weak_.GetWeakPtr()),
+            vector_icons::kFolderFilledIcon, Text(IDS_CRFILES_RECEIVE_DIRECTORY)));
+        destination->SetPreferredSize(gfx::Size(336, std::max(receive_path_->GetPreferredSize({}).height(),
+            choose_receive_folder_->GetPreferredSize({}).height())));
+      }
     }
     auto* actions = contents->AddChildView(std::make_unique<views::View>());
     actions->SetVisible(!code_notice);
@@ -591,6 +653,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     Position(anchor);
   }
   void Position(const ShareBubbleAnchor& anchor) {
+    if (folder_dialog_) return;
     if (!widget_ || !delegate_) return;
     const auto desired_parent = UseParentWindow(anchor) ? (anchor.widget ? anchor.widget : owner_) :
         base::WeakPtr<views::Widget>();
@@ -630,6 +693,11 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     const auto state = service_->GetSnapshot();
     if (state.syncing && state.sync_background) { Close(); return; }
     using Stage = NearbySharing::Stage;
+    // Outgoing sync progress belongs to the device avatar in Sync to. Pairing
+    // still requires an explicit decision; receiver consent remains unchanged.
+    if (state.syncing && !state.receiving && !(state.busy && state.stage == Stage::kPairing)) {
+      Close(); return;
+    }
     if (!state.discovery_resume_at.is_null() &&
         base::TimeTicks::Now() >= state.discovery_resume_at) {
       dismissed_session_ = state.session;
@@ -642,6 +710,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       Close();
       return;
     }
+    if (state.syncing && state.receiving && state.stage == Stage::kReceivingOffer &&
+        state.conflict_id != conflict_id_) accepted_session_ = 0;
     const bool terminal = state.stage == Stage::kComplete || state.stage == Stage::kSent || state.stage == Stage::kCanceled || state.stage == Stage::kError;
     const bool conflict = state.busy && state.stage == Stage::kReceivingConflict;
     const bool transfer = !conflict && state.session && state.session != dismissed_session_ &&
@@ -672,6 +742,16 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     } else if (prompt) {
       if (!widget_ || transfer_view_ || session_ != state.session || stage_ != state.stage ||
           conflict_id_ != state.conflict_id) Show(state);
+      displayed_state_ = state;
+      if (receive_error_ && receive_error_->GetVisible() && !state.warning_message_id) {
+        receive_error_->SetVisible(false);
+        if (delegate_) delegate_->SizeToContents();
+      }
+      if (receive_path_ && receive_path_->GetText() != state.receive_directory.AsUTF16Unsafe()) {
+        receive_path_->SetText(state.receive_directory.AsUTF16Unsafe());
+        receive_path_->SetTooltipText(state.receive_directory.AsUTF16Unsafe());
+        if (delegate_) delegate_->SizeToContents();
+      }
     } else {
       // Preserve results across discovery snapshot changes. Successful
       // transfers retain their independent auto-close deadline.
@@ -685,7 +765,8 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
       return;
     }
     Position(anchor_.Run(state));
-    if (!decided_ && base::TimeTicks::Now() >= ready_) {
+    if (choose_receive_folder_) choose_receive_folder_->SetEnabled(!decided_ && !folder_dialog_);
+    if (!decided_ && !folder_dialog_ && base::TimeTicks::Now() >= ready_) {
       if (accept_) accept_->SetEnabled(true);
       if (reject_) reject_->SetEnabled(true);
     }
@@ -704,6 +785,11 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
   std::unique_ptr<views::BubbleDialogDelegate> delegate_;
   std::unique_ptr<views::Widget> widget_;
   std::optional<NearbySharing::Snapshot> displayed_state_;
+  scoped_refptr<ui::SelectFileDialog> folder_dialog_;
+  uint64_t folder_session_ = 0;
+  raw_ptr<views::Label> receive_path_ = nullptr;
+  raw_ptr<views::Label> receive_error_ = nullptr;
+  raw_ptr<views::ImageButton> choose_receive_folder_ = nullptr;
   raw_ptr<views::Checkbox> trust_ = nullptr;
   raw_ptr<views::MdTextButton> accept_ = nullptr, reject_ = nullptr;
   raw_ptr<CountdownCloseButton> cancel_ = nullptr;
@@ -1499,6 +1585,11 @@ ui::ImageModel FileShareDeviceAvatar(int avatar, int edge) { return Avatar(avata
 std::unique_ptr<views::View> CreateFileShareDeviceButton(base::RepeatingClosure callback,
     int avatar, const std::u16string& name) {
   return std::make_unique<DeviceButton>(std::move(callback), Avatar(avatar), name);
+}
+void SetFileShareDeviceTransfer(views::View* button, bool active, bool indeterminate,
+    double progress, base::RepeatingClosure cancel, std::u16string detail) {
+  if (auto* device = views::AsViewClass<DeviceButton>(button))
+    device->SetTransfer(active, indeterminate, progress, std::move(cancel), std::move(detail));
 }
 
 views::View* ShowSharingFoldersDialog(views::Widget* parent,

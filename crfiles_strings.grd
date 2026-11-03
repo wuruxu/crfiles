@@ -56,6 +56,8 @@
       <message name="IDS_CRFILES_TRAY_SEND" desc="System tray menu item to choose files for sending.">Send files…</message>
       <message name="IDS_CRFILES_ACCEPT" desc="crFiles file manager interface.">Accept</message>
       <message name="IDS_CRFILES_BACK" desc="crFiles file manager interface.">Back</message>
+      <message name="IDS_CRFILES_SCROLL_PATH_LEFT" desc="Tooltip and accessible name for the left scroll arrow in the breadcrumb path bar.">Scroll path left</message>
+      <message name="IDS_CRFILES_SCROLL_PATH_RIGHT" desc="Tooltip and accessible name for the right scroll arrow in the breadcrumb path bar.">Scroll path right</message>
       <message name="IDS_CRFILES_CANCEL" desc="crFiles file manager interface.">Cancel</message>
       <message name="IDS_CRFILES_CANCELED" desc="crFiles file manager interface.">Transfer canceled</message>
       <message name="IDS_CRFILES_CLOSE" desc="crFiles file manager interface.">Close</message>
@@ -64,7 +66,7 @@
       <message name="IDS_CRFILES_CONFIG_ERROR" desc="crFiles file manager interface.">Enter a device name (up to 64 UTF-8 bytes) and an absolute receive folder. Settings must be writable.</message>
       <message name="IDS_CRFILES_CONNECT_AUTH_ERROR" desc="crFiles file manager interface.">Access was denied or revoked. Check phone permissions and pair again if needed.</message>
       <message name="IDS_CRFILES_CONNECT_CERT_ERROR" desc="crFiles file manager interface.">The phone certificate does not match. No credentials were sent.</message>
-      <message name="IDS_CRFILES_DESCRIPTION" desc="crFiles file manager interface.">A tabbed file manager with crPhotos-compatible nearby sharing.</message>
+      <message name="IDS_CRFILES_DESCRIPTION" desc="crFiles file manager interface.">A tabbed file manager with support for Quick Share on Android.</message>
       <message name="IDS_CRFILES_DEVICE_NAME" desc="crFiles file manager interface.">Device name</message>
       <message name="IDS_CRFILES_DISABLE" desc="crFiles file manager interface.">Disable nearby sharing</message>
       <message name="IDS_CRFILES_DOWNLOADS" desc="crFiles file manager interface.">Downloads</message>
@@ -103,6 +105,15 @@
       <message name="IDS_CRFILES_NEW_TAB" desc="crFiles file manager interface.">New tab</message>
       <message name="IDS_CRFILES_OPEN" desc="crFiles file manager interface.">Open</message>
       <message name="IDS_CRFILES_OPEN_ERROR" desc="crFiles file manager interface.">Unable to open this file.</message>
+      <message name="IDS_CRFILES_IMAGE_VIEWER" desc="Accessible name for the built-in static image preview.">Image preview</message>
+      <message name="IDS_CRFILES_IMAGE_LOADING" desc="Status while loading an image preview.">Loading image…</message>
+      <message name="IDS_CRFILES_IMAGE_PREVIOUS" desc="Image viewer toolbar and accessibility.">Previous image</message>
+      <message name="IDS_CRFILES_IMAGE_NEXT" desc="Image viewer toolbar and accessibility.">Next image</message>
+      <message name="IDS_CRFILES_IMAGE_ZOOM_IN" desc="Image viewer toolbar and accessibility.">Zoom in</message>
+      <message name="IDS_CRFILES_IMAGE_ZOOM_OUT" desc="Image viewer toolbar and accessibility.">Zoom out</message>
+      <message name="IDS_CRFILES_IMAGE_FIT" desc="Fit the image preview inside the window.">Fit to window</message>
+      <message name="IDS_CRFILES_IMAGE_OPEN_SYSTEM" desc="Open the selected image with the operating system's default application.">Open in system app</message>
+      <message name="IDS_CRFILES_IMAGE_PREVIEW_HINT" desc="The viewer displays a scaled static preview rather than full-resolution or animated content.">Preview quality. Open in the system app for full-resolution viewing.</message>
       <message name="IDS_CRFILES_PHONE_SEND_ERROR" desc="crFiles file manager interface.">Could not finish sending. Check the connection, available phone storage and selected media (1–128 files, up to 16 GB each and 64 GB total). Completed files are kept.</message>
       <message name="IDS_CRFILES_PHONE_SEND_PAIR" desc="crFiles file manager interface.">Pair this phone in Connect first, then send again.</message>
       <message name="IDS_CRFILES_PHONE_SEND_PREPARING" desc="crFiles file manager interface.">Preparing photos and videos…</message>
@@ -450,6 +461,11 @@
       <message name="IDS_CRFILES_SYNC_WRITE_HINT" desc="Sync permissions controlled by the device that created the relationship.">Allow updates from the receiving device back to the creating device.</message>
       <message name="IDS_CRFILES_SYNC_CONSENT" desc="Sync permissions controlled by the device that created the relationship.">Allow ongoing sync in this folder? The creating device controls sync permissions. You can pause or remove this relationship in Syncing. Replaced and deleted files are kept in the recovery folder.</message>
       <message name="IDS_CRFILES_SYNC_HINT" desc="Sync permissions controlled by the device that created the relationship.">Choose a device to sync this file or folder.</message>
+      <message name="IDS_CRFILES_SYNC_OVERLAP_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">This location overlaps an existing sync. Check existing sync relationships.</message>
+      <message name="IDS_CRFILES_SYNC_PREPARE_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">Cannot prepare the sync folder. Check folder access, available space, and whether another app is using it.</message>
+      <message name="IDS_CRFILES_SYNC_DEVICE_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">This device is no longer available for sync. Select it again when it appears.</message>
+      <message name="IDS_CRFILES_SYNC_REQUEST_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">Could not start this sync request. Check existing sync relationships and try again.</message>
+      <message name="IDS_CRFILES_SYNC_LIMIT_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">The sync relationship or pending request limit has been reached.</message>
 </messages>
   </release>
 </grit>

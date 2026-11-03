@@ -15,6 +15,10 @@ namespace crfiles {
 ui::ImageModel FileShareDeviceAvatar(int avatar, int edge = 64);
 std::unique_ptr<views::View> CreateFileShareDeviceButton(base::RepeatingClosure callback,
     int avatar, const std::u16string& name);
+// Updates a button returned by CreateFileShareDeviceButton using the same ring
+// and cancel interaction as Share to.
+void SetFileShareDeviceTransfer(views::View* button, bool active, bool indeterminate,
+    double progress, base::RepeatingClosure cancel = {}, std::u16string detail = {});
 class ShareSessionToast {
  public:
   virtual ~ShareSessionToast() = default;

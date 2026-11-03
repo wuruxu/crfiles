@@ -24,7 +24,9 @@ class SyncWire {
   virtual bool Bytes(base::span<uint8_t> bytes, bool sending) = 0;
   virtual bool Canceled() = 0;
   virtual bool KeepAlive() = 0;
-  virtual bool Consent(const base::FilePath& directory, const std::string& name) = 0;
+  // Returns the approved destination, or nullopt when consent was declined.
+  virtual std::optional<base::FilePath> Consent(const base::FilePath& destination,
+      const std::string& name, bool single_file, int error) = 0;
   virtual void Begin(uint64_t total) = 0;
   virtual void Progress(const std::string& path, uint64_t bytes) = 0;
 };
@@ -64,8 +66,19 @@ struct SyncRequest {
   bool removal = false;
 };
 
+struct SyncStartResult {
+  std::string id;
+  int error = 0;  // Localized resource ID; zero means the command was queued.
+};
+
+struct SyncWakeup {
+  std::string id;
+  std::string fingerprint;
+  uint64_t counter = 0;
+};
+
 // The UI only queues commands and reads snapshots. The existing desktop worker
-// owns all database, scan and protocol work. Watchers live on a separate sequence.
+// owns database, scan and file protocol work. Watchers live on a separate sequence.
 class SyncService {
  public:
   explicit SyncService(base::FilePath state_directory);
@@ -73,16 +86,22 @@ class SyncService {
   SyncService(const SyncService&) = delete;
   SyncService& operator=(const SyncService&) = delete;
 
-  // Returns the queued request ID; registration and connection may still fail.
-  std::string Queue(const base::FilePath& source, std::string fingerprint,
+  // Returns a queued ID or an immediate localized error. Registration and
+  // connection may still fail after a command is queued.
+  SyncStartResult Queue(const base::FilePath& source, std::string fingerprint,
              std::string peer, int avatar, bool write);
   // Retry the same relationship, preserving its original source and peer.
-  bool Retry(const std::string& id, const std::string& fingerprint, bool write);
+  SyncStartResult Retry(const std::string& id, const std::string& fingerprint, bool write);
   void Pause(std::string id, bool paused);
   void Permissions(std::string id, bool read, bool write);
   void Remove(std::string id);
   void Revoke(std::string fingerprint);
   std::vector<SyncJob> Snapshot() const;
+
+  // Identity workers only touch published state, never the database/I/O lock.
+  std::vector<SyncWakeup> PendingWakeups() const;
+  void WakeAttempt(const SyncWakeup& wake);
+  bool RequestWake(const std::string& id, const std::string& fingerprint);
 
   // Worker-only. Calls from successive transport generations are serialized.
   void Poll();
@@ -106,5 +125,7 @@ class SyncService {
 };
 
 bool IsSyncId(const std::string& value);
+// Errors which should remain visible even when the relationship is paused.
+bool IsSyncErrorStatus(int status);
 }  // namespace crfiles
 #endif

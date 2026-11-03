@@ -90,6 +90,17 @@ controls, menu, SVG renderer, themes and Viz compositor.
   opens an editable
   capsule-shaped path field. A segment click starts navigation immediately;
   double-click detection survives segment rebuilding without delaying navigation.
+  Long paths hide the horizontal scrollbar and show left/right scroll arrows only
+  when they overflow. Click an arrow for a smooth page step or hold it to repeat;
+  the keyboard-arrow icon at a reached boundary fades out over 160 ms and fades
+  back in when scrolling becomes possible. Its slot stays reserved while the path
+  overflows, preventing layout shifts; faded arrows cannot be clicked or focused.
+  Mouse wheels and trackpad gestures
+  scroll the path horizontally. A new path reveals its current directory, while
+  ordinary refreshes retain the scroll position. Arrow controls remain separate
+  from double-click path editing, support keyboard activation and respect RTL
+  layout and reduced-motion preferences.
+  Ctrl+L (Cmd+L on macOS) opens the address input, focuses it and selects the path.
   Enter navigates and restores the breadcrumbs; Escape, focus loss or clicking
   outside the field cancels editing. Relative paths resolve against the active directory.
 - Path editing and breadcrumbs crossfade within a fixed capsule over 160 ms.
@@ -97,7 +108,6 @@ controls, menu, SVG renderer, themes and Viz compositor.
   to 100% over 160 ms. Loading starts immediately; subsequent navigation or tab
   changes interrupt the previous directory animation.
 - The left sidebar resizes by dragging its divider, within 220–360 pixels.
-  Ctrl+L toggles the sidebar and divider together without losing their width.
   Its selected location retains a borderless half-capsule highlight independently
   of keyboard focus, and selection follows each tab's current directory.
   Selected locations and bookmarks use the same secondary-container background
@@ -205,6 +215,32 @@ controls, menu, SVG renderer, themes and Viz compositor.
   selections without checkboxes. Double-click or press Enter on a focused item
   to open it. Images, including SVG, open in an in-app preview; other files open
   through the operating system. Open also opens a single selected item.
+  The image preview is a resizable dialog modal to its parent window. Its window
+  title shows the current image's containing folder path, without the filename;
+  the centered toolbar label shows the filename and position in the image list.
+  The custom title bar is draggable and supports the platform's configured
+  double-click action (normally maximize/restore on Linux and Windows). macOS
+  window-modal dialogs are sheets, so ordinary window zoom behavior is not
+  guaranteed there. The full file path remains available in the toolbar tooltip.
+  It fits the image without
+  changing its aspect ratio; the mouse wheel zooms around the pointer and dragging
+  pans an enlarged image. Double-clicking the image area toggles between fitting
+  the window and 1:1 preview size (one decoded preview pixel per DIP). Zooming to
+  1:1 keeps the clicked point in place where pan bounds allow; a second double-click
+  restores the centered fit view. Resizing preserves 1:1 size, while fit mode
+  follows the window size. There is no bottom status text; loading and errors
+  appear in the image area. Left/Right or the toolbar arrows switch between images
+  from the same directory in the current filtered list order, captured when the
+  window opens. Home or 0 resets the view, +/− zoom, and Esc closes the window.
+  Images load asynchronously; switching or closing cancels obsolete requests.
+  The preview uses 6 DIP outer padding and a 4 DIP toolbar gap. Switching images
+  fades the old image out over 120 ms and the new image in over 160 ms; decoding
+  runs alongside the fade-out. Rapid navigation discards obsolete results, and
+  reduced-motion settings disable the fades.
+  This first version shows a static preview up to 2048 pixels on its longest edge,
+  without animation playback or full-resolution viewing. The toolbar's **Open in
+  system app** button opens the original image with the system default application
+  and remains available when decoding fails.
   Size changes update existing icon tiles in place without rebuilding or resorting
   the directory. The slider thumb follows the snapped value immediately, with
   extra edge padding for its highlight. List and Icon modes load image, PDF and video thumbnails asynchronously for visible and nearby entries and
@@ -282,7 +318,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
 | --- | --- |
 | Ctrl+T / Ctrl+W | New / close tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
-| Ctrl+L | Toggle left sidebar |
+| Ctrl+L (Cmd+L on macOS) | Edit the address and select the path |
 | Alt+Left / Alt+Right | Back / forward |
 | F5 | Refresh |
 | F11 | Toggle fullscreen |
@@ -818,7 +854,7 @@ to collapse, or at/above 110 px to settle within the 220–360 px expanded range
 Dragging clips the sidebar contents; release uses a 160 ms ease-out animation.
 A transparent 6 px edge remains available when collapsed, with a themed hover
 indicator and resize cursor. Drag it outward to expand, or double-click it to
-restore the previous expanded width. Ctrl+L also toggles that saved width.
+restore the previous expanded width. The titlebar sidebar control also toggles that saved width.
 Visibility and expanded width are persisted separately. History hides both the
 sidebar and its resize edge without changing the saved sidebar preference.
 
@@ -1234,10 +1270,43 @@ with **Sync** and approve continuing access on the receiver.
 If the receiver rejects the request, the relationship pauses and the avatar becomes
 clickable again. Select it and press **Sync** to retry the same relationship with
 the newly selected permission; the receiver must approve again.
-The first copy goes into a fresh directory under its configured receive location.
+B can click **Receive folder** in the initial consent prompt to choose a parent.
+A file is saved directly as `chosen-parent/original-file-name`; a folder is created
+as `chosen-parent/original-folder-name`. The prompt displays the resulting path
+before acceptance. A name collision returns B to the prompt to choose another
+parent; existing items are never silently overwritten or merged during setup.
+The folder picker is owned by the consent bubble, keeping the prompt above the
+main window. After selection or cancellation, the still-pending prompt restores
+its stacking and focus once native picker teardown has returned.
+Canceling the picker keeps the current selection. The chosen location is saved
+for that relationship without changing the global receive location. IDs remain
+internal and in hidden recovery directories. Existing relationships retain their
+stored locations, including older `Sync-<id>` directories.
 Subsequent changes follow the creator's permissions while both applications
 are running. Two-way conflicts are preserved as separate files, and replaced
 or deleted files are retained in a local recovery directory.
+
+With one-way A-to-B sync, B's edits remain in place while A's version of that file
+is unchanged. A later content/type change or deletion of that file updates B and
+archives any replaced copy. Editing a different file on A does not overwrite B's
+local edit. This baseline survives app restarts. Both devices need the
+`sync_source_updates` extension; older sync implementations are excluded to prevent
+them from restoring the previous overwrite behavior.
+
+Once one-way sync succeeds, A performs local checks without opening another sync
+connection while its source remains unchanged. Pending updates, initial sync,
+permission changes, manual retry/resume and removal still connect as needed.
+Delivery acknowledgement is persisted, so an offline or failed update is retried
+after restart without requiring another edit. Two-way and B-to-A-only sync retain
+periodic connections to receive B's changes. Device discovery remains active.
+
+Both directions schedule work after two seconds without a new file-change
+notification. Continuous notifications trigger work at about ten-second intervals;
+periodic local scans also cover missed notifications and open log writers. With
+Write enabled, B uses the optional `sync_wake: 1` identity-channel extension to
+ask A to pull its changes early. Both devices need the extension for fast B-to-A
+updates; otherwise periodic reconciliation remains available. Busy transfers,
+unstable source files and connection failure backoff can delay completion.
 
 The titlebar menu's **Syncing** item, below **Sharing folders**, opens a separate
 relationship manager styled like **Trusted devices**. Rows show the remote avatar,
@@ -1249,8 +1318,12 @@ recovery files and remove a relationship without deleting files. Removing a
 relationship also removes the peer's list entry after an authenticated notification;
 offline notifications persist and retry after reconnection. Actual files and recovery
 data remain on both devices. Both peers must support the creator-controlled permissions
-extension, plus `sync_removal` for proactive removal notifications. The first version supports one-to-one
+and `sync_source_updates` extensions, plus `sync_removal` for proactive removal notifications. The first version supports one-to-one
 desktop relationships, whole-file updates, directory watching and periodic reconciliation.
+Different single files in the same parent directory can have separate relationships.
+Their recovery directories are isolated by relationship ID. Duplicate file scopes,
+case-folding aliases and overlapping conflict-copy namespaces remain excluded,
+as do overlapping directory scopes and ancestor/descendant roots.
 See [sync-v1 protocol, recovery and acceptance steps](sharing/SYNC_PROTOCOL.md) for
 limits, conflict behavior, restart recovery, and the checks still requiring a build
 and two-device validation.

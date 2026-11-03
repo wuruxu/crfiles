@@ -11,7 +11,7 @@
   <translation id="18184745306897069">Insira um nome (até 64 bytes UTF-8) e um caminho absoluto de receção. As definições devem permitir escrita.</translation>
   <translation id="4573310231718438740">Acesso negado ou revogado. Verifique as permissões do telemóvel e volte a emparelhar se necessário.</translation>
   <translation id="8394920281168265545">O certificado do telemóvel não corresponde. Não foram enviadas credenciais.</translation>
-  <translation id="4367709536909201158">Um gestor de ficheiros com separadores e partilha por proximidade compatível com crPhotos.</translation>
+  <translation id="5870292518687487910">Um gestor de ficheiros com separadores e suporte para o Quick Share no Android.</translation>
   <translation id="5787420647064736989">Nome do dispositivo</translation>
   <translation id="7425986746526961766">Desativar a partilha por proximidade</translation>
   <translation id="4759238208242260848">Transferências</translation>
@@ -401,4 +401,20 @@
   <translation id="752612961231969308">Permitir a sincronização contínua nesta pasta? O dispositivo criador controla as permissões de sincronização. Pode pausar ou remover esta relação em Sincronizações. Os ficheiros substituídos e eliminados são mantidos na pasta de recuperação.</translation>
   <translation id="369053807563392520">Escolha um dispositivo para sincronizar este ficheiro ou pasta.</translation>
   <translation id="6406506848690869874">Sincronizar</translation>
+  <translation id="4635264759968989553">Esta localização sobrepõe-se a uma sincronização existente. Verifique as relações de sincronização existentes.</translation>
+  <translation id="8717853395357624361">Não foi possível preparar a pasta de sincronização. Verifique as permissões de acesso, o espaço disponível e se outra aplicação está a utilizar a pasta.</translation>
+  <translation id="112353091401681759">Este dispositivo já não está disponível para sincronização. Selecione-o novamente quando aparecer.</translation>
+  <translation id="9024022335183653196">Não foi possível iniciar este pedido de sincronização. Verifique as relações de sincronização existentes e tente novamente.</translation>
+  <translation id="5036404633067063740">Foi atingido o limite de relações de sincronização ou pedidos pendentes.</translation>
+  <translation id="1139054157857398343">Deslocar o caminho para a esquerda</translation>
+  <translation id="9082767689988059179">Deslocar o caminho para a direita</translation>
+  <translation id="3195890836285742116">Pré-visualização da imagem</translation>
+  <translation id="8343272671728642074">A carregar imagem…</translation>
+  <translation id="7941243322888784931">Imagem anterior</translation>
+  <translation id="6165094457612892917">Imagem seguinte</translation>
+  <translation id="8903921497873541725">Ampliar</translation>
+  <translation id="5975083100439434680">Reduzir</translation>
+  <translation id="8003143398148180105">Ajustar à janela</translation>
+  <translation id="529022811275906337">Abrir na aplicação do sistema</translation>
+  <translation id="605298658602194245">Qualidade de pré-visualização. Abra a imagem na aplicação do sistema para a ver na resolução original.</translation>
 </translationbundle>

@@ -130,13 +130,13 @@ END_METADATA
 
 enum MenuCommand {
   kMenuCommandThemeSystem = 1, kMenuCommandThemeLight, kMenuCommandThemeDark,
-  kMenuCommandFullscreen, kMenuCommandHistory, kMenuCommandTrustedDevices, kMenuCommandSharingFolders, kMenuCommandSyncing, kMenuCommandSettings, kMenuCommandAbout, kMenuCommandInstallOnDevice,
+  kMenuCommandHistory, kMenuCommandTrustedDevices, kMenuCommandSharingFolders, kMenuCommandSyncing, kMenuCommandSettings, kMenuCommandAbout, kMenuCommandInstallOnDevice,
 };
 class OptionsMenuView : public libcr::OptionsMenuView {
   METADATA_HEADER(OptionsMenuView, libcr::OptionsMenuView)
 
  public:
-  explicit OptionsMenuView(base::RepeatingCallback<void(int)> callback, bool video_open, bool fullscreen)
+  explicit OptionsMenuView(base::RepeatingCallback<void(int)> callback)
       : callback_(std::move(callback)) {
     AddThemeSelector(
         GetCrFilesThemeMode(),
@@ -154,13 +154,6 @@ class OptionsMenuView : public libcr::OptionsMenuView {
             },
             callback_));
     AddMenuSeparator();
-    if (video_open) {
-      AddMenuItem(base::BindRepeating([](base::RepeatingCallback<void(int)> callback) {
-            callback.Run(kMenuCommandFullscreen);
-          }, callback_),
-          l10n_util::GetStringUTF16(fullscreen ? IDS_CRFILES_EXIT_FULLSCREEN : IDS_CRFILES_FULLSCREEN),
-          u"F11", &kFullscreenIcon);
-    }
     AddMenuItem(base::BindRepeating([](base::RepeatingCallback<void(int)> callback) {
           callback.Run(kMenuCommandHistory);
         }, callback_), l10n_util::GetStringUTF16(IDS_CRFILES_HISTORY),
@@ -177,6 +170,7 @@ class OptionsMenuView : public libcr::OptionsMenuView {
           callback.Run(kMenuCommandSyncing);
         }, callback_), l10n_util::GetStringUTF16(IDS_CRFILES_SYNCING),
         std::u16string_view(), &vector_icons::kSyncIcon);
+    AddMenuSeparator();
     AddMenuItem(base::BindRepeating(
                     [](base::RepeatingCallback<void(int)> callback) {
                       callback.Run(kMenuCommandSettings);
@@ -553,7 +547,7 @@ void ShowOptionsMenu() {
   options_menu_view_ = options_menu_overlay_->AddChildView(
       std::make_unique<OptionsMenuView>(base::BindRepeating(
           &FilesFrameView::HandleOptionsMenuCommand,
-          weak_factory_.GetWeakPtr()), true, widget_->IsFullscreen()));
+          weak_factory_.GetWeakPtr())));
   views::SetHitTestComponent(options_menu_view_, HTCLIENT);
   options_button_->SetOverlayMenuOpen(true);
   LayoutOptionsMenu();
@@ -591,9 +585,6 @@ void HandleOptionsMenuCommand(int command) {
     return;
   }
   HideOptionsMenu();
-  if (command == kMenuCommandFullscreen && true) {
-    widget_->SetFullscreen(!widget_->IsFullscreen());
-  }
   if (command == kMenuCommandHistory) ShowCrFilesHistory();
   if (command == kMenuCommandTrustedDevices) ShowCrFilesTrustedDevices();
   if (command == kMenuCommandSharingFolders) ShowCrFilesSharingFolders();

@@ -12,6 +12,7 @@
 #include "base/files/file_util.h"
 #include "base/i18n/case_conversion.h"
 #include "base/i18n/icu_string_conversions.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -190,28 +191,58 @@ class SyncFiles::Impl {
   }
   bool Mkdir(const std::string& path) {
     Parent p;
-    if (!ParentOf(path, &p)) return false;
+    if (!ParentOf(path, &p)) {
+      PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=directory_parent root=" << root << " path=" << path;
+      return false;
+    }
 #if BUILDFLAG(IS_WIN)
     const auto full = p.path.Append(base::FilePath::FromUTF8Unsafe(p.leaf));
-    if (!nearby::CreatePrivateDirectory(full) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    if (!nearby::CreatePrivateDirectory(full) && GetLastError() != ERROR_ALREADY_EXISTS) {
+      PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=directory_create path=" << full;
+      return false;
+    }
     nearby::PinnedDirectory pin;
-    return pin.Open(full);
+    if (pin.Open(full)) return true;
+    PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=directory_pin path=" << full;
+    return false;
 #else
-    if (mkdirat(p.fd.get(), p.leaf.c_str(), 0700) != 0 && errno != EEXIST) return false;
+    if (mkdirat(p.fd.get(), p.leaf.c_str(), 0700) != 0 && errno != EEXIST) {
+      PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=directory_create root=" << root << " path=" << path;
+      return false;
+    }
     base::ScopedFD child(openat(p.fd.get(), p.leaf.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-    return child.is_valid() && fsync(p.fd.get()) == 0;
+    if (!child.is_valid()) {
+      PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=directory_open root=" << root << " path=" << path;
+      return false;
+    }
+    if (fsync(p.fd.get()) == 0) return true;
+    PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=directory_flush root=" << root << " path=" << path;
+    return false;
 #endif
   }
   bool PrivateDirectory(const std::string& path) {
     Parent parent;
-    if (!ParentOf(path, &parent)) return false;
+    if (!ParentOf(path, &parent)) {
+      PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=private_parent root=" << root << " path=" << path;
+      return false;
+    }
 #if BUILDFLAG(IS_WIN)
-    return nearby::ProtectPrivateDirectory(parent.path.Append(base::FilePath::FromUTF8Unsafe(parent.leaf)));
+    if (nearby::ProtectPrivateDirectory(parent.path.Append(base::FilePath::FromUTF8Unsafe(parent.leaf)))) return true;
+    PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=private_permissions root=" << root << " path=" << path;
+    return false;
 #else
     base::ScopedFD fd(openat(parent.fd.get(), parent.leaf.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     struct stat info;
-    return fd.is_valid() && fstat(fd.get(), &info) == 0 && info.st_uid == geteuid() &&
-        info.st_dev == device && (info.st_mode & 0077) == 0;
+    if (!fd.is_valid() || fstat(fd.get(), &info) != 0) {
+      PLOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=private_stat root=" << root << " path=" << path;
+      return false;
+    }
+    if (info.st_uid == geteuid() && info.st_dev == device && (info.st_mode & 0077) == 0) return true;
+    // Policy failures have no errno: report actual metadata instead of a stale OS error.
+    LOG(ERROR) << "[crFiles sync] prepare_failed id=" << id << " stage=private_permissions root=" << root
+               << " path=" << path << " owner=" << info.st_uid << " expected_owner=" << geteuid()
+               << " mode=" << (info.st_mode & 07777) << " device=" << info.st_dev << " expected_device=" << device;
+    return false;
 #endif
   }
   std::string Private(const std::string& operation, const char* suffix) const {
@@ -353,25 +384,40 @@ SyncFiles::SyncFiles(base::FilePath root, std::string id, std::function<bool()> 
 SyncFiles::~SyncFiles() = default;
 bool SyncFiles::Open() {
   auto& p = *impl_;
-  if (!p.root.IsAbsolute() || p.root.ReferencesParent()) return false;
+  const auto fail = [&](const char* stage) {
+    PLOG(ERROR) << "[crFiles sync] open_failed id=" << p.id << " stage=" << stage << " root=" << p.root;
+    return false;
+  };
+  if (!p.root.IsAbsolute() || p.root.ReferencesParent()) {
+    LOG(ERROR) << "[crFiles sync] open_failed id=" << p.id << " stage=invalid_root root=" << p.root;
+    return false;
+  }
 #if BUILDFLAG(IS_WIN)
-  if (!p.lock.Open(p.root) || !p.lock.TryLock()) return false;
+  if (!p.lock.Open(p.root)) return fail("lock_open");
+  if (!p.lock.TryLock()) return fail("root_lock");
   base::win::ScopedHandle handle(CreateFileW(p.root.value().c_str(), FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   BY_HANDLE_FILE_INFORMATION info{};
-  if (!handle.is_valid() || !GetFileInformationByHandle(handle.get(), &info)) return false;
+  if (!handle.is_valid()) return fail("root_open");
+  if (!GetFileInformationByHandle(handle.get(), &info)) return fail("root_stat");
   p.identity = base::NumberToString(info.dwVolumeSerialNumber) + ":" +
       base::NumberToString(info.nFileIndexHigh) + ":" + base::NumberToString(info.nFileIndexLow);
 #else
   p.root_fd.reset(open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+  if (!p.root_fd.is_valid()) return fail("filesystem_root_open");
   for (const auto& part : p.root.GetComponents()) {
     if (part == "/") continue;
-    p.root_fd.reset(openat(p.root_fd.get(), part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-    if (!p.root_fd.is_valid()) return false;
+    const int child = openat(p.root_fd.get(), part.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (child < 0) {
+      PLOG(ERROR) << "[crFiles sync] open_failed id=" << p.id << " stage=root_component root=" << p.root << " component=" << part;
+      return false;
+    }
+    p.root_fd.reset(child);
   }
   struct stat info;
-  if (flock(p.root_fd.get(), LOCK_EX | LOCK_NB) != 0 || fstat(p.root_fd.get(), &info) != 0) return false;
+  if (flock(p.root_fd.get(), LOCK_EX | LOCK_NB) != 0) return fail("root_lock");
+  if (fstat(p.root_fd.get(), &info) != 0) return fail("root_stat");
   p.device = info.st_dev;
   p.identity = base::NumberToString(info.st_dev) + ":" + base::NumberToString(info.st_ino);
 #endif
@@ -379,6 +425,29 @@ bool SyncFiles::Open() {
   return p.Mkdir(kPrivate) && p.PrivateDirectory(kPrivate) && p.Mkdir(recovery) && p.PrivateDirectory(recovery);
 }
 std::string SyncFiles::Identity() const { return impl_->identity; }
+std::optional<bool> SyncFiles::ReceiveNameAvailable(const std::string& name, bool single_file) {
+  if (!SafeSyncPath(name) || name.find('/') != std::string::npos) return std::nullopt;
+  std::vector<std::string> names;
+  if (!impl_->List({}, &names)) return std::nullopt;
+  const auto fold = [](const std::string& value) {
+    return base::i18n::FoldCase(base::UTF8ToUTF16(CanonicalSyncPath(value)));
+  };
+  const auto selected = fold(name);
+  const auto conflicts = fold("sync-conflict-" + SyncHash(name).substr(0, 16) + "-");
+  for (const auto& existing : names) {
+    const auto folded = fold(existing);
+    if (folded == selected || (single_file && folded.starts_with(conflicts))) return false;
+  }
+  return true;
+}
+bool SyncFiles::CreateReceiveDirectory(const std::string& name) {
+  if (!SafeSyncPath(name) || name.find('/') != std::string::npos || impl_->canceled()) return false;
+#if BUILDFLAG(IS_WIN)
+  return nearby::CreatePrivateDirectory(impl_->root.Append(base::FilePath::FromUTF8Unsafe(name)));
+#else
+  return mkdirat(impl_->root_fd.get(), name.c_str(), 0700) == 0 && fsync(impl_->root_fd.get()) == 0;
+#endif
+}
 base::FilePath SyncFiles::Recovery() const { return impl_->root.AppendASCII(kPrivate).AppendASCII(impl_->id); }
 bool SyncFiles::Read(const std::string& path, SyncContent* content) {
   return SafeSyncPath(path) && impl_->Read(path, content);

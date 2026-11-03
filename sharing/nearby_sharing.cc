@@ -123,6 +123,7 @@ struct NearbySharing::State {
     std::vector<SharedTarget> targets = {};
     bool sync_v1 = false;
     bool sync_removal = false;
+    bool sync_wake = false;
   };
   std::map<std::string, IdentityResult> identities;
   std::shared_ptr<NearbySharing::TrustStore> trust;
@@ -250,7 +251,8 @@ void SetStage(const std::shared_ptr<State>& state, Stage stage) {
   state->snapshot.stage = state->stop ? Stage::kOff : stage;
   state->snapshot.status_message_id = stage == Stage::kReceivingConflict ?
       IDS_CRFILES_TRANSFER_CONFLICT_PROMPT : 0;
-  if (stage == Stage::kReceivingConflict) ++state->snapshot.conflict_id;
+  if (stage == Stage::kReceivingConflict || (stage == Stage::kReceivingOffer && state->snapshot.syncing))
+    ++state->snapshot.conflict_id;
   state->decision = 0;
 }
 
@@ -753,14 +755,19 @@ bool UpdateTrust(const std::shared_ptr<State>& state, bool remember,
 }
 
 bool AwaitDecision(Channel& channel, const std::shared_ptr<State>& state, uint64_t generation,
-                   Stage stage) {
+                   Stage stage, bool sync_heartbeat = false) {
   SetStage(state, stage);
   const auto deadline = base::TimeTicks::Now() + base::Seconds(120);
+  auto heartbeat = base::TimeTicks::Now();
   while (!IsCanceled(*state, generation) && base::TimeTicks::Now() < deadline) {
     if (channel.Disconnected()) return false;
     {
       base::AutoLock lock(state->lock);
       if (state->decision) return state->decision == 1;
+    }
+    if (sync_heartbeat && base::TimeTicks::Now() - heartbeat >= base::Seconds(5)) {
+      if (!channel.SendJson(Message("sync-heartbeat"))) return false;
+      heartbeat = base::TimeTicks::Now();
     }
     // No UI thread is blocked while the user compares or accepts the offer.
     Poll(nullptr, 0, 100);
@@ -808,6 +815,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
   hello.Set("folder_transfer", true);
   hello.Set("sync_v1", true);
   hello.Set("sync_permissions", 2);
+  hello.Set("sync_source_updates", 1);
   hello.Set("sync_removal", 1);
   if (!state->sync_id.empty()) hello.Set("sync", state->sync_id);
   if (state->sync_remove) hello.Set("sync_remove", true);
@@ -843,7 +851,8 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
         pixels.size() == 96 * 96 * 4) custom_avatar = *encoded;
   }
   const bool trusted = IsTrusted(state->trust, fingerprint);
-  state->peer_sync = peer->FindBool("sync_v1").value_or(false) && peer->FindInt("sync_permissions") == 2;
+  state->peer_sync = peer->FindBool("sync_v1").value_or(false) && peer->FindInt("sync_permissions") == 2 &&
+      peer->FindInt("sync_source_updates") == 1;
   if (state->snapshot.receiving) {
     if (const auto* sync_id = peer->FindString("sync")) {
       if (!state->peer_sync || !IsSyncId(*sync_id)) return false;
@@ -879,6 +888,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
       }
     }
     state->snapshot.syncing = !state->sync_id.empty();
+    state->snapshot.sync_id = state->sync_id;
     state->snapshot.sync_background = sync_authorized;
     state->snapshot.peer_trusted = trusted;
     state->snapshot.peer_name = *name;
@@ -2008,11 +2018,28 @@ void ServeIdentities(std::shared_ptr<State> state, ScopedSocket listener,
     identity.Set("folder_transfer", true);
     identity.Set("sync_v1", true);
     identity.Set("sync_permissions", 2);
+    identity.Set("sync_source_updates", 1);
     identity.Set("sync_removal", 1);
+    identity.Set("sync_wake", 1);
     if (!channel.SendJson(std::move(identity))) continue;
     // Legacy probes read only the small identity frame and close the channel.
     auto targets = Message("targets"); targets.Set("targets", SharedTargetsJson(state));
-    channel.SendJson(std::move(targets));
+    if (!channel.SendJson(std::move(targets))) continue;
+    // Optional control frame on the independent identity channel. Old probes
+    // close after the catalog; no pairing, file access or transfer UI is opened.
+    const auto wake = channel.ReadJson(base::Seconds(2));
+    const auto* ids = wake ? wake->FindList("ids") : nullptr;
+    if (!IsMessage(wake, "sync-wake") || !ids || ids->empty() || ids->size() > 128) continue;
+    if (std::ranges::any_of(*ids, [](const auto& id) {
+          return !id.is_string() || !IsSyncId(id.GetString());
+        })) continue;
+    const auto fingerprint = channel.PeerFingerprint();
+    base::ListValue accepted;
+    for (const auto& id : *ids) {
+      if (state->sync->RequestWake(id.GetString(), fingerprint)) accepted.Append(id.GetString());
+    }
+    auto queued = Message("sync-wake-queued"); queued.Set("ids", std::move(accepted));
+    channel.SendJson(std::move(queued));
   }
 }
 
@@ -2056,7 +2083,9 @@ void ProbePhones(std::shared_ptr<State> state) {
 void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> context) {
   base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::WILL_BLOCK);
   while (!state->stop) {
+    const auto wakeups = state->sync->PendingWakeups();
     std::optional<NearbySharing::Peer> target;
+    std::string expected_fingerprint;
     {
       base::AutoLock lock(state->lock);
       const auto now = base::TimeTicks::Now();
@@ -2066,10 +2095,14 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
         // ports. Each endpoint has one in-flight attempt and bounded retries.
         if (!peer.identity_port) continue;
         const auto found = state->identities.find(IdentityKey(peer));
-        const auto retry = found == state->identities.end() ? base::TimeTicks() :
-                                                            found->second.retry_after;
+        auto retry = found == state->identities.end() ? base::TimeTicks() : found->second.retry_after;
+        if (found != state->identities.end() && found->second.sync_wake &&
+            std::ranges::any_of(wakeups, [&](const auto& wake) {
+              return wake.fingerprint == found->second.fingerprint;
+            })) retry = {};
         if (retry <= now && retry < earliest) {
           target = peer;
+          expected_fingerprint = found == state->identities.end() ? std::string() : found->second.fingerprint;
           earliest = retry;
         }
       }
@@ -2078,6 +2111,9 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
     if (!target) {
       Poll(nullptr, 0, 200);
       continue;
+    }
+    for (const auto& wake : wakeups) {
+      if (wake.fingerprint == expected_fingerprint) state->sync->WakeAttempt(wake);
     }
     const auto separator = target->address.rfind(':');
     if (separator == std::string::npos) continue;
@@ -2091,6 +2127,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
     bool folder_transfer = false;
     bool sync_v1 = false;
     bool sync_removal = false;
+    bool sync_wake = false;
     std::vector<NearbySharing::SharedTarget> targets;
     if (fd.is_valid()) {
       Channel channel(std::move(fd), context.get(), false, state, generation, true);
@@ -2115,11 +2152,31 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
         if (type_ok && id_ok && port_ok) {
           fingerprint = channel.PeerFingerprint();
           folder_transfer = identity->FindBool("folder_transfer").value_or(false);
-          sync_v1 = identity->FindBool("sync_v1").value_or(false) && identity->FindInt("sync_permissions") == 2;
+          sync_v1 = identity->FindBool("sync_v1").value_or(false) && identity->FindInt("sync_permissions") == 2 &&
+              identity->FindInt("sync_source_updates") == 1;
           sync_removal = sync_v1 && identity->FindInt("sync_removal") == 1;
+          sync_wake = sync_v1 && identity->FindInt("sync_wake") == 1;
           if (folder_transfer) {
             const auto catalog = channel.ReadJson(base::Seconds(2));
             if (IsMessage(catalog, "targets")) targets = ParseTargets(*catalog);
+          }
+          if (sync_wake && !identity_mismatch) {
+            base::ListValue ids;
+            for (const auto& wake : wakeups) {
+              // Pin to the relationship certificate, not the advertised name.
+              if (wake.fingerprint != fingerprint) continue;
+              state->sync->WakeAttempt(wake);
+              ids.Append(wake.id);
+            }
+            if (!ids.empty()) {
+              auto request = Message("sync-wake"); request.Set("ids", std::move(ids));
+              const bool sent = channel.SendJson(std::move(request));
+              const auto reply = sent ? channel.ReadJson(base::Seconds(2)) : std::nullopt;
+              if (!IsMessage(reply, "sync-wake-queued"))
+                VLOG(1) << "[crFiles sync] wake_not_acknowledged peer=" << target->id;
+              // A queue acknowledgement is not a file commit. Keep the outbox
+              // pending until the data session durably acknowledges its counter.
+            }
           }
         }
       }
@@ -2139,7 +2196,7 @@ void ProbeIdentities(std::shared_ptr<State> state, bssl::UniquePtr<SSL_CTX> cont
         } else {
           const auto expires = fingerprint.empty() ? now : now + base::Seconds(60);
           cached = {std::move(fingerprint), expires,
-                    now + base::Seconds(20), folder_transfer, std::move(targets), sync_v1, sync_removal};
+                    now + base::Seconds(20), folder_transfer, std::move(targets), sync_v1, sync_removal, sync_wake};
         }
       }
     }
@@ -2167,17 +2224,24 @@ class DesktopSyncWire : public SyncWire {
   }
   bool Bytes(base::span<uint8_t> bytes, bool sending) override { return channel_.Bytes(bytes, sending); }
   bool Canceled() override { return IsCanceled(*state_, generation_); }
-  bool Consent(const base::FilePath& directory, const std::string& name) override {
+  std::optional<base::FilePath> Consent(const base::FilePath& destination,
+      const std::string& name, bool single_file, int error) override {
     {
       base::AutoLock lock(state_->lock);
       state_->snapshot.sync_background = false;
-      state_->snapshot.files = {name};
-      state_->snapshot.batch_directory = directory;
-      state_->snapshot.receive_directory = directory;
+      state_->snapshot.files = {single_file ? name : name + "/"};
+      state_->snapshot.sync_receive_name = name;
+      state_->snapshot.sync_receive_file = single_file;
+      state_->snapshot.warning_message_id = error;
+      state_->snapshot.batch_directory = single_file ? destination.DirName() : destination;
+      state_->snapshot.receive_directory = destination;
     }
-    if (!AwaitDecision(channel_, state_, generation_, Stage::kReceivingOffer)) return false;
+    if (!AwaitDecision(channel_, state_, generation_, Stage::kReceivingOffer, true) || Canceled()) return std::nullopt;
+    base::FilePath approved;
+    { base::AutoLock lock(state_->lock); approved = state_->snapshot.receive_directory;
+      state_->snapshot.warning_message_id = 0; }
     SetStage(state_, Stage::kTransferring);
-    return !Canceled();
+    return Canceled() ? std::nullopt : std::make_optional(approved);
   }
   void Begin(uint64_t total) override {
     SetStage(state_, Stage::kTransferring);
@@ -2336,6 +2400,13 @@ void Run(std::shared_ptr<State> state) {
           state->snapshot.started_at = base::TimeTicks::Now();
           state->snapshot.finished_at = {};
           state->snapshot.busy = true;
+          state->snapshot.receiving = false;
+          state->snapshot.syncing = true; state->snapshot.sync_background = true;
+          state->snapshot.sync_id = request->id;
+          state->snapshot.stage = Stage::kConnecting;
+          state->snapshot.status_message_id = 0;
+          state->snapshot.total = state->snapshot.transferred = 0;
+          state->snapshot.current_file.clear();
         }
       }
     }
@@ -2415,6 +2486,7 @@ void Run(std::shared_ptr<State> state) {
       state->sync_remove = outgoing && outgoing->sync_remove;
       state->sync_fingerprint = outgoing ? outgoing->sync_fingerprint : std::string();
       state->snapshot.syncing = !state->sync_id.empty();
+      state->snapshot.sync_id = state->sync_id;
       state->snapshot.sync_background = state->snapshot.syncing;
       state->snapshot.warning_message_id = 0;
       state->snapshot.files.clear();
@@ -2714,22 +2786,27 @@ NearbySharing::Snapshot NearbySharing::GetSnapshot() const {
 }
 void NearbySharing::CancelSync(const std::string& id) {
   base::AutoLock lock(state_->lock);
-  if (state_->snapshot.busy && state_->snapshot.syncing && state_->sync_id == id) ++state_->cancel;
+  if (state_->snapshot.busy && state_->snapshot.syncing && state_->snapshot.sync_id == id) ++state_->cancel;
 }
-std::string NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write,
+SyncStartResult NearbySharing::StartSync(const Peer& peer, const base::FilePath& source, bool write,
                                     const std::string& retry_id) {
-  if (!sync_) return {};
+  const auto fail = [&](const char* stage, int error) -> SyncStartResult {
+    LOG(ERROR) << "[crFiles sync] start_failed stage=" << stage << " retry_id=" << retry_id;
+    return {{}, error};
+  };
+  if (!sync_) return fail("service_unavailable", IDS_CRFILES_SYNC_REQUEST_ERROR);
   const auto snapshot = GetSnapshot();
-  if (!snapshot.enabled || !peer.sync_v1 || peer.phone) return {};
+  if (!snapshot.enabled) return fail("sharing_disabled", IDS_CRFILES_NEARBY_OFF);
+  if (!peer.sync_v1 || peer.phone) return fail("peer_unsupported", IDS_CRFILES_SYNC_DEVICE_ERROR);
   const auto current = std::ranges::find_if(snapshot.peers, [&](const auto& value) {
     return value.address == peer.address && value.sync_v1 && value.identity_expires > base::TimeTicks::Now() &&
         value.verified_fingerprint == peer.verified_fingerprint;
   });
-  if (current == snapshot.peers.end()) return {};
+  if (current == snapshot.peers.end()) return fail("peer_identity_expired_or_changed", IDS_CRFILES_SYNC_DEVICE_ERROR);
   if (!retry_id.empty()) {
-    if (!sync_->Retry(retry_id, current->verified_fingerprint, write)) return {};
-    CancelSync(retry_id);
-    return retry_id;
+    const auto result = sync_->Retry(retry_id, current->verified_fingerprint, write);
+    if (!result.id.empty()) CancelSync(retry_id);
+    return result;
   }
   return sync_->Queue(source, current->verified_fingerprint, current->name, current->avatar, write);
 }
@@ -2772,6 +2849,7 @@ bool NearbySharing::Send(std::string address, std::vector<base::FilePath> paths,
   state_->snapshot.session = ++g_session;
   state_->snapshot.receiving = false;
   state_->snapshot.syncing = false; state_->snapshot.sync_background = false;
+  state_->snapshot.sync_id.clear();
   state_->snapshot.current_file.clear();
   state_->snapshot.peer_name = phone ? phone->name : std::string();
   state_->snapshot.peer_avatar = phone ? phone->avatar : 0;
@@ -2790,9 +2868,23 @@ bool NearbySharing::Send(std::string address, std::vector<base::FilePath> paths,
                                      state_->cancel.load(), std::move(encoded_previews), std::move(phone), std::move(target_id)};
   return true;
 }
+bool NearbySharing::SetSyncReceiveDirectory(uint64_t session, const base::FilePath& parent) {
+  base::AutoLock lock(state_->lock);
+  const auto& snapshot = state_->snapshot;
+  if (!snapshot.busy || !snapshot.receiving || !snapshot.syncing || snapshot.session != session ||
+      snapshot.stage != Stage::kReceivingOffer || state_->decision != 0 ||
+      !IsSyncId(state_->sync_id) || parent.empty() || !parent.IsAbsolute() || parent.ReferencesParent()) return false;
+  if (snapshot.sync_receive_name.empty()) return false;
+  state_->snapshot.receive_directory = parent.Append(base::FilePath::FromUTF8Unsafe(snapshot.sync_receive_name));
+  state_->snapshot.batch_directory = snapshot.sync_receive_file ? parent : state_->snapshot.receive_directory;
+  state_->snapshot.warning_message_id = 0;
+  return true;
+}
 void NearbySharing::Decide(uint64_t session, Stage prompt, bool accept, bool trust,
                           uint64_t conflict_id) {
   base::AutoLock lock(state_->lock);
+  if (state_->snapshot.syncing && prompt == Stage::kReceivingOffer &&
+      (conflict_id == 0 || conflict_id != state_->snapshot.conflict_id)) return;
   if (state_->snapshot.session == session && state_->snapshot.stage == prompt &&
       (prompt == Stage::kPairing || prompt == Stage::kReceivingOffer ||
        (prompt == Stage::kReceivingConflict && conflict_id != 0 &&
@@ -2812,7 +2904,7 @@ void NearbySharing::CancelSession(uint64_t session) {
     base::AutoLock lock(state_->lock);
     if (state_->snapshot.busy && state_->snapshot.session == session) {
       ++state_->cancel;
-      if (state_->snapshot.syncing) sync_id = state_->sync_id;
+      if (state_->snapshot.syncing) sync_id = state_->snapshot.sync_id;
     }
   }
   if (sync_ && !sync_id.empty()) sync_->Pause(std::move(sync_id), true);

@@ -14,7 +14,7 @@
   <translation id="18184745306897069">请输入设备名称（最多 64 个 UTF-8 字节）和接收文件夹的绝对路径，并确保配置可写。</translation>
   <translation id="4573310231718438740">访问被拒绝或已撤销。请检查手机权限，必要时重新配对。</translation>
   <translation id="8394920281168265545">手机证书不匹配。未发送凭据。</translation>
-  <translation id="4367709536909201158">支持多标签和 crPhotos 兼容附近共享的文件管理器。</translation>
+  <translation id="5870292518687487910">支持多标签页和 Android Quick Share 文件共享的文件管理器。</translation>
   <translation id="5787420647064736989">设备名称</translation>
   <translation id="7425986746526961766">关闭附近共享</translation>
   <translation id="4759238208242260848">下载</translation>
@@ -401,4 +401,20 @@
   <translation id="752612961231969308">允许在此文件夹中持续同步吗？同步权限由创建端控制。你可以在“同步中”暂停或解除此关系。被替换和删除的文件会保留在恢复文件夹中。</translation>
   <translation id="369053807563392520">选择设备以同步此文件或文件夹。</translation>
   <translation id="6406506848690869874">同步</translation>
+  <translation id="4635264759968989553">此位置与现有同步范围重叠。请检查现有同步关系。</translation>
+  <translation id="8717853395357624361">无法准备同步文件夹。请检查文件夹访问权限、可用空间，以及是否被其他应用占用。</translation>
+  <translation id="112353091401681759">此设备目前无法用于同步。请在设备重新出现后再次选择。</translation>
+  <translation id="9024022335183653196">无法发起此同步请求。请检查现有同步关系后重试。</translation>
+  <translation id="5036404633067063740">同步关系或待处理请求数量已达到上限。</translation>
+  <translation id="1139054157857398343">向左滚动路径</translation>
+  <translation id="9082767689988059179">向右滚动路径</translation>
+  <translation id="3195890836285742116">图片预览</translation>
+  <translation id="8343272671728642074">正在加载图片…</translation>
+  <translation id="7941243322888784931">上一张图片</translation>
+  <translation id="6165094457612892917">下一张图片</translation>
+  <translation id="8903921497873541725">放大</translation>
+  <translation id="5975083100439434680">缩小</translation>
+  <translation id="8003143398148180105">适应窗口</translation>
+  <translation id="529022811275906337">用系统应用打开</translation>
+  <translation id="605298658602194245">当前为预览画质。请用系统应用打开以查看原始分辨率的图片。</translation>
 </translationbundle>

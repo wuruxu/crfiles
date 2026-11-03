@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license.
 #include "crFiles/sharing/sync_dialog.h"
 #include <map>
+#include <optional>
 #include <utility>
 #include "crFiles/sharing/nearby_sharing.h"
 #include "crFiles/sharing/file_share_dialog.h"
@@ -11,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/files/file_util.h"
 #include "base/i18n/time_formatting.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,6 +23,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/text/bytes_formatting.h"
 #include "ui/color/color_id.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -70,7 +73,7 @@ class SyncView : public views::View {
     status_ = Label(this, {}, true);
     devices_ = AddChildView(std::make_unique<views::View>());
     devices_->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 12));
-    Refresh(); timer_.Start(FROM_HERE, base::Seconds(1), this, &SyncView::Refresh);
+    Refresh(); timer_.Start(FROM_HERE, base::Milliseconds(250), this, &SyncView::Refresh);
   }
   ~SyncView() override { ClosePopup(); }
  private:
@@ -119,17 +122,27 @@ class SyncView : public views::View {
               [](base::WeakPtr<SyncView> view, NearbySharing::Peer peer, bool write, bool allowed) {
                 if (!view) return;
                 view->device_key_.clear();
-                if (!allowed) { view->requesting_ = false; return; }
+                if (!allowed) {
+                  LOG(ERROR) << "[crFiles sync] start_failed stage=directory_access_not_granted";
+                  view->requesting_ = false; view->show_request_error_ = true;
+                  view->status_->SetText(Text(IDS_CRFILES_SYNC_PREPARE_ERROR)); return;
+                }
                 std::string retry_id;
                 for (const auto& job : view->service_->sync_service()->Snapshot()) {
                   if (job.id == view->request_id_ && job.creator && !job.removed &&
                       job.fingerprint == peer.verified_fingerprint) retry_id = job.id;
                 }
-                const auto id = view->service_->StartSync(peer, view->paths_[0], write, retry_id);
-                view->queued_ = !id.empty();
-                view->status_->SetText(Text(view->queued_ ? IDS_CRFILES_SYNC_WAITING : IDS_CRFILES_SYNC_SOURCE_ERROR));
-                if (id.empty()) { view->requesting_ = false; return; }
-                view->request_id_ = id;
+                const auto result = view->service_->StartSync(peer, view->paths_[0], write, retry_id);
+                view->queued_ = !result.id.empty();
+                view->status_->SetText(Text(view->queued_ ? IDS_CRFILES_SYNC_WAITING : result.error));
+                if (result.id.empty()) {
+                  view->requesting_ = false;
+                  // Do not replace this immediate error with a previous job's
+                  // status on the next timer tick. Keep its ID for a later retry.
+                  view->show_request_error_ = true; return;
+                }
+                view->show_request_error_ = false; view->request_id_ = result.id;
+                view->selected_peer_ = peer; view->cancel_requested_ = false;
                 // Wait for command processing before inspecting the previous
                 // paused snapshot, otherwise a retry immediately unlocks again.
                 base::ThreadPool::PostTaskAndReply(FROM_HERE, {base::MayBlock()}, base::BindOnce(
@@ -141,50 +154,89 @@ class SyncView : public views::View {
               }, view, std::move(peer), write));
         }, weak_.GetWeakPtr(), std::move(peer), write));
   }
+  void PauseRequest(std::string id) {
+    if (id.empty() || id != request_id_) return;
+    cancel_requested_ = true; queued_ = false;
+    const auto sync = service_->sync_service();
+    sync->Pause(id, true); service_->CancelSync(id); Poll(sync);
+    status_->SetText(Text(IDS_CRFILES_SYNC_PAUSED));
+    // Refresh on the timer, after the avatar's click callback has returned.
+  }
   void Refresh() {
     const auto state = service_->GetSnapshot();
-    if (!request_id_.empty()) {
+    int job_status = IDS_CRFILES_SYNC_WAITING;
+    bool stopped = show_request_error_;
+    if (!request_id_.empty() && !show_request_error_) {
       bool found = false;
       // Queue acceptance is not registration or delivery. Follow this exact
       // request so source/database/transport errors cannot look like waiting.
       for (const auto& job : service_->sync_service()->Snapshot()) {
         if (job.id == request_id_ || (job.id.empty() && job.status == IDS_CRFILES_SYNC_STORAGE_ERROR)) {
           found = true;
-          status_->SetText(Text(job.status ? job.status : IDS_CRFILES_SYNC_WAITING));
-          if (!requesting_ && (job.paused || job.removed || job.status == IDS_CRFILES_SYNC_RETRY ||
-              job.status == IDS_CRFILES_SYNC_SOURCE_ERROR || job.status == IDS_CRFILES_SYNC_STORAGE_ERROR)) queued_ = false;
+          job_status = job.status ? job.status : IDS_CRFILES_SYNC_WAITING;
+          stopped = job.paused || job.removed || job.status == IDS_CRFILES_SYNC_RETRY || IsSyncErrorStatus(job.status);
+          if (job.paused || job.removed) cancel_requested_ = false;
+          status_->SetText(Text(job_status));
+          if (!requesting_ && stopped) queued_ = false;
           break;
         }
       }
       if (!found && !requesting_) {
-        queued_ = false; request_id_.clear(); status_->SetText({});
+        queued_ = false; request_id_.clear(); cancel_requested_ = false; status_->SetText({});
       }
     }
+    if (cancel_requested_) status_->SetText(Text(IDS_CRFILES_SYNC_PAUSED));
     if (!state.enabled) status_->SetText(Text(IDS_CRFILES_NEARBY_OFF));
     else if (!queued_ && status_->GetText() == Text(IDS_CRFILES_NEARBY_OFF)) status_->SetText({});
-    std::string key = state.enabled ? "on" : "off";
-    key += queued_ ? "queued" : requesting_ ? "requesting" : "new";
     std::vector<NearbySharing::Peer> peers;
+    bool selected_visible = false;
     for (const auto& peer : state.peers) if (peer.sync_v1 && !peer.phone &&
         peer.identity_expires > base::TimeTicks::Now() && !peer.verified_fingerprint.empty()) {
-      peers.push_back(peer); key += peer.address + peer.verified_fingerprint + peer.name + std::to_string(peer.avatar);
-    }
-    if (key == device_key_) return;
-    device_key_ = key; ClosePopup(); anchors_.clear(); devices_->RemoveAllChildViews();
-    if (peers.empty()) Label(devices_, Text(IDS_CRFILES_SYNC_NO_DEVICES), true);
-    views::View* row = nullptr;
-    for (size_t i = 0; i < peers.size(); ++i) {
-      const auto& peer = peers[i];
-      if (i % 4 == 0) {
-        row = devices_->AddChildView(std::make_unique<views::View>());
-        row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 16));
+      peers.push_back(peer);
+      if (selected_peer_ && peer.verified_fingerprint == selected_peer_->verified_fingerprint) {
+        selected_peer_ = peer; selected_visible = true;
       }
-      auto* button = row->AddChildView(CreateFileShareDeviceButton(
-          base::BindRepeating(&SyncView::Select, weak_.GetWeakPtr(), peer), peer.avatar, base::UTF8ToUTF16(peer.name)));
-      button->SetEnabled(state.enabled && paths_.size() == 1 && !queued_ && !requesting_);
-      anchors_[peer.verified_fingerprint] = button;
     }
-    InvalidateLayout();
+    // Discovery can disappear during a transfer. Keep its selected avatar and
+    // progress visible; StartSync still checks a fresh identity before retrying.
+    if (selected_peer_ && !selected_visible) peers.push_back(*selected_peer_);
+    std::string key;
+    for (const auto& peer : peers)
+      key += peer.verified_fingerprint + "|" + peer.address + "|" + peer.name + "|" + std::to_string(peer.avatar) + "\n";
+    if (key != device_key_ || !devices_initialized_) {
+      devices_initialized_ = true; device_key_ = key;
+      ClosePopup(); anchors_.clear(); devices_->RemoveAllChildViews();
+      if (peers.empty()) Label(devices_, Text(IDS_CRFILES_SYNC_NO_DEVICES), true);
+      views::View* row = nullptr;
+      for (size_t i = 0; i < peers.size(); ++i) {
+        const auto& peer = peers[i];
+        if (i % 4 == 0) {
+          row = devices_->AddChildView(std::make_unique<views::View>());
+          row->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 16));
+        }
+        auto* button = row->AddChildView(CreateFileShareDeviceButton(
+            base::BindRepeating(&SyncView::Select, weak_.GetWeakPtr(), peer), peer.avatar, base::UTF8ToUTF16(peer.name)));
+        anchors_[peer.verified_fingerprint] = button;
+      }
+      InvalidateLayout();
+    }
+    const bool session = !request_id_.empty() && state.syncing && !state.receiving &&
+        state.sync_id == request_id_ && state.busy;
+    const bool active = state.enabled && !stopped && !cancel_requested_ && !request_id_.empty() &&
+        (session || (queued_ && job_status == IDS_CRFILES_SYNC_WAITING));
+    const bool indeterminate = !session || state.stage != NearbySharing::Stage::kTransferring || !state.total;
+    const double progress = session && state.total ? static_cast<double>(state.transferred) / state.total : 0;
+    std::u16string detail(status_->GetText());
+    if (active && session && state.stage == NearbySharing::Stage::kTransferring) {
+      if (!state.current_file.empty()) detail += u"\n" + base::UTF8ToUTF16(state.current_file);
+      detail += u"\n" + ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
+    }
+    for (const auto& [fingerprint, button] : anchors_) {
+      const bool transfer = active && selected_peer_ && fingerprint == selected_peer_->verified_fingerprint;
+      SetFileShareDeviceTransfer(button, transfer, indeterminate, progress,
+          base::BindRepeating(&SyncView::PauseRequest, weak_.GetWeakPtr(), request_id_), detail);
+      button->SetEnabled(state.enabled && paths_.size() == 1 && (transfer || (!queued_ && !requesting_)));
+    }
   }
   std::shared_ptr<NearbySharing> service_;
   std::vector<base::FilePath> paths_;
@@ -195,6 +247,9 @@ class SyncView : public views::View {
   std::unique_ptr<views::BubbleDialogDelegate> popup_delegate_;
   std::unique_ptr<views::Widget> popup_widget_;
   bool queued_ = false, requesting_ = false;
+  bool show_request_error_ = false;
+  bool cancel_requested_ = false, devices_initialized_ = false;
+  std::optional<NearbySharing::Peer> selected_peer_;
   std::string device_key_, request_id_;
   base::RepeatingTimer timer_;
   base::WeakPtrFactory<SyncView> weak_{this};
@@ -270,8 +325,7 @@ class SyncingView : public views::View {
       const bool editable = valid && job.creator && job.permissions_known;
       read->SetEnabled(editable); write->SetEnabled(editable);
       if (!job.permissions_known && valid) Label(text, Text(IDS_CRFILES_SYNC_NO_PERMISSION));
-      if (job.status == IDS_CRFILES_SYNC_SOURCE_ERROR || job.status == IDS_CRFILES_SYNC_STORAGE_ERROR ||
-          job.status == IDS_CRFILES_SYNC_RECOVERY_REQUIRED || job.status == IDS_CRFILES_SYNC_RETRY) {
+      if (IsSyncErrorStatus(job.status) || job.status == IDS_CRFILES_SYNC_RETRY) {
         auto* error = Label(text, status, true); error->SetEnabledColor(ui::kColorSysError);
       }
       if (job.id.empty()) continue;

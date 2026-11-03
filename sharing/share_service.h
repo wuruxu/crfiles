@@ -75,6 +75,9 @@ class ShareService {
     bool receiving = false;
     bool syncing = false;
     bool sync_background = false;
+    std::string sync_id;  // Local UI routing only; identifies this sync's progress.
+    std::string sync_receive_name;
+    bool sync_receive_file = false;
     bool trust_error = false;
     // macOS Quick Share only: explicit recovery for a failed Bluetooth setup.
     bool can_reconnect_bluetooth = false;
@@ -131,6 +134,8 @@ class ShareService {
   virtual void Decide(uint64_t session, Stage prompt, bool accept,
                       bool trust = false, uint64_t conflict_id = 0) = 0;
   virtual void CancelSession(uint64_t session) = 0;
+  // Only a pending incoming sync consent may change its destination parent.
+  virtual bool SetSyncReceiveDirectory(uint64_t session, const base::FilePath& parent);
   virtual bool RetryWithBluetoothReconnect(uint64_t session);
   virtual std::vector<TrustedDevice> GetTrustedDevices() const = 0;
   virtual void ForgetTrustedDevice(std::string fingerprint) = 0;

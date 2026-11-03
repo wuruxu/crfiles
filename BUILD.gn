@@ -177,6 +177,8 @@ crfiles_sources = [
   "crfiles_tags_view.h",
   "crfiles_image_preview.cc",
   "crfiles_image_preview.h",
+  "crfiles_image_viewer.cc",
+  "crfiles_image_viewer.h",
   "crfiles_main.cc",
   "crfiles_process_singleton.cc",
   "crfiles_process_singleton.h",

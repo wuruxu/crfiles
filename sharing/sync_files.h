@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <cstdint>
 #include <string>
 #include "base/files/file.h"
@@ -29,6 +30,11 @@ class SyncFiles {
   SyncFiles(base::FilePath root, std::string id, std::function<bool()> canceled);
   ~SyncFiles();
   bool Open();
+  // Check the original name (and a single file's conflict-copy namespace).
+  // nullopt means the parent could not be inspected.
+  std::optional<bool> ReceiveNameAvailable(const std::string& name, bool single_file);
+  // Create a new child directory; an existing item is always an error.
+  bool CreateReceiveDirectory(const std::string& name);
   std::string Identity() const;
   bool Scan(const std::string& single_file, std::map<std::string, SyncContent>* files);
   bool Read(const std::string& path, SyncContent* content);
