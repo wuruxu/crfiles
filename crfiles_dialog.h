@@ -30,8 +30,11 @@ std::unique_ptr<views::Widget> CreateCrFilesBubble(
 
 // Owns the delegate and its widget until the dialog closes, including when
 // the native window is closed by its parent.
+// Optional screen bounds are applied before showing, subject to minimum size
+// and available work area. Empty bounds retain the delegate's preferred size.
 void ShowCrFilesDialog(std::unique_ptr<views::DialogDelegate> delegate,
-                       views::Widget* parent);
+                       views::Widget* parent,
+                       const gfx::Rect& initial_bounds = {});
 
 }  // namespace crfiles
 

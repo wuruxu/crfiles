@@ -134,9 +134,18 @@ std::unique_ptr<views::Widget> CreateCrFilesBubble(
 }
 
 void ShowCrFilesDialog(std::unique_ptr<views::DialogDelegate> delegate,
-                       views::Widget* parent) {
+                       views::Widget* parent,
+                       const gfx::Rect& initial_bounds) {
   auto owner = std::make_unique<DialogOwner>(std::move(delegate), parent);
   auto* widget = owner->widget();
+  if (!initial_bounds.IsEmpty()) {
+    const auto minimum = widget->GetMinimumSize();
+    const gfx::Size size(std::max(initial_bounds.width(), minimum.width()),
+                         std::max(initial_bounds.height(), minimum.height()));
+    const auto center = initial_bounds.CenterPoint();
+    widget->SetBoundsConstrained(gfx::Rect(center.x() - size.width() / 2,
+        center.y() - size.height() / 2, size.width(), size.height()));
+  }
   std::erase_if(Dialogs(), [](const auto& dialog) { return !dialog.widget; });
   Dialogs().push_back({widget->GetWeakPtr(), parent->GetWeakPtr()});
   // Close moves this callback out of the widget before invoking it. Releasing

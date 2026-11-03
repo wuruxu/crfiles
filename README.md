@@ -216,8 +216,12 @@ controls, menu, SVG renderer, themes and Viz compositor.
   to open it. Images, including SVG, open in an in-app preview; other files open
   through the operating system. Open also opens a single selected item.
   The image preview is a resizable dialog modal to its parent window. Its window
+  initially uses 0.9 of the parent's width and height, centered over the parent
+  and constrained by minimum size and the display work area. The window
   title shows the current image's containing folder path, without the filename;
-  the centered toolbar label shows the filename and position in the image list.
+  the toolbar shows the filename followed by an 8 DIP gap and the external-open
+  button on the left, centered previous/next buttons, and the image position on
+  the right. Long filenames elide without shifting the centered navigation.
   The custom title bar is draggable and supports the platform's configured
   double-click action (normally maximize/restore on Linux and Windows). macOS
   window-modal dialogs are sheets, so ordinary window zoom behavior is not
@@ -231,7 +235,10 @@ controls, menu, SVG renderer, themes and Viz compositor.
   follows the window size. There is no bottom status text; loading and errors
   appear in the image area. Left/Right or the toolbar arrows switch between images
   from the same directory in the current filtered list order, captured when the
-  window opens. Home or 0 resets the view, +/− zoom, and Esc closes the window.
+  window opens. Home or 0 resets the view and +/− zoom. F toggles native fullscreen;
+  Q or Esc exits fullscreen. Outside fullscreen, Q does nothing and Esc closes
+  the viewer. Native fullscreen availability also depends on the platform's
+  modal-window support, particularly macOS sheets.
   Images load asynchronously; switching or closing cancels obsolete requests.
   The preview uses 6 DIP outer padding and a 4 DIP toolbar gap. Switching images
   fades the old image out over 120 ms and the new image in over 160 ms; decoding

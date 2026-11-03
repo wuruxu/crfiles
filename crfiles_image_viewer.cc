@@ -45,8 +45,10 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/table_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -206,16 +208,27 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
     auto* toolbar = AddChildView(std::make_unique<views::View>());
     auto* columns = toolbar->SetLayoutManager(std::make_unique<views::TableLayout>());
     columns->AddColumn(views::LayoutAlignment::kStretch, views::LayoutAlignment::kCenter,
-        0.f, views::TableLayout::ColumnSize::kUsePreferred, 0, 0);
+        1.f, views::TableLayout::ColumnSize::kFixed, 0, 0);
     columns->AddPaddingColumn(0.f, 4);
     columns->AddColumn(views::LayoutAlignment::kStretch, views::LayoutAlignment::kCenter,
-        1.f, views::TableLayout::ColumnSize::kUsePreferred, 0, 0);
+        0.f, views::TableLayout::ColumnSize::kUsePreferred, 0, 0);
     columns->AddPaddingColumn(0.f, 4);
     columns->AddColumn(views::LayoutAlignment::kEnd, views::LayoutAlignment::kCenter,
-        0.f, views::TableLayout::ColumnSize::kUsePreferred, 0, 0);
-    // Keep the title centered in the window even with different button counts.
+        1.f, views::TableLayout::ColumnSize::kFixed, 0, 0);
+    // Equal side columns keep navigation centered regardless of filename length.
     columns->LinkColumnSizes({0, 4});
     columns->AddRows(1, 0.f);
+    auto* file = toolbar->AddChildView(std::make_unique<views::View>());
+    file->SetLayoutManager(std::make_unique<views::FlexLayout>())
+        ->SetOrientation(views::LayoutOrientation::kHorizontal)
+        .SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
+    title_ = file->AddChildView(std::make_unique<views::Label>());
+    title_->SetHorizontalAlignment(gfx::ALIGN_LEFT); title_->SetElideBehavior(gfx::ELIDE_MIDDLE);
+    title_->SetProperty(views::kFlexBehaviorKey, views::FlexSpecification(
+        views::MinimumFlexSizeRule::kScaleToZero, views::MaximumFlexSizeRule::kPreferred));
+    external_ = Button(file, kOpenInNewIcon, IDS_CRFILES_IMAGE_OPEN_SYSTEM,
+        base::BindRepeating(&ImageViewer::OpenSystem, weak_.GetWeakPtr()));
+    external_->SetProperty(views::kMarginsKey, gfx::Insets::TLBR(0, 8, 0, 0));
     auto* navigation = toolbar->AddChildView(std::make_unique<views::View>());
     auto* buttons = navigation->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
@@ -224,10 +237,8 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
         base::BindRepeating(&ImageViewer::Step, weak_.GetWeakPtr(), -1));
     next_ = Button(navigation, kKeyboardArrowRightIcon, IDS_CRFILES_IMAGE_NEXT,
         base::BindRepeating(&ImageViewer::Step, weak_.GetWeakPtr(), 1));
-    title_ = toolbar->AddChildView(std::make_unique<views::Label>());
-    title_->SetHorizontalAlignment(gfx::ALIGN_CENTER); title_->SetElideBehavior(gfx::ELIDE_MIDDLE);
-    external_ = Button(toolbar, kOpenInNewIcon, IDS_CRFILES_IMAGE_OPEN_SYSTEM,
-        base::BindRepeating(&ImageViewer::OpenSystem, weak_.GetWeakPtr()));
+    position_ = toolbar->AddChildView(std::make_unique<views::Label>());
+    position_->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
     auto* surface = AddChildView(std::make_unique<views::View>());
     surface->SetLayoutManager(std::make_unique<views::FillLayout>());
     canvas_ = surface->AddChildView(std::make_unique<ImageCanvas>());
@@ -235,7 +246,7 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
     status_->SetMultiLine(true); status_->SetCanProcessEventsWithinSubtree(false);
     layout->SetFlexForView(surface, 1);
     SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
-    for (auto key : {ui::VKEY_LEFT, ui::VKEY_RIGHT, ui::VKEY_ESCAPE, ui::VKEY_HOME,
+    for (auto key : {ui::VKEY_LEFT, ui::VKEY_RIGHT, ui::VKEY_ESCAPE, ui::VKEY_F, ui::VKEY_Q, ui::VKEY_HOME,
                     ui::VKEY_OEM_PLUS, ui::VKEY_ADD, ui::VKEY_OEM_MINUS, ui::VKEY_SUBTRACT, ui::VKEY_0})
       AddAccelerator(ui::Accelerator(key, ui::EF_NONE));
     AddAccelerator(ui::Accelerator(ui::VKEY_OEM_PLUS, ui::EF_SHIFT_DOWN));
@@ -245,6 +256,20 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
   }
   ~ImageViewer() override;
   views::View* focus_view() const { return canvas_; }
+  void HandleEscape() {
+    if (!GetWidget() || GetWidget()->IsClosed()) return;
+    if (GetWidget()->IsFullscreen()) { GetWidget()->SetFullscreen(false); return; }
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+        base::BindOnce([](base::WeakPtr<views::Widget> widget) {
+          if (widget && !widget->IsClosed()) widget->Close();
+        }, GetWidget()->GetWeakPtr()));
+  }
+  base::RepeatingCallback<bool()> EscapeCallback() {
+    return base::BindRepeating([](base::WeakPtr<ImageViewer> viewer) {
+      if (viewer) viewer->HandleEscape();
+      return false;
+    }, weak_.GetWeakPtr());
+  }
   gfx::Size GetMinimumSize() const override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   void AnimationProgressed(const gfx::Animation* animation) override;
@@ -305,8 +330,8 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
     if (fading_out_) StartFade(0.f);
     else FinishFadeOut();
     previous_->SetEnabled(index_ > 0); next_->SetEnabled(index_ + 1 < paths_.size());
-    title_->SetText(paths_[index_].BaseName().AsUTF16Unsafe() + u"  ·  " +
-        base::NumberToString16(index_ + 1) + u" / " + base::NumberToString16(paths_.size()));
+    title_->SetText(paths_[index_].BaseName().AsUTF16Unsafe());
+    position_->SetText(base::NumberToString16(index_ + 1) + u" / " + base::NumberToString16(paths_.size()));
     title_->SetTooltipText(paths_[index_].AsUTF16Unsafe());
     if (GetWidget()) {
       GetWidget()->widget_delegate()->SetTitle(paths_[index_].DirName().AsUTF16Unsafe());
@@ -339,7 +364,7 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
   size_t index_ = 0;
   uint64_t generation_ = 0;
   raw_ptr<ImageCanvas> canvas_ = nullptr;
-  raw_ptr<views::Label> title_ = nullptr, status_ = nullptr;
+  raw_ptr<views::Label> title_ = nullptr, position_ = nullptr, status_ = nullptr;
   raw_ptr<views::ImageButton> previous_ = nullptr, next_ = nullptr;
   raw_ptr<views::ImageButton> external_ = nullptr;
   std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);
@@ -370,9 +395,14 @@ bool ImageViewer::AcceleratorPressed(const ui::Accelerator& accelerator) {
     case ui::VKEY_HOME: case ui::VKEY_0: Fit(); break;
     case ui::VKEY_OEM_PLUS: case ui::VKEY_ADD: Zoom(1.2f); break;
     case ui::VKEY_OEM_MINUS: case ui::VKEY_SUBTRACT: Zoom(1.f / 1.2f); break;
+    case ui::VKEY_F:
+      if (GetWidget()) GetWidget()->SetFullscreen(!GetWidget()->IsFullscreen());
+      break;
+    case ui::VKEY_Q:
+      if (GetWidget() && GetWidget()->IsFullscreen()) GetWidget()->SetFullscreen(false);
+      break;
     case ui::VKEY_ESCAPE:
-      if (GetWidget()) base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-          base::BindOnce([](base::WeakPtr<views::Widget> widget) { if (widget) widget->Close(); }, GetWidget()->GetWeakPtr()));
+      HandleEscape();
       break;
     default: return false;
   }
@@ -406,12 +436,25 @@ void ShowCrFilesImageViewer(views::Widget* parent, std::vector<base::FilePath> p
   dialog->SetModalType(ui::mojom::ModalType::kWindow);
   dialog->set_draggable(true);
   dialog->SetCanResize(true); dialog->SetCanMaximize(true); dialog->SetShowCloseButton(true);
+  dialog->SetCanFullscreen(true);
   auto viewer = std::make_unique<ImageViewer>(std::move(paths), index);
   dialog->SetInitiallyFocusedView(viewer->focus_view());
+  // DialogClientView also owns an Esc accelerator; route both paths through
+  // the viewer so Escape exits fullscreen before it can close the dialog.
+  dialog->set_esc_should_cancel_dialog_override(true);
+  dialog->SetCancelCallbackWithClose(viewer->EscapeCallback());
+  const auto parent_bounds = parent->GetWindowBoundsInScreen();
   const auto work_area = display::Screen::Get()->GetDisplayNearestWindow(parent->GetNativeWindow()).work_area();
-  viewer->SetPreferredSize(gfx::Size(std::clamp(work_area.width() - 80, 360, 900),
-      std::clamp(work_area.height() - 120, 240, 640)));
+  const gfx::Size size(std::min(work_area.width(), std::max(360,
+      static_cast<int>(std::round(parent_bounds.width() * 0.828)))),
+      std::min(work_area.height(), std::max(320,
+      static_cast<int>(std::round(parent_bounds.height() * 0.828)))));
+  const auto center = parent_bounds.CenterPoint();
+  gfx::Rect bounds(center.x() - size.width() / 2, center.y() - size.height() / 2,
+      size.width(), size.height());
+  bounds.AdjustToFit(work_area);
+  viewer->SetPreferredSize(size);
   dialog->SetContentsView(std::move(viewer));
-  ShowCrFilesDialog(std::move(dialog), parent);
+  ShowCrFilesDialog(std::move(dialog), parent, bounds);
 }
 }  // namespace crfiles
