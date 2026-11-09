@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license in LICENSE.
 #include "crFiles/crfiles_file_access.h"
+#include "crFiles/single_button_row_layout.h"
 #if BUILDFLAG(IS_MAC)
 #include "crFiles/crfiles_mac.h"
 #endif
@@ -736,8 +737,8 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     scroll->SetContents(std::move(host));
     auto* footer = right->AddChildView(std::make_unique<views::View>());
     footer->SetPreferredSize(gfx::Size(0, 52));
-    auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(8, 16), 8));
+    auto* footer_layout = footer->SetLayoutManager(std::make_unique<SingleButtonRowLayout>(gfx::Insets::VH(8, 16), 8));
+    footer_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kEnd);
     error_ = Label(footer, Text(IDS_CRFILES_CONFIG_ERROR)); error_->SetVisible(false);
     auto* spacer = footer->AddChildView(std::make_unique<views::View>()); footer_layout->SetFlexForView(spacer, 1);
     footer->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&Settings::Close, base::Unretained(this)), Text(IDS_CRFILES_CLOSE)));
@@ -1522,7 +1523,7 @@ class About : public views::DialogDelegate {
     auto* bottom = contents->AddChildView(std::make_unique<views::View>()); layout->SetFlexForView(bottom, 1);
     contents->AddChildView(std::make_unique<views::Separator>());
     auto* footer = contents->AddChildView(std::make_unique<views::View>());
-    auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(12, 0)));
+    auto* footer_layout = footer->SetLayoutManager(std::make_unique<SingleButtonRowLayout>(gfx::Insets::VH(12, 0)));
     footer_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
     footer->AddChildView(std::make_unique<views::MdTextButton>(base::BindRepeating(&About::Close, base::Unretained(this)), Text(IDS_CRFILES_CLOSE)));
     SetContentsView(std::move(contents));

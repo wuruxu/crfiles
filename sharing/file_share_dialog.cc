@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/sharing/file_share_dialog.h"
+#include "crFiles/single_button_row_layout.h"
 #include "crFiles/crfiles_dialog.h"
 #include "crFiles/crfiles_file_access.h"
 #include <algorithm>
@@ -574,7 +575,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     }
     auto* actions = contents->AddChildView(std::make_unique<views::View>());
     actions->SetVisible(!code_notice);
-    auto* layout = actions->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+    auto* layout = actions->SetLayoutManager(std::make_unique<SingleButtonRowLayout>(gfx::Insets(), 8));
     layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
     if (transfer) {
       cancel_ = actions->AddChildView(std::make_unique<CountdownCloseButton>(
@@ -1365,7 +1366,15 @@ class FileShareView : public views::View, public ui::EventObserver {
     else if (state.stage == Stage::kError) message = IDS_CRFILES_TRANSFER_ERROR;
     else if (state.stage == Stage::kCanceled) message = IDS_CRFILES_CANCELED;
     else if (state.busy) message = IDS_CRFILES_TRANSFERRING;
-    status_->SetText(Text(send_error_ && !state.busy ? IDS_CRFILES_SEND_ERROR : message));
+    const int displayed_message = send_error_ && !state.busy ? IDS_CRFILES_SEND_ERROR : message;
+    const bool wrap_status = displayed_message == IDS_CRFILES_QS_ERROR_BLUETOOTH_IN_USE;
+    if (status_->GetMultiLine() != wrap_status) {
+      if (wrap_status) status_->SetElideBehavior(gfx::NO_ELIDE);
+      status_->SetMultiLine(wrap_status);
+      if (!wrap_status) status_->SetElideBehavior(gfx::ELIDE_MIDDLE);
+      static_cast<views::BoxLayout*>(status_row_->GetLayoutManager())->SetFlexForView(status_, wrap_status ? 1 : 0);
+    }
+    status_->SetText(Text(displayed_message));
     bool show_status = message != IDS_CRFILES_NEARBY_READY || (send_error_ && !state.busy);
 #if BUILDFLAG(IS_MAC)
     // Use the multiline discovery hint instead of duplicating the generic error.

@@ -44,6 +44,7 @@ class DialogOwner {
   DialogOwner(std::unique_ptr<views::DialogDelegate> delegate,
               views::Widget* parent)
       : delegate_(std::move(delegate)) {
+    delegate_->SetSingleButtonWidthRatio(0.182);
     delegate_->SetOwnershipOfNewWidget(
         views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     widget_.reset(views::DialogDelegate::CreateDialogWidget(
@@ -113,6 +114,7 @@ void CloseCrFilesDialogs() {
 std::unique_ptr<views::Widget> CreateCrFilesBubble(
     views::BubbleDialogDelegate* delegate,
     views::Widget::ClosedCallback close) {
+  delegate->SetSingleButtonWidthRatio(0.182);
   auto lifetime = std::make_shared<base::WeakPtr<views::Widget>>();
   auto widget = views::BubbleDialogDelegate::CreateBubble(
       delegate, base::BindOnce(

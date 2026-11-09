@@ -111,14 +111,8 @@ def make_poster(version):
         family_svg.append(icon(path, name, x - 38, y, 76))
         family_svg.append(f'<text x="{x}" y="{y + 102}" class="family">{name}</text>')
 
-    # Reuse the bundled browser mark geometry with Chrome's color palette.
     chrome_badge = icon("chrome/app/theme/chromium/product_logo.svg",
-                        "chrome-badge", 681, 248, 80)
-    for chromium_color, chrome_color in (("#669DF6", "#34A853"),
-                                         ("#AECBFA", "#FBBC05"),
-                                         ("#1967D2", "#EA4335"),
-                                         ("#1A73E8", "#4285F4")):
-        chrome_badge = chrome_badge.replace(chromium_color, chrome_color)
+                        "chromium-badge", 681, 248, 80)
 
     return TEMPLATE.replace("{{VERSION}}", version).replace(
         "{{PARTICLES}}", "\n".join(particles)).replace(
@@ -196,7 +190,7 @@ TEMPLATE = '''<?xml version="1.0" encoding="UTF-8"?>
   <circle cx="224" cy="588" r="4" fill="#86f8da"/>
   <circle cx="856" cy="318" r="3" fill="#88b7ff"/>
   {{ICON}}
-  <g id="chrome-superscript" opacity=".24" aria-label="Chrome">
+  <g id="chromium-superscript" opacity=".288" aria-label="Chromium">
     {{CHROME_BADGE}}
   </g>
   <text x="540" y="778" text-anchor="middle" font-size="132" font-weight="700" letter-spacing="-7">crFiles</text>

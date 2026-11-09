@@ -169,6 +169,7 @@ class QuickShareAdapter final : public ShareService {
         result.stage = Stage::kError;
         switch (source.failure) {
           case crquickshare::Failure::kConnection: result.status_message_id = IDS_CRFILES_QS_ERROR_CONNECTION; break;
+          case crquickshare::Failure::kBluetoothServiceInUse: result.status_message_id = IDS_CRFILES_QS_ERROR_BLUETOOTH_IN_USE; break;
           case crquickshare::Failure::kNetwork: result.status_message_id = IDS_CRFILES_QS_ERROR_NETWORK; break;
           case crquickshare::Failure::kStorage: result.status_message_id = IDS_CRFILES_QS_ERROR_STORAGE; break;
           case crquickshare::Failure::kSourceFile: result.status_message_id = IDS_CRFILES_QS_ERROR_SOURCE; break;

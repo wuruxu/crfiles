@@ -229,6 +229,8 @@ crfiles_sources = [
   "sharing/phone_sender.h",
   "sharing/share_bubble_anchor.cc",
   "sharing/share_bubble_anchor.h",
+  "single_button_row_layout.cc",
+  "single_button_row_layout.h",
   "third_party/libde265/de265.h",
   "third_party/libheif/heif.h",
   "third_party/libheif/heif_version.h",

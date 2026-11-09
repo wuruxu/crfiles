@@ -379,6 +379,7 @@
       <message name="IDS_CRFILES_QS_TYPE_FOLDABLE" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">Foldable device</message>
       <message name="IDS_CRFILES_QS_TYPE_XR" meaning="Quick Share device type" desc="Device type shown below a Quick Share device name.">XR device</message>
       <message name="IDS_CRFILES_QS_ERROR_CONNECTION" meaning="Quick Share diagnostics" desc="Quick Share error or diagnostics action.">Could not connect to the device.</message>
+      <message name="IDS_CRFILES_QS_ERROR_BLUETOOTH_IN_USE" meaning="Quick Share diagnostics" desc="Quick Share send failure: the local Bluetooth service UUID is already registered.">The Quick Share Bluetooth service is already in use.</message>
       <message name="IDS_CRFILES_QS_RECONNECT_BLUETOOTH_RETRY" desc="macOS Quick Share button shown after Bluetooth connection setup fails.">Reconnect and retry</message>
       <message name="IDS_CRFILES_QS_RECONNECT_BLUETOOTH_HINT" desc="Explains the effect of the macOS Quick Share Bluetooth recovery button.">This briefly disconnects other Bluetooth services on this device.</message>
       <message name="IDS_CRFILES_QS_RECONNECTING_BLUETOOTH" desc="macOS Quick Share status while restoring Bluetooth before retrying a file transfer.">Reconnecting Bluetooth…</message>

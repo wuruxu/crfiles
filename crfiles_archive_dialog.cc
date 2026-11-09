@@ -1,5 +1,6 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_archive_dialog.h"
+#include "crFiles/single_button_row_layout.h"
 #include "crFiles/crfiles_dialog.h"
 #include "crFiles/crfiles_archive.h"
 #include "crFiles/grit/crfiles_strings.h"
@@ -397,8 +398,7 @@ ArchiveDialog::ArchiveDialog(views::View* anchor, base::FilePath archive, base::
     conflict_controls_->AddChildView(std::make_unique<views::Separator>());
     auto* cancel_row = conflict_controls_->AddChildView(std::make_unique<views::View>());
     cancel_row->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(12, 0, 0, 0)));
-    auto* cancel_layout = cancel_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal));
+    auto* cancel_layout = cancel_row->SetLayoutManager(std::make_unique<SingleButtonRowLayout>());
     cancel_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
     auto* cancel_button = cancel_row->AddChildView(std::make_unique<views::MdTextButton>(
         base::BindRepeating(&ArchiveDialog::ResolveConflict, weak_.GetWeakPtr(), ArchiveConflictChoice::kCancel),

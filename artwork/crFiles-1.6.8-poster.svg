@@ -381,8 +381,8 @@
   
   <rect x="77.5" y="33.5" width="357" height="435" rx="44.5" ry="44.5" fill="none" stroke="#FFFFFF" stroke-width="2.5" opacity="0.6" />
 </svg>
-  <g id="chrome-superscript" opacity=".24" aria-label="Chrome">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" x="681" y="248" width="80" height="80"><g clip-path="url(#chrome-badge-a)"><path d="M128 191.995c35.346 0 64-28.654 64-64 0-35.347-28.654-64-64-64-35.346 0-64 28.654-64 64 0 35.346 28.654 64 64 64Z" fill="#fff" /><path d="M96.01 183.41a63.681 63.681 0 0 1-23.42-23.43l-.007.004-55.425-96a128.027 128.027 0 0 0 110.841 192.018l55.436-96.018a63.985 63.985 0 0 1-16.465 18.775 64.007 64.007 0 0 1-70.96 4.651Z" fill="#34A853" /><path d="M191.991 127.984a63.683 63.683 0 0 1-8.581 31.996l.007.004-55.426 96a128.029 128.029 0 0 0 110.872-192H127.991a64 64 0 0 1 64 64Z" fill="#FBBC05" /><path d="M128 180c28.719 0 52-23.281 52-52s-23.281-52-52-52-52 23.281-52 52 23.281 52 52 52Z" fill="#4285F4" /><path d="M95.99 72.59a63.684 63.684 0 0 1 32.001-8.566v-.008h110.851A128.035 128.035 0 0 0 127.991.026 128.028 128.028 0 0 0 17.13 63.999l55.436 96.018a64.003 64.003 0 0 1 4.65-70.961A64 64 0 0 1 95.991 72.59Z" fill="#EA4335" /></g><defs><clipPath id="chrome-badge-a"><path fill="#fff" d="M0 0h256v256H0z" /></clipPath></defs></svg>
+  <g id="chromium-superscript" opacity=".288" aria-label="Chromium">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" x="681" y="248" width="80" height="80"><g clip-path="url(#chromium-badge-a)"><path d="M128 191.995c35.346 0 64-28.654 64-64 0-35.347-28.654-64-64-64-35.346 0-64 28.654-64 64 0 35.346 28.654 64 64 64Z" fill="#fff" /><path d="M96.01 183.41a63.681 63.681 0 0 1-23.42-23.43l-.007.004-55.425-96a128.027 128.027 0 0 0 110.841 192.018l55.436-96.018a63.985 63.985 0 0 1-16.465 18.775 64.007 64.007 0 0 1-70.96 4.651Z" fill="#669DF6" /><path d="M191.991 127.984a63.683 63.683 0 0 1-8.581 31.996l.007.004-55.426 96a128.029 128.029 0 0 0 110.872-192H127.991a64 64 0 0 1 64 64Z" fill="#AECBFA" /><path d="M128 180c28.719 0 52-23.281 52-52s-23.281-52-52-52-52 23.281-52 52 23.281 52 52 52Z" fill="#1A73E8" /><path d="M95.99 72.59a63.684 63.684 0 0 1 32.001-8.566v-.008h110.851A128.035 128.035 0 0 0 127.991.026 128.028 128.028 0 0 0 17.13 63.999l55.436 96.018a64.003 64.003 0 0 1 4.65-70.961A64 64 0 0 1 95.991 72.59Z" fill="#1967D2" /></g><defs><clipPath id="chromium-badge-a"><path fill="#fff" d="M0 0h256v256H0z" /></clipPath></defs></svg>
   </g>
   <text x="540" y="778" text-anchor="middle" font-size="132" font-weight="700" letter-spacing="-7">crFiles</text>
   <text id="release-version" x="540" y="868" text-anchor="middle" font-size="54" letter-spacing="-1"><tspan fill="#7cf4dc">1.6.8</tspan><tspan dx="16" fill="#c8d8e7">released</tspan></text>
@@ -842,6 +842,16 @@
     <linearGradient id="crDesk-signal" x1="44" y1="76" x2="468" y2="438" gradientUnits="userSpaceOnUse">
       <stop stop-color="#5B9AFF" /><stop offset="0.45" stop-color="#4285F4" /><stop offset="1" stop-color="#0284C7" />
     </linearGradient>
+    <linearGradient id="crDesk-chromeFrame" x1="44" y1="76" x2="468" y2="372" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EA4335" />
+      <stop offset="0.48" stop-color="#FBBC05" />
+      <stop offset="1" stop-color="#34A853" />
+    </linearGradient>
+    <linearGradient id="crDesk-pointerGloss" x1="330" y1="286" x2="445" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#46505D" />
+      <stop offset="0.3" stop-color="#202833" />
+      <stop offset="1" stop-color="#080B10" />
+    </linearGradient>
     <linearGradient id="crDesk-reflection" x1="174" y1="168" x2="336" y2="280" gradientUnits="userSpaceOnUse">
       <stop stop-color="#8EC5FF" /><stop offset="1" stop-color="#4285F4" />
     </linearGradient>
@@ -852,12 +862,13 @@
     </linearGradient>
   </defs>
   
-  <path d="M256 372V431M194 438H318" stroke="url(#crDesk-signal)" stroke-width="22" stroke-linecap="round" />
-  <rect x="44" y="76" width="424" height="296" rx="28" fill="none" stroke="url(#crDesk-signal)" stroke-width="24" />
+  <path d="M256 372V431M194 438H318" stroke="url(#crDesk-chromeFrame)" stroke-width="22" stroke-linecap="round" />
+  <rect x="44" y="76" width="424" height="296" rx="28" fill="none" stroke="url(#crDesk-chromeFrame)" stroke-width="24" />
   
   <path d="M174 248L210 185M224 280L288 168M300 248L336 185" stroke="url(#crDesk-reflection)" stroke-width="16" stroke-linecap="round" opacity="0.8" />
   
-  <path d="M330 286L354 414L382 385L411 426Q415 433 422 428L443 413Q450 409 445 402L408 353L451 339Z" fill="url(#crDesk-pointerFill)" stroke="#EEF8FF" stroke-width="6" stroke-linejoin="round" />
+  <path d="M330 286L354 414L382 385L411 426Q415 433 422 428L443 413Q450 409 445 402L408 353L451 339Z" fill="url(#crDesk-pointerGloss)" stroke="#EEF8FF" stroke-width="6" stroke-linejoin="round" />
+  <path d="M338 300L357 397L379 374" fill="none" stroke="#E7EDF5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />
 </svg>
 <text x="450.0" y="2311" class="family">crDesk</text>
 <svg xmlns="http://www.w3.org/2000/svg" width="76" height="76" viewBox="0 0 512 512" role="img" aria-labelledby="crPlayer-title crPlayer-desc" x="592.0" y="2209">

@@ -1582,9 +1582,67 @@ std::string Advertisement(const State& state, uint16_t port,
   return out;
 }
 
+#if BUILDFLAG(IS_WIN)
+class DiscoveryNetworkChanges {
+ public:
+  DiscoveryNetworkChanges();
+  ~DiscoveryNetworkChanges();
+  bool TakeChanged();
+
+ private:
+  static void WINAPI InterfaceChanged(void* context, MIB_IPINTERFACE_ROW*,
+                                      MIB_NOTIFICATION_TYPE);
+  static void WINAPI AddressChanged(void* context, MIB_UNICASTIPADDRESS_ROW*,
+                                    MIB_NOTIFICATION_TYPE);
+
+  std::atomic<bool> changed_{false};
+  HANDLE interface_notification_ = nullptr;
+  HANDLE address_notification_ = nullptr;
+};
+
+DiscoveryNetworkChanges::DiscoveryNetworkChanges() {
+  const auto interface_error = NotifyIpInterfaceChange(
+      AF_INET, &InterfaceChanged, this, FALSE, &interface_notification_);
+  const auto address_error = NotifyUnicastIpAddressChange(
+      AF_INET, &AddressChanged, this, FALSE, &address_notification_);
+  if (interface_error != NO_ERROR || address_error != NO_ERROR) {
+    LOG(WARNING) << "crFiles Windows nearby discovery network notification failed; interface_error="
+                 << interface_error << "; address_error=" << address_error;
+  } else {
+    LOG(INFO) << "crFiles Windows nearby discovery network notifications ready";
+  }
+}
+
+DiscoveryNetworkChanges::~DiscoveryNetworkChanges() {
+  // Cancellation waits for callbacks. They only set an atomic flag and never
+  // wait for this discovery worker or access its socket.
+  if (interface_notification_) CancelMibChangeNotify2(interface_notification_);
+  if (address_notification_) CancelMibChangeNotify2(address_notification_);
+}
+
+bool DiscoveryNetworkChanges::TakeChanged() {
+  return changed_.exchange(false, std::memory_order_relaxed);
+}
+
+void WINAPI DiscoveryNetworkChanges::InterfaceChanged(
+    void* context, MIB_IPINTERFACE_ROW*, MIB_NOTIFICATION_TYPE) {
+  static_cast<DiscoveryNetworkChanges*>(context)->changed_.store(
+      true, std::memory_order_relaxed);
+}
+
+void WINAPI DiscoveryNetworkChanges::AddressChanged(
+    void* context, MIB_UNICASTIPADDRESS_ROW*, MIB_NOTIFICATION_TYPE) {
+  static_cast<DiscoveryNetworkChanges*>(context)->changed_.store(
+      true, std::memory_order_relaxed);
+}
+#endif
+
 ScopedSocket CreateDiscoverySocket() {
   auto socket_fd = CreateSocket(SOCK_DGRAM);
-  if (!socket_fd.is_valid()) return {};
+  if (!socket_fd.is_valid()) {
+    LOG(ERROR) << "Could not create nearby discovery socket: " << SocketError();
+    return {};
+  }
   const int one = 1;
 #if BUILDFLAG(IS_MAC)
   const unsigned char ttl = 255;
@@ -1615,8 +1673,11 @@ ScopedSocket CreateDiscoverySocket() {
 
 void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   base::ScopedBlockingCall blocking(FROM_HERE, base::BlockingType::WILL_BLOCK);
+#if BUILDFLAG(IS_WIN)
+  DiscoveryNetworkChanges network_changes;
+#endif
   auto socket_fd = CreateDiscoverySocket();
-#if !BUILDFLAG(IS_MAC)
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
   if (!socket_fd.is_valid()) return;
 #endif
   sockaddr_in multicast{};
@@ -1691,18 +1752,24 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   std::map<std::string, Seen> seen;
   base::TimeTicks last_sent;
   base::TimeTicks last_response;
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   int failed_cycles = 0;
   auto retry_delay = base::Seconds(5);
-  bool recreate_socket = false;
-  bool probe_required = true;
-  bool awaiting_peer_response = false;
   bool receive_failed = false;
   auto receive_failure = [&](int error) {
     if (!receive_failed)
-      LOG(WARNING) << "crFiles macOS nearby discovery receive failed; error=" << error;
+      LOG(WARNING) << "crFiles nearby discovery receive failed; error=" << error;
     receive_failed = true;
   };
+#endif
+#if BUILDFLAG(IS_WIN)
+  base::TimeTicks network_change_due;
+  base::TimeTicks next_socket_retry;
+#endif
+#if BUILDFLAG(IS_MAC)
+  bool recreate_socket = false;
+  bool probe_required = true;
+  bool awaiting_peer_response = false;
   // A successful send validates the local path, not the presence of a peer.
   // Do not keep an error visible merely because no other device is advertising.
   auto probe = [&] {
@@ -1724,6 +1791,37 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
   std::array<uint8_t, 4096> buffer;
   while (!state->stop) {
     const auto now = base::TimeTicks::Now();
+#if BUILDFLAG(IS_WIN)
+    if (network_changes.TakeChanged() && network_change_due.is_null()) {
+      // Coalesce interface/address notifications without letting a stream of
+      // notifications postpone recovery indefinitely. IP equality is not enough
+      // to detect a disconnect followed by reconnecting to the same network.
+      network_change_due = now + base::Milliseconds(500);
+    }
+    const bool network_changed =
+        !network_change_due.is_null() && now >= network_change_due;
+    if (network_changed ||
+        (!next_socket_retry.is_null() && now >= next_socket_retry)) {
+      socket_fd.reset();
+      socket_fd = CreateDiscoverySocket();
+      interfaces.clear();
+      join_failures.clear();
+      send_failures.clear();
+      receive_failed = false;
+      last_response = {};
+      last_sent = now - base::Seconds(5);
+      next_socket_retry = {};
+      if (network_changed) {
+        network_change_due = {};
+        failed_cycles = 0;
+        retry_delay = base::Seconds(5);
+      }
+      // Keep existing peer expiry times and all file-transfer sockets intact.
+      LOG(INFO) << "crFiles Windows nearby discovery socket rebuilt; reason="
+                << (network_changed ? "network_change" : "socket_failure")
+                << "; ready=" << socket_fd.is_valid();
+    }
+#endif
 #if BUILDFLAG(IS_MAC)
     if (now - last_sent >= retry_delay) {
       if (recreate_socket) {
@@ -1749,8 +1847,36 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
       // without restarting healthy interfaces or discarding unexpired peers.
       if (socket_fd.is_valid()) refresh_interfaces();
       bool published = socket_fd.is_valid() && publish(15);
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
       published = published && !receive_failed;
+#endif
+#if BUILDFLAG(IS_WIN)
+      // One healthy adapter must not hide persistent failures on another.
+      // Keep advertising every five seconds even while recovery backs off,
+      // since peers expire after fifteen seconds.
+      if (published && join_failures.empty() && send_failures.empty()) {
+        if (failed_cycles)
+          LOG(INFO) << "crFiles Windows nearby discovery local path recovered; failed_cycles="
+                    << failed_cycles;
+        failed_cycles = 0;
+        retry_delay = base::Seconds(5);
+        next_socket_retry = {};
+      } else {
+        failed_cycles = std::min(failed_cycles + 1, 3);
+        if ((!socket_fd.is_valid() || failed_cycles >= 3) &&
+            next_socket_retry.is_null()) {
+          next_socket_retry = now + retry_delay;
+          LOG(WARNING) << "crFiles Windows nearby discovery recovery scheduled; delay_ms="
+                       << retry_delay.InMilliseconds()
+                       << "; receive_failed=" << receive_failed
+                       << "; interfaces=" << interfaces.size()
+                       << "; join_failures=" << join_failures.size()
+                       << "; send_failures=" << send_failures.size();
+          retry_delay = std::min(retry_delay * 2, base::Seconds(30));
+        }
+      }
+#endif
+#if BUILDFLAG(IS_MAC)
       if (published && probe_required) {
         published = probe();
         if (published) {
@@ -1788,7 +1914,7 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
     }
     PollFd pfd{socket_fd.get(), POLLIN, 0};
     const int poll_result = socket_fd.is_valid() ? Poll(&pfd, 1, 200) : Poll(nullptr, 0, 200);
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
     if (poll_result < 0 && !RetrySocket()) {
       receive_failure(SocketError());
       Poll(nullptr, 0, 200);
@@ -1798,12 +1924,12 @@ void DiscoveryAttempt(std::shared_ptr<State> state, uint16_t port) {
       Poll(nullptr, 0, 200);
     }
 #endif
-    if (poll_result > 0) {
+    if (poll_result > 0 && (pfd.revents & POLLIN)) {
       sockaddr_in source{};
       SocketLength source_size = sizeof(source);
       const auto length = recvfrom(socket_fd.get(), reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()),
           0, reinterpret_cast<sockaddr*>(&source), &source_size);
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
       if (length < 0 && !RetrySocket()) receive_failure(SocketError());
 #endif
       if (length >= 12 && length < static_cast<int>(buffer.size()) &&
