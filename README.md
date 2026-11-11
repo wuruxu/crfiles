@@ -11,7 +11,11 @@ controls, menu, SVG renderer, themes and Viz compositor.
   early entry-point dispatch runs crpdf's runtime before any file-browser or
   single-instance initialization. The reader reuses crpdf's full
   window, rendering, annotations, forms, passwords and signature support. Its
-  initial language and theme follow crFiles. Open With still uses the explicitly
+  initial language and theme follow crFiles. Later theme changes in crFiles
+  update all running readers over independent Mojo connections. Reader-local
+  theme selections last until the next host theme change and do not change
+  standalone crpdf preferences. Disconnecting from crFiles leaves readers
+  running with their last theme. Open With still uses the explicitly
   chosen external application. Launch failures and abnormal reader exits use
   the existing file-open error message; the reader can be opened again.
   Reader crashes do not terminate crFiles or other reader processes. Quitting

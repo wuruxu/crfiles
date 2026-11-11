@@ -280,6 +280,8 @@ if (enable_libcr_shared) {
   # of base/Views/PDFium alongside the aggregate engine.
   source_set("pdf_runtime") {
     sources = crpdf_window_sources + crpdf_runtime_sources + [
+                "$root_gen_dir/crpdf/crpdf_reader.mojom-shared.cc",
+                "$root_gen_dir/crpdf/crpdf_reader.mojom.cc",
                 "$root_gen_dir/crpdf/vector_icons/vector_icons.cc",
                 "$root_gen_dir/crpdf/vector_icons/vector_icons.h",
               ]
@@ -289,6 +291,7 @@ if (enable_libcr_shared) {
       "//crpdf:crpdf_strings",
       "//crpdf:crpdf_version",
       "//crpdf:launch_options",
+      "//crpdf:reader_mojom_headers",
       "//crpdf/vector_icons:crfiles_icon_sources",
       "//libcr:engine",
     ]
@@ -335,6 +338,7 @@ executable("crFiles") {
       ":crfiles_strings",
       ":crfiles_version",
       "//chrome/app/vector_icons:crfiles_icon_sources",
+      "//crpdf:reader_mojom_headers",
       "//libcr:engine",
     ]
 
@@ -361,6 +365,7 @@ executable("crFiles") {
   } else {
     deps = [
       "//crpdf:runtime",
+      "//crpdf:reader_mojom",
       ":crfiles_archive_mojom",
       ":crfiles_buildtime",
       ":crfiles_search_mojom",

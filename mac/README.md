@@ -301,6 +301,11 @@ crFiles transfers an implicit folder-access bookmark through an inherited,
 unlinked temporary file descriptor. The reader retains the resolved URL until
 shutdown so annotations can be saved even after crFiles exits. Direct-download
 and development readers do not use sandbox-inheritance entitlements.
+Each reader also accepts theme updates over its own Mojo connection. Light and
+Dark override the system appearance; System restores automatic appearance.
+Quitting crFiles disconnects theme updates without closing reader windows or
+discarding their last theme. Reader-local theme changes do not alter standalone
+crpdf preferences and are replaced by the next explicit host theme change.
 
 `Contents/Helpers/crFiles Helper` is a relative symlink to `../MacOS/crFiles`:
 search, archive, video and PDF reader jobs launch separate processes using the same binary

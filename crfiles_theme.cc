@@ -3,7 +3,9 @@
 #include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_history.h"
+#include "crFiles/crfiles_pdf_reader.h"
 #include <atomic>
+#include <optional>
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/functional/bind.h"
@@ -84,14 +86,15 @@ void ApplyThemeMode(CrFilesThemeMode theme_mode, bool notify) {
   ui::NativeTheme* native_theme = ui::NativeTheme::GetInstanceForNativeUi();
   switch (theme_mode) {
     case CrFilesThemeMode::kLight:
-      native_theme->set_preferred_color_scheme(
+      ui::NativeTheme::SetPreferredColorSchemeOverride(
           ui::NativeTheme::PreferredColorScheme::kLight);
       break;
     case CrFilesThemeMode::kDark:
-      native_theme->set_preferred_color_scheme(
+      ui::NativeTheme::SetPreferredColorSchemeOverride(
           ui::NativeTheme::PreferredColorScheme::kDark);
       break;
     case CrFilesThemeMode::kSystem: {
+      ui::NativeTheme::SetPreferredColorSchemeOverride(std::nullopt);
       ui::NativeTheme::PreferredColorScheme color_scheme =
           ui::OsSettingsProvider::Get().PreferredColorScheme();
 #if BUILDFLAG(IS_LINUX)
@@ -134,6 +137,7 @@ void SetCrFilesThemeMode(CrFilesThemeMode mode) {
     Save();
   }
   ApplyThemeMode(mode, true);
+  UpdateCrFilesPdfReaderTheme(mode);
 }
 std::string GetCrFilesLanguageSetting() {
   base::AutoLock lock(SettingsLock());
