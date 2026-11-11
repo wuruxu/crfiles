@@ -16,6 +16,10 @@ import subprocess
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[1]
+PDF_LOCALES = ('ja', 'ko', 'zh-CN', 'zh-HK', 'zh-TW', 'ar', 'fr', 'fr-CA',
+               'ru', 'es', 'es-419', 'pt-BR', 'pt-PT')
+PDF_RESOURCE_PAKS = ('crpdf_resources.pak', 'crpdf_resources_200_percent.pak',
+                     *(f'crpdf_resources_{locale}.pak' for locale in PDF_LOCALES))
 
 
 def run(*args):
@@ -158,7 +162,8 @@ def package(args):
     if args.pkg and (not args.installer_identity or args.pkg.exists()):
         raise ValueError('--pkg requires --installer-identity and a new output path')
     static_angle = uses_static_angle(build)
-    required = ['crFiles', 'icudtl.dat', 'crfiles_resources.pak', 'crfiles_resources']
+    required = ['crFiles', 'icudtl.dat', 'crfiles_resources.pak',
+                'crfiles_resources', *PDF_RESOURCE_PAKS]
     if not static_angle:
         required += ['libEGL.dylib', 'libGLESv2.dylib']
     for name in required:
@@ -198,10 +203,16 @@ def package(args):
         executables.append(helper)
     for source in build.glob('crfiles_resources*.pak'):
         shutil.copy2(source, resources / source.name)
+    for name in PDF_RESOURCE_PAKS:
+        shutil.copy2(build / name, resources / name)
     shutil.copytree(build / 'crfiles_resources', resources / 'crfiles_resources')
     shutil.copy2(build / 'icudtl.dat', resources / 'icudtl.dat')
     shutil.copy2(args.icon, resources / 'crFiles.icns')
     shutil.copy2(privacy_path, resources / 'PrivacyInfo.xcprivacy')
+    licenses = resources / 'licenses'
+    licenses.mkdir()
+    shutil.copy2(PROJECT.parent / 'LICENSE', licenses / 'Chromium-LICENSE')
+    shutil.copy2(PROJECT.parent / 'third_party/pdfium/LICENSE', licenses / 'PDFium-LICENSE')
     for localization in sorted((PROJECT / 'mac').glob('*.lproj')):
         shutil.copytree(localization, resources / localization.name)
     libraries = copy_libraries(build, executables, frameworks, static_angle)

@@ -4,6 +4,8 @@
 
 #include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_process_singleton.h"
+#include "crpdf/crpdf_launch_options.h"
+#include "crpdf/crpdf_runtime.h"
 #include <clocale>
 #include <memory>
 #include <string>
@@ -446,9 +448,13 @@ int RunApplication() {
 }
 
 int CrFilesEntry(int argc, char** argv) {
+  base::CommandLine::Init(argc, argv);
+  // A reader is another process of this executable, not a second file browser.
+  // Its runtime owns initialization and shutdown independently of crFiles.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(crpdf::kCrFilesReaderSwitch))
+    return crpdf::RunCrPDF();
   libcr::InitializeStartupTiming("crFiles");
   startup_last_stage_at = base::TimeTicks::Now();
-  base::CommandLine::Init(argc, argv);
 #if BUILDFLAG(IS_WIN)
   logging::SetLogItems(true, true, true, false);
 #endif

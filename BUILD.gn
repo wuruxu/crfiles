@@ -4,6 +4,7 @@
 import("//build/config/libcr.gni")
 import("//build/config/ui.gni")
 import("//build/util/process_version.gni")
+import("//crpdf/crpdf_sources.gni")
 import("//libcr/locales.gni")
 import("//media/media_options.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
@@ -180,6 +181,8 @@ crfiles_sources = [
   "crfiles_image_viewer.cc",
   "crfiles_image_viewer.h",
   "crfiles_main.cc",
+  "crfiles_pdf_reader.cc",
+  "crfiles_pdf_reader.h",
   "crfiles_process_singleton.cc",
   "crfiles_process_singleton.h",
   "crfiles_search.cc",
@@ -271,6 +274,27 @@ action("crfiles_buildtime") {
   ]
 }
 
+if (enable_libcr_shared) {
+  # Keep reader application code in the executable and obtain the engine from
+  # libcr.so. Linking the standalone runtime here would also pull a static copy
+  # of base/Views/PDFium alongside the aggregate engine.
+  source_set("pdf_runtime") {
+    sources = crpdf_window_sources + crpdf_runtime_sources + [
+                "$root_gen_dir/crpdf/vector_icons/vector_icons.cc",
+                "$root_gen_dir/crpdf/vector_icons/vector_icons.h",
+              ]
+    include_dirs = [ "//third_party/pdfium" ]
+    deps = [
+      "//chrome/app/vector_icons:crfiles_icon_sources",
+      "//crpdf:crpdf_strings",
+      "//crpdf:crpdf_version",
+      "//crpdf:launch_options",
+      "//crpdf/vector_icons:crfiles_icon_sources",
+      "//libcr:engine",
+    ]
+  }
+}
+
 executable("crFiles") {
   sources = crfiles_sources
   if (crfiles_thinlto_optimize_max && (is_linux || is_win || is_mac)) {
@@ -306,6 +330,7 @@ executable("crFiles") {
       "$root_gen_dir/chrome/app/vector_icons/vector_icons.h",
     ]
     deps = [
+      ":pdf_runtime",
       ":crfiles_buildtime",
       ":crfiles_strings",
       ":crfiles_version",
@@ -335,6 +360,7 @@ executable("crFiles") {
     ]
   } else {
     deps = [
+      "//crpdf:runtime",
       ":crfiles_archive_mojom",
       ":crfiles_buildtime",
       ":crfiles_search_mojom",
@@ -393,6 +419,7 @@ executable("crFiles") {
       ]
     }
   }
+  deps += [ "//crpdf:launch_options" ]
   if (is_mac) {
     deps += [ "//components/remote_cocoa/common:mojo" ]
     # Privacy prompts also need usage metadata when running the loose binary.
@@ -424,6 +451,7 @@ executable("crFiles") {
     ":crfiles_resources_200_percent_pak",
     ":crfiles_resources_pak",
     ":file_icons",
+    "//crpdf:resources",
   ]
   foreach(locale, crfiles_locales) {
     data_deps += [ ":crfiles_resources_${locale}_pak" ]

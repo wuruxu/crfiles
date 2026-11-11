@@ -3,6 +3,7 @@
 CRFILES_LINUX_OUT_DIR ?= out/debian
 CRFILES_LOCALES := zh-CN zh-HK zh-TW ar fr fr-CA ru es es-419 pt-BR pt-PT ja ko
 CRFILES_RESOURCE_PAKS := crfiles_resources.pak crfiles_resources_200_percent.pak $(addprefix crfiles_resources_,$(addsuffix .pak,$(CRFILES_LOCALES)))
+CRFILES_PDF_RESOURCE_PAKS := crpdf_resources.pak crpdf_resources_200_percent.pak $(addprefix crpdf_resources_,$(addsuffix .pak,$(CRFILES_LOCALES)))
 
 .PHONY: crfiles crfileswin
 crfiles:
@@ -20,7 +21,7 @@ CRFILES_HEIF_RUNTIME_DIR ?= $(HEIF_RUNTIME_DIR)
 wf0:
 	@set -eu; \
 	case "$(CRFILES_WIN_PACKAGE_ZIP)" in *.zip) ;; *) echo "Package output must end in .zip" >&2; exit 1 ;; esac; \
-	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_PDF_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
 		test -f "$(CRFILES_WIN_OUT_DIR)/$$file" || { echo "Missing build output: $(CRFILES_WIN_OUT_DIR)/$$file" >&2; exit 1; }; \
 	done; \
 	command -v zip >/dev/null; \
@@ -28,7 +29,7 @@ wf0:
 	trap 'rm -rf -- "$$staging"' EXIT; \
 	package="$$staging/$(CRFILES_WIN_PACKAGE_NAME)"; \
 	mkdir -p "$$package/crfiles_resources/file_icons" "$$package/licenses"; \
-	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_PDF_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
 		cp "$(CRFILES_WIN_OUT_DIR)/$$file" "$$package/$$file"; \
 	done; \
 	for file in "$(CRFILES_WIN_OUT_DIR)"/vcruntime140*.dll "$(CRFILES_WIN_OUT_DIR)"/msvcp140*.dll; do \
@@ -39,6 +40,7 @@ wf0:
 	cp crFiles/third_party/libheif/COPYING "$$package/licenses/libheif-COPYING"; \
 	cp third_party/unrar/src/license.txt "$$package/licenses/UnRAR-LICENSE"; \
 	cp third_party/lzma_sdk/LICENSE "$$package/licenses/LZMA-SDK-LICENSE"; \
+	cp third_party/pdfium/LICENSE "$$package/licenses/PDFium-LICENSE"; \
 	cp crFiles/README.md crFiles/VERSION crFiles/LICENSE "$$package/"; \
 	cp LICENSE "$$package/licenses/Chromium-LICENSE"; \
 	(cd "$$staging" && zip -r "$(CRFILES_WIN_PACKAGE_NAME).zip" "$(CRFILES_WIN_PACKAGE_NAME)"); \
@@ -52,7 +54,7 @@ CRFILES_MSIX_PACKAGE ?= /tmp/crFiles_$(CRFILES_MSIX_VERSION)_x64.msix
 fmsix:
 	@set -eu; \
 	case "$(CRFILES_MSIX_PACKAGE)" in *.msix) ;; *) echo "Package output must end in .msix" >&2; exit 1 ;; esac; \
-	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_PDF_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
 		test -f "$(CRFILES_WIN_OUT_DIR)/$$file" || { echo "Missing build output: $(CRFILES_WIN_OUT_DIR)/$$file" >&2; exit 1; }; \
 	done; \
 	command -v makemsix >/dev/null; \
@@ -61,7 +63,7 @@ fmsix:
 	trap 'rm -rf -- "$$staging"' EXIT; \
 	package="$$staging/package"; \
 	mkdir -p "$$package/crfiles_resources/file_icons" "$$package/licenses" "$$package/Assets"; \
-	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
+	for file in crFiles.exe $(CRFILES_RESOURCE_PAKS) $(CRFILES_PDF_RESOURCE_PAKS) $(CRFILES_WIN_RUNTIME_FILES) crfiles_resources/crFiles.svg $(addprefix crfiles_resources/file_icons/,$(CRFILES_FILE_ICONS)); do \
 		cp "$(CRFILES_WIN_OUT_DIR)/$$file" "$$package/$$file"; \
 	done; \
 	for file in "$(CRFILES_WIN_OUT_DIR)"/vcruntime140*.dll "$(CRFILES_WIN_OUT_DIR)"/msvcp140*.dll; do \
@@ -72,6 +74,7 @@ fmsix:
 	cp crFiles/third_party/libheif/COPYING "$$package/licenses/libheif-COPYING"; \
 	cp third_party/unrar/src/license.txt "$$package/licenses/UnRAR-LICENSE"; \
 	cp third_party/lzma_sdk/LICENSE "$$package/licenses/LZMA-SDK-LICENSE"; \
+	cp third_party/pdfium/LICENSE "$$package/licenses/PDFium-LICENSE"; \
 	cp crFiles/README.md crFiles/VERSION crFiles/LICENSE "$$package/"; \
 	cp LICENSE "$$package/licenses/Chromium-LICENSE"; \
 	python3 build/util/version.py -f crFiles/VERSION -i crFiles/crFiles.AppxManifest.xml.version -o "$$package/AppxManifest.xml"; \

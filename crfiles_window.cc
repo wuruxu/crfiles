@@ -91,6 +91,7 @@
 #include "crFiles/crfiles_file_icons.h"
 #include "crFiles/crfiles_image_preview.h"
 #include "crFiles/crfiles_image_viewer.h"
+#include "crFiles/crfiles_pdf_reader.h"
 #include "crFiles/crfiles_heic_thumbnail.h"
 #include "crFiles/crfiles_text_thumbnail.h"
 #include "crFiles/crfiles_video_thumbnail.h"
@@ -10402,6 +10403,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
     if (directory) { Navigate(path); return; }
     const auto found = std::ranges::find(Current().entries, path, &Entry::path);
+    if (IsPdfReaderFile(path, found == Current().entries.end() ? std::string_view() : found->mime)) {
+      OpenCrFilesPdf(path, base::BindOnce([](base::WeakPtr<FilesView> view) {
+        if (view) view->status_->SetText(Text(IDS_CRFILES_OPEN_ERROR));
+      }, weak_.GetWeakPtr()));
+      return;
+    }
     if (IsImageViewerFile(path, found == Current().entries.end() ? std::string_view() : found->mime)) {
       std::vector<base::FilePath> images;
       for (const auto index : displayed_entries_) {

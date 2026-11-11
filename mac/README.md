@@ -292,8 +292,18 @@ The packager verifies that this entitlement is present in the final signature
 and leaves the generated `.entitlements` beside the app for inspection.
 Location Services authorization is still required from the user. See Apple's
 [Location entitlement documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.personal-information.location).
+The integrated PDF reader relaunches the existing `crFiles Helper` with
+`--crfiles-reader --pdf=PATH`. Its PDFium and window run in a separate process
+for each open request, using the same executable code as crFiles. No dedicated
+crpdf executable is bundled. PDF PAKs live in `Contents/Resources`. App Store
+readers use the worker helper's existing sandbox-inheritance signature;
+crFiles transfers an implicit folder-access bookmark through an inherited,
+unlinked temporary file descriptor. The reader retains the resolved URL until
+shutdown so annotations can be saved even after crFiles exits. Direct-download
+and development readers do not use sandbox-inheritance entitlements.
+
 `Contents/Helpers/crFiles Helper` is a relative symlink to `../MacOS/crFiles`:
-search, archive and video jobs launch separate processes using the same binary
+search, archive, video and PDF reader jobs launch separate processes using the same binary
 and its signature. The App Store package retains a separate helper executable
 with sandbox-inheritance entitlements. Never sign the DMG helper symlink with a
 different identity or entitlements, since that would modify the main executable.

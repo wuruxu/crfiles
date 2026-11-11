@@ -6,6 +6,26 @@ controls, menu, SVG renderer, themes and Viz compositor.
 
 ## Interface
 
+- Double-clicking a PDF, pressing Enter, or choosing Open relaunches the same
+  crFiles executable with `--crfiles-reader --pdf=PATH` for each request. The
+  early entry-point dispatch runs crpdf's runtime before any file-browser or
+  single-instance initialization. The reader reuses crpdf's full
+  window, rendering, annotations, forms, passwords and signature support. Its
+  initial language and theme follow crFiles. Open With still uses the explicitly
+  chosen external application. Launch failures and abnormal reader exits use
+  the existing file-open error message; the reader can be opened again.
+  Reader crashes do not terminate crFiles or other reader processes. Quitting
+  crFiles leaves readers open so edits can be saved. This isolates the reader;
+  directory PDF thumbnails still use crFiles' existing in-process PDFium code.
+  crpdf's own history and preferences remain in use.
+- Building `crFiles` links crpdf's reusable runtime into the same executable
+  and produces its resource PAKs. Linux and Windows packages ship only the
+  crFiles application executable, with PDF PAKs alongside the other resources;
+  no separate crpdf executable is required. macOS reuses the existing
+  `crFiles Helper` launch path and keeps PDF PAKs in `Contents/Resources`.
+  The adjacent crpdf source checkout is required when building. The standalone
+  `crpdf` build target remains available independently.
+
 - Thumbnail scheduling coalesces requests into one UI task and refills worker
   slots on completion. Receiving-directory checks run immediately on startup,
   window restoration and preference changes, with a 30-second fallback check.
