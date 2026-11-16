@@ -13,6 +13,7 @@
 #include "base/path_service.h"
 #include "base/synchronization/lock.h"
 #include "libcr/svg_icon.h"
+#include "net/base/mime_util.h"
 #include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/modules/svg/include/SkSVGDOM.h"
 #if BUILDFLAG(IS_WIN)
@@ -108,7 +109,33 @@ gfx::ImageSkia LoadBundledIcon(const std::string& mime, bool directory, int edge
   base::AutoLock guard(IconLock());
   return IconCache().try_emplace(key, std::move(image)).first->second;
 }
+gfx::ImageSkia LoadNamedIcon(std::string_view asset, int edge) {
+  const IconKey key{std::string(asset), edge};
+  {
+    base::AutoLock guard(IconLock());
+    const auto found = IconCache().find(key);
+    if (found != IconCache().end()) return found->second;
+  }
+  auto image = ReadIcon(key.first, edge);
+  base::AutoLock guard(IconLock());
+  return IconCache().try_emplace(key, std::move(image)).first->second;
+}
 }  // namespace
+
+gfx::ImageSkia LoadNetworkServerIcon(int edge) {
+  if (std::ranges::find(kFileIconSizes, edge) == kFileIconSizes.end()) return {};
+  return LoadNamedIcon("network-server", edge);
+}
+
+gfx::ImageSkia LoadNetworkWorkgroupIcon(int edge) { return LoadNamedIcon("network-workgroup", edge); }
+gfx::ImageSkia LoadTrashIcon(int edge) { return LoadNamedIcon("user-trash", edge); }
+gfx::ImageSkia LoadRemoteFileIcon(const std::string& name, bool directory, int edge) {
+  std::string mime;
+  auto extension = base::FilePath::FromUTF8Unsafe(name).Extension();
+  if (!extension.empty()) extension.erase(0, 1);
+  if (!directory) net::GetWellKnownMimeTypeFromExtension(extension, &mime);
+  return LoadBundledIcon(mime, directory, edge);
+}
 
 #if BUILDFLAG(IS_WIN)
 namespace {

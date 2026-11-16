@@ -467,6 +467,38 @@
       <message name="IDS_CRFILES_SYNC_DEVICE_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">This device is no longer available for sync. Select it again when it appears.</message>
       <message name="IDS_CRFILES_SYNC_REQUEST_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">Could not start this sync request. Check existing sync relationships and try again.</message>
       <message name="IDS_CRFILES_SYNC_LIMIT_ERROR" desc="Specific cause of a failure to start or prepare synchronization.">The sync relationship or pending request limit has been reached.</message>
+      <message name="IDS_CRFILES_NETWORK" desc="SMB network browser.">Network</message>
+      <message name="IDS_CRFILES_NETWORK_SERVER" desc="SMB network browser.">Server or smb://server/share</message>
+      <message name="IDS_CRFILES_NETWORK_CONNECT" desc="SMB network browser.">Connect</message>
+      <message name="IDS_CRFILES_NETWORK_CONNECTING" desc="SMB connection status while signing in.">Connecting…</message>
+      <message name="IDS_CRFILES_NETWORK_USER" desc="SMB network browser.">Username (blank for guest)</message>
+      <message name="IDS_CRFILES_NETWORK_PASSWORD" desc="SMB network browser.">Password</message>
+      <message name="IDS_CRFILES_NETWORK_DOMAIN" desc="SMB network browser.">Domain (optional)</message>
+      <message name="IDS_CRFILES_NETWORK_AUTH_ERROR" desc="SMB network browser.">Sign-in failed. Check your username, password and domain.</message>
+      <message name="IDS_CRFILES_NETWORK_ADDRESS_ERROR" desc="SMB network browser.">Enter a server address or smb://server/share.</message>
+      <message name="IDS_CRFILES_NETWORK_TOO_LARGE" desc="SMB network browser.">The operation exceeds the supported limit: 2 GB per file, 100,000 entries, or the maximum path length.</message>
+      <message name="IDS_CRFILES_NETWORK_SAVE_ERROR" desc="SMB network browser.">Could not save the file. Check free space and folder permissions.</message>
+      <message name="IDS_CRFILES_NETWORK_ERROR" desc="SMB network browser.">Could not access this share. Check the address, permissions and network connection.</message>
+      <message name="IDS_CRFILES_NETWORK_DISCONNECTED" desc="SMB network browser.">The network worker stopped or timed out. Connect again to retry.</message>
+      <message name="IDS_CRFILES_NETWORK_SEARCHING" desc="SMB network browser.">Searching for SMB servers…</message>
+      <message name="IDS_CRFILES_NETWORK_NO_SERVERS" desc="SMB network browser.">No SMB servers found. You can enter a server address to connect.</message>
+      <message name="IDS_CRFILES_NETWORK_SAVE" desc="SMB network browser.">Save copy…</message>
+      <message name="IDS_CRFILES_NETWORK_LIMIT" desc="SMB network browser.">Showing the first 1,000 entries.</message>
+      <message name="IDS_CRFILES_NETWORK_READ_ONLY" desc="SMB network browser.">Read-only access. Changes to downloaded copies stay on this device.</message>
+      <message name="IDS_CRFILES_NETWORK_UPLOAD" desc="SMB network file operations.">Upload…</message>
+      <message name="IDS_CRFILES_NETWORK_UPLOADING" desc="SMB network file operations.">Uploading…</message>
+      <message name="IDS_CRFILES_NETWORK_UPLOAD_LIMIT" desc="SMB network file operations.">This version supports uploads up to 2 GB per file.</message>
+      <message name="IDS_CRFILES_NETWORK_DELETE" desc="SMB network file operations.">Delete</message>
+      <message name="IDS_CRFILES_NETWORK_DELETE_CONFIRM" desc="SMB network file operations.">Permanently delete the selected items and all folder contents from the server? This cannot be undone.</message>
+      <message name="IDS_CRFILES_NETWORK_OPERATION_ERROR" desc="SMB network file operations.">Could not complete the operation. Check permissions, file names and the network connection.</message>
+      <message name="IDS_CRFILES_NETWORK_EXISTS" desc="SMB network file operations.">An item with this name already exists. Choose a different name.</message>
+      <message name="IDS_CRFILES_NETWORK_LOCAL_COPY" desc="SMB file opened from a downloaded copy.">Opened a local copy. Changes are not uploaded automatically.</message>
+      <message name="IDS_CRFILES_NETWORK_DOWNLOADING" desc="SMB network browser.">Downloading…</message>
+      <message name="IDS_CRFILES_NETWORK_CHECKING_WRITE" desc="SMB receive target sharing status.">Checking write access…</message>
+      <message name="IDS_CRFILES_NETWORK_NO_WRITE" desc="SMB receive target sharing status.">This folder does not allow writing.</message>
+      <message name="IDS_CRFILES_NETWORK_WRITE_UNKNOWN" desc="SMB receive target sharing status.">Could not enable sharing. Refresh to try again.</message>
+      <message name="IDS_CRFILES_NETWORK_RECEIVE_ERROR" desc="SMB receive target sharing status.">Could not save the received file to the network folder.</message>
+      <message name="IDS_CRFILES_NETWORK_RECEIVE_CACHE" desc="SMB receive target sharing status.">Received files are kept locally:</message>
 </messages>
   </release>
 </grit>

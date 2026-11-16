@@ -35,11 +35,13 @@
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -221,6 +223,10 @@ constexpr TransferError kHistoryError{"history", IDS_CRFILES_TRANSFER_HISTORY_ER
 constexpr TransferError kStatisticsError{"statistics", IDS_CRFILES_TRANSFER_STATISTICS_ERROR};
 constexpr TransferError kConfirmationError{"confirmation", IDS_CRFILES_TRANSFER_CONFIRMATION_ERROR};
 constexpr TransferError kApprovalError{"approval", IDS_CRFILES_TRANSFER_APPROVAL_ERROR};
+// Keep existing wire error codes for older peers; the receiver shows the SMB
+// detail and retained cache path locally.
+constexpr TransferError kNetworkWriteError{"write", IDS_CRFILES_NETWORK_RECEIVE_ERROR};
+constexpr TransferError kNetworkLimitError{"write", IDS_CRFILES_NETWORK_TOO_LARGE};
 constexpr TransferError kTransferErrors[] = {
     kSourceReadError, kConnectionError, kProtocolError, kChecksumError,
     kWriteError, kFlushError, kCommitError, kExistsError, kFolderError,
@@ -1030,6 +1036,7 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
   const bool tree = std::ranges::any_of(files, [](const auto& file) { return file.name.find('/') != std::string::npos || !SafeName(file.name); });
   if (tree && !state->peer_folder_transfer) return FailTransfer(failure, kProtocolError);
   auto offer = Message("offer");
+  offer.Set("store_progress", true);
   if (tree) offer.Set("tree", true);
   if (!state->outgoing_target.empty()) offer.Set("target", state->outgoing_target);
   offer.Set("files", std::move(list));
@@ -1102,8 +1109,15 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
     failure.notify_peer = true;  // The receiver is now waiting for a JSON digest.
     if (!channel.SendJson(std::move(digest))) return FailTransfer(failure, kConnectionError);
     // A receiver may need explicit consent before replacing a same-name file.
-    if (!CheckTransferMessage(channel.ReadJson(base::Seconds(250)), "stored", failure,
-                              kConfirmationError)) return false;
+    auto stored = channel.ReadJson(base::Seconds(250));
+    // A remote receive target may still be committing to SMB. Only this framed
+    // acknowledgment phase accepts heartbeat messages; raw file bytes do not.
+    while (IsMessage(stored, "storing") && !IsCanceled(*state, generation)) {
+      { base::AutoLock lock(state->lock); state->snapshot.status_message_id = IDS_CRFILES_NETWORK_UPLOADING; }
+      stored = channel.ReadJson(base::Seconds(250));
+    }
+    if (!CheckTransferMessage(stored, "stored", failure, kConfirmationError)) return false;
+    { base::AutoLock lock(state->lock); state->snapshot.status_message_id = 0; }
     failure.notify_peer = false;  // The next entry may be an unframed byte stream.
     log.Succeed();
     if (!UpdateTrust(state, false, file.size, 0)) return FailTransfer(failure, kStatisticsError);
@@ -1190,8 +1204,34 @@ bool SafeTransferName(std::string_view name, bool tree) {
   const auto parts = base::SplitStringPiece(name, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
   return !parts.empty() && parts.size() <= 64 && std::ranges::all_of(parts, [](auto part) { return SafeComponent(part); });
 }
+// Lives on the receive stack until Store returns; its callbacks run only on
+// that same worker, while the SMB IO thread publishes byte counts separately.
+struct RemoteStoreProgress {
+  Channel& channel;
+  const std::shared_ptr<State>& state;
+  uint64_t generation, size;
+  bool heartbeats;
+  base::TimeTicks began = base::TimeTicks::Now(), heartbeat = began;
+  bool channel_failed = false;
+  bool Canceled() const {
+    return IsCanceled(*state, generation) || channel_failed || channel.Disconnected() ||
+        (!heartbeats && base::TimeTicks::Now() - began > base::Seconds(200));
+  }
+  void Progress(uint64_t bytes) {
+    if (heartbeats && base::TimeTicks::Now() - heartbeat >= base::Seconds(5)) {
+      channel_failed = !channel.SendJson(Message("storing"));
+      heartbeat = base::TimeTicks::Now();
+    }
+    base::AutoLock lock(state->lock);
+    state->snapshot.current_file_transferred = bytes;
+    state->snapshot.current_file_total = size;
+  }
+};
 bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
                   uint64_t generation, FailureInfo& failure) {
+  // Declared before directory handles so cleanup runs after all handles close.
+  base::ScopedClosureRunner successful_remote_cleanup;
+  std::shared_ptr<ShareService::RemoteReceiveTarget> remote_target;
   LOG(INFO) << "[crPhotos nearby offer] receive: waiting for manifest";
   auto offer = channel.ReadJson(base::Seconds(30), true);
   if (!CheckTransferMessage(offer, "offer", failure, kConnectionError)) return false;
@@ -1229,6 +1269,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     files.emplace_back(*name, bytes);
   }
   base::FilePath root;
+  std::string receive_url;
   bool direct_target = false;
   int64_t receive_tag = 0;
   {
@@ -1244,9 +1285,16 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
       if (found == state->targets.end()) return FailTransfer(failure, kFolderError);
       root = found->directory;
       receive_tag = found->tag_id;
-      direct_target = receive_tag == 0;
+      remote_target = found->remote;
+      if (!found->network_url.empty() && !remote_target) return FailTransfer(failure, kFolderError);
+      if (remote_target && std::ranges::any_of(files, [&](const auto& file) {
+            return file.second > remote_target->MaximumFileSize();
+          })) return FailTransfer(failure, kNetworkLimitError);
+      direct_target = receive_tag == 0 && !remote_target;
       state->snapshot.receive_target = found->id;
       state->snapshot.receive_target_name = found->name;
+      receive_url = found->network_url;
+      state->snapshot.receive_url = receive_url;
     }
   }
   // Fixed dimensions and exact byte counts avoid invoking an image codec on
@@ -1311,7 +1359,8 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     base::AutoLock lock(state->lock);
     if (!state->snapshot.receive_target.empty()) {
       auto target = std::ranges::find(state->targets, state->snapshot.receive_target, &NearbySharing::SharedTarget::id);
-      if (target == state->targets.end() || target->directory != root || !base::DirectoryExists(root)) return FailTransfer(failure, kFolderError);
+      if (target == state->targets.end() || target->directory != root || target->remote != remote_target ||
+          !base::DirectoryExists(root)) return FailTransfer(failure, kFolderError);
     }
   }
   if (!root.IsAbsolute()) return FailTransfer(failure, kFolderError);
@@ -1347,7 +1396,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
 #else
   const auto scan_directory = root_fd.get();
 #endif
-  if (!direct_target && !tree && receive_tag == 0 && !CollectReceivedNames(scan_directory, true, 0, entries, existing, *state,
+  if (!remote_target && !direct_target && !tree && receive_tag == 0 && !CollectReceivedNames(scan_directory, true, 0, entries, existing, *state,
                             generation, base::TimeTicks::Now() + base::Seconds(60)))
     return FailTransfer(failure, kFolderError);
   const size_t offered_count = files.size();
@@ -1411,6 +1460,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
       state->snapshot.current_file = name;
     }
     FileOperationLog log("receive", "remote", sender + "/" + name,
+        remote_target ? receive_url + "/" + base::EscapePath(name) :
         batch.Append(base::FilePath::FromUTF8Unsafe(name)).AsUTF8Unsafe());
     if (!log.valid()) return FailTransfer(failure, kHistoryError);
     const bool is_directory = tree && name.ends_with("/");
@@ -1510,6 +1560,36 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     if (ok && fsync(parent_fd.get()) != 0) ok = FailFileOperation(failure, kFlushError);
 #endif
     if (!ok) return false;
+    if (remote_target) {
+      base::File source;
+      if (!is_directory) {
+#if BUILDFLAG(IS_WIN)
+        source = OpenRegularFile(destination, false);
+#else
+        base::ScopedFD fd(openat(parent_fd.get(), leaf.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+        if (fd.is_valid()) source = base::File(fd.release());
+#endif
+        if (!source.IsValid()) return FailFileOperation(failure, kSourceReadError);
+      }
+      {
+        base::AutoLock lock(state->lock);
+        state->snapshot.status_message_id = IDS_CRFILES_NETWORK_UPLOADING;
+        state->snapshot.current_file_transferred = 0; state->snapshot.current_file_total = size;
+      }
+      RemoteStoreProgress progress{channel, state, generation, size, offer->FindBool("store_progress").value_or(false)};
+      const auto result = remote_target->Store(name, std::move(source), is_directory,
+          base::BindRepeating(&RemoteStoreProgress::Canceled, base::Unretained(&progress)),
+          base::BindRepeating(&RemoteStoreProgress::Progress, base::Unretained(&progress)));
+      if (result != ShareService::RemoteReceiveTarget::Result::kOk || progress.Canceled()) {
+        base::AutoLock lock(state->lock);
+        state->snapshot.receive_write_denied = result == ShareService::RemoteReceiveTarget::Result::kReadOnly;
+        return FailTransfer(failure, result == ShareService::RemoteReceiveTarget::Result::kExists ? kExistsError : kNetworkWriteError);
+      }
+      {
+        base::AutoLock lock(state->lock);
+        state->snapshot.status_message_id = 0;
+      }
+    }
     if (!UpdateTrust(state, false, 0, size)) return FailTransfer(failure, kStatisticsError);
     if (!channel.SendJson(Message("stored"))) return FailTransfer(failure, kConnectionError);
     log.Succeed();
@@ -1528,6 +1608,14 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     state->snapshot.warning_message_id = IDS_CRFILES_TAG_SAVE_ERROR;
   }
   if (!channel.SendJson(Message("complete"))) return FailTransfer(failure, kConnectionError);
+  if (remote_target) {
+    successful_remote_cleanup.ReplaceClosure(base::BindOnce([](std::shared_ptr<State> state, base::FilePath batch) {
+      if (base::DeletePathRecursively(batch)) {
+        base::AutoLock lock(state->lock);
+        state->snapshot.batch_directory.clear();
+      }
+    }, state, batch));
+  }
   return true;
 }
 
@@ -2618,6 +2706,7 @@ void Run(std::shared_ptr<State> state) {
       state->snapshot.files.clear();
       state->snapshot.current_file.clear();
       state->snapshot.receive_target.clear(); state->snapshot.receive_target_name.clear();
+      state->snapshot.receive_url.clear(); state->snapshot.receive_write_denied = false;
       state->outgoing_target = outgoing ? outgoing->target_id : std::string();
       state->snapshot.previews.clear();
       state->outgoing_previews = outgoing ? std::move(outgoing->previews) :
@@ -2822,13 +2911,15 @@ void NearbySharing::SetSharedTargets(std::vector<SharedTarget> targets) {
   base::AutoLock lock(state_->lock);
   std::erase_if(targets, [](const auto& target) {
     return target.id.empty() || target.id.size() > 80 || target.name.empty() || target.name.size() > 80 ||
-        !target.directory.IsAbsolute() || target.directory.ReferencesParent();
+        !target.directory.IsAbsolute() || target.directory.ReferencesParent() ||
+        (!target.network_url.empty() && !target.remote);
   });
   if (targets.size() > 128) targets.resize(128);
   if (state_->snapshot.busy && state_->snapshot.receiving && !state_->snapshot.receive_target.empty()) {
     auto previous = std::ranges::find(state_->targets, state_->snapshot.receive_target, &SharedTarget::id);
     auto next = std::ranges::find(targets, state_->snapshot.receive_target, &SharedTarget::id);
-    if (previous == state_->targets.end() || next == targets.end() || (previous->directory != next->directory || previous->tag_id != next->tag_id)) ++state_->cancel;
+    if (previous == state_->targets.end() || next == targets.end() ||
+        previous->directory != next->directory || previous->tag_id != next->tag_id || previous->remote != next->remote) ++state_->cancel;
   }
   state_->targets = std::move(targets);
 }

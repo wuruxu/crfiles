@@ -91,6 +91,10 @@
 namespace crfiles {
 namespace {
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
+bool HasNetworkRecovery(const NearbySharing::Snapshot& state) {
+  return state.receiving && !state.receive_url.empty() && !state.batch_directory.empty() && !state.busy &&
+      (state.stage == NearbySharing::Stage::kError || state.stage == NearbySharing::Stage::kCanceled);
+}
 std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool quick_share) {
   using Stage = NearbySharing::Stage;
   int message = IDS_CRFILES_TRANSFERRING;
@@ -99,8 +103,10 @@ std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool q
   else if (state.stage == Stage::kError) message = IDS_CRFILES_TRANSFER_ERROR;
   else if (state.stage == Stage::kCanceled || !state.busy) message = IDS_CRFILES_CANCELED;
   else if (state.stage != Stage::kTransferring) message = IDS_CRFILES_LOADING;
+  const bool storing = !state.receive_url.empty() && state.status_message_id == IDS_CRFILES_NETWORK_UPLOADING;
   auto status = Text(message) + u"\n" +
-      ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
+      ui::FormatBytes(base::ByteSize(storing ? state.current_file_transferred : state.transferred)) + u" / " +
+      ui::FormatBytes(base::ByteSize(storing ? state.current_file_total : state.total));
   if (quick_share && state.current_file_index) {
     status += u"\n" + Text(IDS_CRFILES_QS_PROGRESS_FILE) + u": " +
         base::NumberToString16(state.current_file_index) + u" / " + base::NumberToString16(state.files.size()) +
@@ -124,6 +130,7 @@ std::u16string TransferProgressText(const NearbySharing::Snapshot& state, bool q
             base::NumberToString16(seconds / 60), base::NumberToString16(seconds % 60));
   }
   if (state.warning_message_id) status += u"\n" + Text(state.warning_message_id);
+  if (HasNetworkRecovery(state)) status += u"\n" + Text(IDS_CRFILES_NETWORK_RECEIVE_CACHE) + u"\n" + state.batch_directory.AsUTF16Unsafe();
   return status;
 }
 ui::ImageModel QuickShareAvatar(int edge = 64) {
@@ -446,7 +453,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
     if (!state.busy) cancel_->SetEnabled(true);
     else if (state.status_message_id == IDS_CRFILES_QS_RESTORING_NETWORK) cancel_->SetEnabled(false);
     if (open_received_) {
-      const bool show = state.stage == Stage::kComplete && !state.batch_directory.empty();
+      const bool show = (state.stage == Stage::kComplete && !state.batch_directory.empty()) || HasNetworkRecovery(state);
       resize |= open_received_->GetVisible() != show;
       open_received_->SetVisible(show);
     }
@@ -555,6 +562,7 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
           u"   ·   " + Text(IDS_CRFILES_FOLDERS) + u": " + base::NumberToString16(folders));
       Label(summary, Text(IDS_CRFILES_TOTAL_SIZE) + u": " + ui::FormatBytes(base::ByteSize(state.total)));
       Label(contents.get(), Text(state.syncing ? IDS_CRFILES_SYNC_CONSENT : IDS_CRFILES_RECEIVE_PROMPT));
+      if (!state.receive_url.empty()) Label(contents.get(), base::UTF8ToUTF16(state.receive_url));
       if (state.syncing) {
         if (state.warning_message_id) receive_error_ = Label(contents.get(), Text(state.warning_message_id));
         auto* destination = contents->AddChildView(std::make_unique<views::View>());
@@ -588,10 +596,11 @@ class ShareSessionToastImpl : public ShareSessionToast, public views::WidgetObse
         reconnect_->SetVisible(false);
       }
 #endif
-      if (service_->IsQuickShare() && state.receiving) {
+      if ((service_->IsQuickShare() || !state.receive_url.empty()) && state.receiving) {
         open_received_ = actions->AddChildView(std::make_unique<views::MdTextButton>(
             base::BindRepeating([](base::WeakPtr<ShareSessionToastImpl> view) {
-              if (!view || !view->displayed_state_ || view->displayed_state_->stage != NearbySharing::Stage::kComplete ||
+              if (!view || !view->displayed_state_ ||
+                  (view->displayed_state_->stage != NearbySharing::Stage::kComplete && !HasNetworkRecovery(*view->displayed_state_)) ||
                   view->displayed_state_->batch_directory.empty()) return;
               const auto directory = view->displayed_state_->batch_directory;
               const uint64_t session = view->session_;
@@ -952,6 +961,7 @@ class SharingFoldersView : public views::View {
     // Refresh on the timer, after any row button's event dispatch has returned.
     list_->RemoveAllChildViews();
     for (const auto& folder : displayed_) {
+      const auto display_path = folder.network_url.empty() ? folder.directory.AsUTF16Unsafe() : base::UTF8ToUTF16(folder.network_url);
       auto* row = list_->AddChildView(std::make_unique<views::View>());
       auto* layout = row->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, gfx::Insets(8), 12));
@@ -969,8 +979,8 @@ class SharingFoldersView : public views::View {
       button->SetImageCentered(true);
       button->SetMinSize(gfx::Size(40, 40));
       button->SetPreferredSize(gfx::Size(40, 40));
-      button->SetTooltipText(Text(IDS_CRFILES_OPEN_NEW_TAB) + u"\n" + folder.directory.AsUTF16Unsafe());
-      button->SetAccessibleName(Text(IDS_CRFILES_OPEN_NEW_TAB) + u": " + folder.directory.AsUTF16Unsafe());
+      button->SetTooltipText(Text(IDS_CRFILES_OPEN_NEW_TAB) + u"\n" + display_path);
+      button->SetAccessibleName(Text(IDS_CRFILES_OPEN_NEW_TAB) + u": " + display_path);
       auto* labels = row->AddChildView(std::make_unique<views::View>());
       labels->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kVertical, gfx::Insets(), 4));
@@ -979,12 +989,12 @@ class SharingFoldersView : public views::View {
       name->SetHorizontalAlignment(gfx::ALIGN_LEFT);
       name->SetMaximumWidthSingleLine(400);
       name->SetTooltipText(base::UTF8ToUTF16(folder.name));
-      auto* path = labels->AddChildView(std::make_unique<views::Label>(folder.directory.AsUTF16Unsafe()));
+      auto* path = labels->AddChildView(std::make_unique<views::Label>(display_path));
       path->SetHorizontalAlignment(gfx::ALIGN_LEFT);
       path->SetElideBehavior(gfx::ELIDE_MIDDLE);
       path->SetMaximumWidthSingleLine(400);
       path->SetEnabledColor(ui::kColorSysOnSurfaceSecondary);
-      path->SetTooltipText(folder.directory.AsUTF16Unsafe());
+      path->SetTooltipText(display_path);
       auto remove = views::CreateVectorImageButtonWithNativeTheme(
           base::BindRepeating(remove_, folder),
           kDeleteIcon, 20, ui::kColorSysError, ui::kColorIconDisabled,
@@ -992,7 +1002,7 @@ class SharingFoldersView : public views::View {
       remove->SetPreferredSize(gfx::Size(36, 36));
       remove->SetTooltipText(Text(IDS_CRFILES_REMOVE_SHARE));
       remove->GetViewAccessibility().SetName(
-          Text(IDS_CRFILES_REMOVE_SHARE) + u": " + folder.directory.AsUTF16Unsafe());
+          Text(IDS_CRFILES_REMOVE_SHARE) + u": " + display_path);
       row->AddChildView(std::move(remove));
     }
     InvalidateLayout();
@@ -1391,6 +1401,8 @@ class FileShareView : public views::View, public ui::EventObserver {
           ui::FormatBytes(base::ByteSize(state.transferred)) + u" / " + ui::FormatBytes(base::ByteSize(state.total));
     }
     if (state.warning_message_id) status_detail += (status_detail.empty() ? u"" : u"\n") + Text(state.warning_message_id);
+    if (HasNetworkRecovery(state)) status_detail += (status_detail.empty() ? u"" : u"\n") +
+        Text(IDS_CRFILES_NETWORK_RECEIVE_CACHE) + u"\n" + state.batch_directory.AsUTF16Unsafe();
     status_detail_->SetText(status_detail);
     status_detail_->SetTooltipText(status_detail);
     status_detail_->SetVisible(!status_detail.empty());

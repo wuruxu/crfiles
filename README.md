@@ -1355,3 +1355,244 @@ as do overlapping directory scopes and ancestor/descendant roots.
 See [sync-v1 protocol, recovery and acceptance steps](sharing/SYNC_PROTOCOL.md) for
 limits, conflict behavior, restart recovery, and the checks still requiring a build
 and two-device validation.
+
+
+## SMB network browsing
+
+**Network**, above **Trash**, opens an independent network tab. It discovers
+IPv4 SMB servers advertising `_smb._tcp.local` on local private interfaces.
+Discovery depends on the server publishing DNS-SD and multicast being allowed;
+this is not a subnet scan or a WS-Discovery/NetBIOS browser. Discovered devices
+reuse the ordinary file grid, rows and icon/filename cells, including icon/list
+switching and icon-size shortcuts. Devices use the bundled
+`resources/file_icons/network-server.svg` on every platform. A single click on a
+device (or Enter on the focused device) opens a credentials bubble with its arrow
+anchored to the device name label. Discovery stays visible until authentication
+succeeds; the authenticated worker and listing are then handed to a new device
+tab without a second login.
+There is no separate manual-connection button. Enter `smb://server` or
+`smb://server/share/path` in the top address bar (Ctrl+L) and press Enter.
+Entering a new server address prepares a device tab and opens the credentials
+bubble with its arrow anchored to the `smb://server/` breadcrumb text, never the
+network icon. Neither path attempts a guest login before the user submits the
+form. Only submission starts an authentication worker; explicit guest access is
+still possible by submitting an empty username. A failed attempt keeps the form
+open for correction. Closing the bubble or leaving the page cancels the pending
+authentication. After dismissal, re-entering the address or refreshing allows
+retrying in the same tab. Credentials can also be supplied after a file operation
+is denied; the operation itself is not replayed automatically.
+Connection messages use theme colors: primary for Connecting, error for failures,
+and secondary text for informational messages. Editing the username, password or
+domain clears the previous error; retrying shows the connection progress again.
+Errors retain their explanatory text without marking the password field invalid.
+Successful authentication closes the bubble without an extra success message.
+A direct share also works when the server forbids listing its shares.
+The main address bar accepts SMB URLs and the breadcrumbs, back/forward buttons
+and refresh use the same top toolbar on discovery and device pages. Breadcrumbs
+follow `Network icon > smb://server/ > share > folder`. Clicking the network icon
+returns to the existing discovery tab (or opens it if closed), retaining the
+device tab and its connection. Going up from a device root also returns to
+discovery; going up inside a share follows the remote directory hierarchy.
+Remote folders and share lists reuse the ordinary file grid, rows and filename
+cells, with icon/list switching and icon-size shortcuts. List mode shows names
+and file metadata. View Options is available on all network pages: discovery and
+server roots offer icon size; directories inside a share additionally offer
+Show hidden (dot-prefixed names) and Size, Type, Last modified and Created column
+switches. Name is always visible; permissions are not offered for SMB. Type uses
+the built-in extension-to-MIME table. Modification and creation times come from
+the server, with missing or invalid dates left unavailable rather than inferred.
+Size, Type and Last modified are enabled by default; Created is optional. Layout,
+icon size, sort order, hidden-file and column preferences are included in workspace restoration.
+Folder and file-type icons use the bundled assets without
+querying local paths or the Windows Shell for remote names. Opening follows the
+ordinary folder single/double-click preference; files open on double-click or
+Enter. There is no New folder/Upload toolbar above the file list or per-row action
+buttons. Inside a share, the ordinary bottom toolbar stays visible with Share,
+New folder and Paste on the left. Idle information reuses the local footer's right-aligned
+folder name and statistics labels, theme colors, spacing and flexible layout:
+folder name, visible item count, selection count and selected file size. Sizes
+come from the existing SMB listing, with no additional network request; totals
+saturate at the local footer's size limit. Like the local footer, a single folder
+does not show a size, and multi-selection sums regular files only (folder-only
+multi-selection shows zero). No recursive folder-size calculation is performed.
+Empty directories show the folder name and Empty. Long text is elided with the
+full information and SMB URL available on hover. Progress, errors and other
+operation messages remain centered, with Cancel on the right during page
+operations; equal-width side areas keep messages centered. The list reserves
+space for the toolbar.
+Before disabling or rebuilding a focused network list, focus moves to the stable
+page container so folder navigation does not advance focus into the toolbar.
+Completion leaves focus there; it does not reclaim focus if the user switched
+to the address bar, another pane or another window during loading. Deferred
+keyboard row focus follows the same rule.
+Discovery and server share lists use the same persistent bottom toolbar without
+action buttons or a duplicate inline message. Idle information uses the same
+right-aligned name and statistics layout as shared directories: discovery shows
+Network and the discovered item count; server share lists show the server address
+and their item and selection counts (or Empty). Share selections do not display
+file sizes. Progress and error messages remain centered. Both reserve space below
+the list for the toolbar.
+
+The Share toggle can publish an SMB directory as a nearby receive target. It is
+hidden on discovery and server-root pages. Directory listings request child-file
+creation access without modifying the directory; a confirmed denial disables
+Share. Inconclusive permission queries do not label the folder read-only. Enabling
+Share runs a separate worker that creates, closes and removes a uniquely named
+empty probe file, and only publishes the target if this succeeds. Checking and
+failed checks disable the toggle; Refresh allows another check. Connection,
+timeout and storage errors are not classified as read-only access.
+
+Incoming files use a private SMB-<target ID>/Received-* cache beneath the local
+receive directory. Existing pairing and receive approval still apply. Each
+verified local file is uploaded by an independent SMB child using the existing
+temporary-file, flush and non-overwriting rename path. Directories are created
+as needed; existing directories can be reused, but existing files are never
+replaced. The per-file stored acknowledgment is sent only after the remote
+operation succeeds; the batch complete acknowledgment follows all files.
+Updated senders advertise store_progress support and accept framed storing
+heartbeats while waiting for SMB. Legacy senders remain supported, with a
+200-second remote-store limit per file to stay within their acknowledgment wait.
+The existing SMB limit of 2 GB per file is checked before accepting the manifest.
+
+Successful batches remove their local cache. Failed or canceled batches retain
+received data and expose an Open action and cache path; users can copy remaining
+files from there and paste them into the SMB directory to retry. Earlier files
+may already be committed remotely; there is no batch rollback. Permission denial
+during upload withdraws the target and disables Share. Refresh rechecks access.
+SMB views refresh after reception, including partial failure. Matching URLs in
+tabs and splits share one target and toggle state; closing a pane does not revoke
+the target. Sharing folders shows the SMB URL and can remove inactive targets.
+Workspace data stores the URL and target identity, never credentials. Restored
+SMB targets remain unpublished until login and a fresh write probe succeed.
+
+Shared-directory menus use the same icons and ordering as local menus. Empty
+space offers New folder, Sort by, Paste, Select all and Properties. Selected
+entries offer Open, Copy, Rename (one entry), Delete, Copy File Path and Properties;
+folders also offer Open in new tab and the four split directions. Server share
+roots offer navigation, sorting, selection, URLs and properties, not mutations.
+Selection supports Ctrl/Cmd-click, Shift-click, rubber-band selection, keyboard
+navigation and Ctrl/Cmd+A. Ctrl/Cmd+C and Ctrl/Cmd+V use the same copy/paste flow
+as the context menus. Upload and Save copy have been removed from the menus.
+
+New folder in a shared directory reuses the local folder popover and its
+horizontal name field, separator and create button. Both the footer button and
+context menu open it with the arrow anchored to that pane's footer button.
+Enter submits; clicking outside dismisses it. SMB creation runs asynchronously
+with duplicate submissions disabled. Invalid names, existing targets and server
+errors retain the entered name and show an error inside the popover for retry.
+Success closes the popover and refreshes the listing. Navigation or pane/tab
+changes dismiss it; late results cannot update a replacement popover. Worker
+failure or cancellation resolves pending submissions instead of leaving the
+input disabled.
+
+Copy/paste supports local-to-SMB, SMB-to-local and SMB-to-SMB files and directory
+trees within crFiles. Local file clipboard entries from other applications are
+also accepted for SMB paste. Remote clipboard credentials stay in process memory;
+the system clipboard only receives SMB URLs, and a sequence token prevents stale
+remote clipboard entries from being reused after the clipboard changes. Cut is
+not offered for remote entries. Separate worker processes and a modal progress
+dialog own each copy job; ordinary cancellation stops its SMB workers. A final
+local publication cannot be interrupted. Existing targets are never overwritten
+or merged. Errors stop remote uploads at the failed item; already completed
+items remain. Copying remote files first downloads them into a private temporary
+directory, including for SMB-to-SMB copies. Temporary data is cleaned after the
+job; file contents are never placed in the system clipboard.
+
+SMB file grids and lists support dragging selected files or folders between
+split panes (and other shared-directory pages in the same crFiles process).
+Drop on empty space to use that directory, or on a folder to use that folder.
+The destination folder is highlighted; the cursor and bottom toolbar identify
+Move or Copy and the destination URL. Discovery and server share roots do not
+accept file drops. Local/external application drag-and-drop is not part of this
+SMB flow; use copy/paste for local-to-SMB and SMB-to-local transfers.
+
+Matching server addresses, shares and login credentials default to a direct
+server-side rename. Files and whole folders move without downloading their
+contents, so the copying size/count limits do not limit a folder's contents for
+this operation. Hold Ctrl (Option on macOS) before starting the drag to request
+Copy instead; copy/paste always remains Copy. Different shares, server addresses
+(including unrecognized aliases) or credentials use the existing private local
+cache and preserve originals. No cross-server move or COPYCHUNK optimization is
+attempted. The drag service receives only an expiring opaque token, never
+credentials or local filenames for remote files.
+
+Same-directory drops and dropping a folder into itself or its descendants are
+rejected. Existing targets are never overwritten or merged. A move failure,
+including cross-filesystem or permission errors, stops the job without falling
+back to copy-and-delete. Completed moves remain completed when a later item
+fails or the job is canceled; an in-flight server rename may already have
+completed. Both participating pages refresh after completion, failure or cancel.
+
+`smb://server/` is a
+virtual root listing that server's shares, not the server operating system's
+filesystem root. In a device tab, `/share/path` is relative to that server root;
+`smb://server/home/user` means folder `user` in share `home`. SMB URLs never enter
+the local filesystem path pipeline. Device roots identify the server in the
+breadcrumb and tab title, and each device tab has an independent connection.
+Leave the username empty for guest access, or enter a username, password and
+optional domain. Credentials are kept in memory by the current connection and
+remote clipboard snapshot so new tabs, splits and copy workers can authenticate.
+They are never written to settings, workspace state, system clipboard contents
+or process arguments.
+
+The same crFiles executable starts with `--crfiles-smb-process`; no separate SMB
+executable or system `smbclient` installation is needed. The process owns mDNS
+and libsmb2 sessions. Library calls and file writes use its blocking sequence,
+separate from discovery/IPC and the file-browser UI. A canceled operation,
+unresponsive worker or closed tab terminates that worker. Reconnect to retry.
+This provides crash isolation, not an additional OS sandbox on Linux/Windows.
+
+Refresh on the discovery page sends a fresh query while preserving the worker,
+listeners and current results. Repeated refreshes do not restart the eight-second
+empty-result timer. Refresh inside a share reloads its current directory.
+
+For command-line diagnostics, run `crFiles --crfiles-smb-discover`. It uses the
+same mDNS implementation for twelve seconds, prints server names, addresses and
+ports, and exits without opening a window, reading preferences or authenticating.
+Exit code 0 means at least one service was found; 2 means none was found.
+Interface enumeration and socket errors are also logged. An advertised service
+is a discovery hint, not proof that TCP 445 is reachable or that login will work.
+
+The client supports SMB2/3 with NTLMSSP or guest access, share and folder listing,
+copy/paste, and downloading a temporary copy before opening it with the
+existing PDF/image/system handlers. Inside a share, users can create folders,
+copy file trees, rename entries and permanently delete selected files and
+folders recursively after confirmation. Server/account permissions determine which operations
+succeed; the client no longer imposes read-only access. Share roots cannot be
+created, renamed or deleted through these file operations.
+Uploads and downloads are limited to 2 GiB per file; directory and share results
+show at most 1,000 entries. Copy and recursive deletion use complete directory
+enumeration instead of the truncated display list, with a 100,000-entry and
+4,096-byte relative-path limit; exceeding a limit fails instead of silently
+skipping entries. Symlinks and unsupported entry types also fail recursive
+operations. Uploads use a random remote temporary name and a
+non-overwriting rename after all bytes have been written and flushed. Existing
+targets are never replaced. Normal errors attempt to remove the temporary file;
+a killed worker, network loss or denied cleanup can leave a `.crFiles-upload-*`
+file on the server. Refresh to confirm the result after an interrupted operation.
+Editing an opened local copy does not automatically write back to the server.
+The implementation does not follow remote symlinks, persist passwords, or
+provide Kerberos/SMB1. Remote deletion does not use a recycle bin.
+Downloads use private staging directories and only publish completed copies.
+Cached copies use the system temporary directory; copies older than seven days
+are pruned on a later download. Workspace restoration returns to discovery and
+never automatically reconnects using saved credentials.
+
+The bundled library is [libsmb2 6.3](https://github.com/sahlberg/libsmb2/tree/libsmb2-6.3).
+Its source, desktop configuration and license are in `third_party/libsmb2`;
+packaging includes `libsmb2-LICENSE.txt`. For static-library redistribution,
+retain the corresponding source and relinking materials described in
+`third_party/libsmb2/README.chromium`.
+
+Manual validation after building: discover an advertised Samba/NAS service;
+connect directly to an unadvertised share; test guest access, incorrect and
+correct credentials, nested/non-ASCII names, an empty folder, saving/opening a
+PDF, direct nested SMB URLs, server-root breadcrumbs, back/forward, multiple
+device tabs, upload, name collisions, rename, new folders, confirmed deletion,
+non-empty folder deletion failure, read-only server permissions, cancellation,
+server disconnect, and terminating the SMB worker. In each
+failure case the local file tabs should remain usable and Network should allow
+reconnection. Also check that device activation prompts before opening a tab,
+that device-name and address-text bubble anchors follow layout changes, and that
+canceling authentication stops the pending worker without opening a device tab.
+Check tab close/reopen and workspace restoration on Linux, Windows and macOS.

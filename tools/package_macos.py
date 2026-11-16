@@ -162,7 +162,7 @@ def package(args):
     if args.pkg and (not args.installer_identity or args.pkg.exists()):
         raise ValueError('--pkg requires --installer-identity and a new output path')
     static_angle = uses_static_angle(build)
-    required = ['crFiles', 'icudtl.dat', 'crfiles_resources.pak',
+    required = ['crFiles', 'icudtl.dat', 'libsmb2-LICENSE.txt', 'crfiles_resources.pak',
                 'crfiles_resources', *PDF_RESOURCE_PAKS]
     if not static_angle:
         required += ['libEGL.dylib', 'libGLESv2.dylib']
@@ -211,6 +211,7 @@ def package(args):
     shutil.copy2(privacy_path, resources / 'PrivacyInfo.xcprivacy')
     licenses = resources / 'licenses'
     licenses.mkdir()
+    shutil.copy2(build / 'libsmb2-LICENSE.txt', licenses / 'libsmb2-LICENSE.txt')
     shutil.copy2(PROJECT.parent / 'LICENSE', licenses / 'Chromium-LICENSE')
     shutil.copy2(PROJECT.parent / 'third_party/pdfium/LICENSE', licenses / 'PDFium-LICENSE')
     for localization in sorted((PROJECT / 'mac').glob('*.lproj')):

@@ -22,5 +22,12 @@ std::optional<gfx::ImageSkia> FindCachedFileIcon(const base::FilePath& path, con
 // Call only on a file worker, in a COM STA on Windows. Cached across panes.
 // The caller should retry transient failures with a bounded delay.
 FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime, bool directory, int edge);
+// Bundled network device icon on every platform; call on a file worker.
+gfx::ImageSkia LoadNetworkServerIcon(int edge);
+// Bundled location icons; call on a file worker. Trash defaults to sidebar size.
+gfx::ImageSkia LoadNetworkWorkgroupIcon(int edge);
+gfx::ImageSkia LoadTrashIcon(int edge = 20);
+// Remote names select bundled type icons without querying local paths/Shell.
+gfx::ImageSkia LoadRemoteFileIcon(const std::string& name, bool directory, int edge);
 }
 #endif

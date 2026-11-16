@@ -4,10 +4,13 @@
 #define CRFILES_SHARING_SHARE_SERVICE_H_
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 #include "base/files/file_path.h"
+#include "base/files/file.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 #include "crFiles/sharing/connect_discovery.h"
 #include "ui/gfx/image/image_skia.h"
@@ -27,11 +30,24 @@ class ShareService {
     kReceivingOffer, kTransferring, kComplete, kCanceled, kError,
     kReceivingConflict, kSent,
   };
+  // Invoked on the receiving worker, never on the UI sequence. Implementations
+  // retain credentials locally and acknowledge only committed destination data.
+  class RemoteReceiveTarget {
+   public:
+    enum class Result { kOk, kFailed, kReadOnly, kExists };
+    virtual ~RemoteReceiveTarget() = default;
+    virtual uint64_t MaximumFileSize() const = 0;
+    virtual Result Store(const std::string& relative, base::File source,
+        bool directory, base::RepeatingCallback<bool()> canceled,
+        base::RepeatingCallback<void(uint64_t)> progress) = 0;
+  };
   struct SharedTarget {
     std::string id;
     std::string name;
     base::FilePath directory;  // Local only; never sent to another device.
     int64_t tag_id = 0;  // Local-only association for successful receives.
+    std::string network_url = {};  // Local only; persisted without credentials.
+    std::shared_ptr<RemoteReceiveTarget> remote = {};  // Session only.
     bool operator==(const SharedTarget&) const = default;
   };
   struct Peer {
@@ -97,6 +113,8 @@ class ShareService {
     int avatar = 0;
     std::string receive_target;
     std::string receive_target_name;
+    std::string receive_url;  // Local UI only; never a native filesystem path.
+    bool receive_write_denied = false;
     std::string peer_name;
     int peer_quick_share_avatar = -1;
     uint8_t peer_quick_share_application = 0;

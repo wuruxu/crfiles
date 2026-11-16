@@ -1,0 +1,32 @@
+// Copyright 2026 The Chromium Authors
+module crfiles.mojom;
+import "mojo/public/mojom/base/file.mojom";
+import "mojo/public/mojom/base/time.mojom";
+
+enum SmbError { kOk, kFailed, kAccessDenied, kInvalidAddress, kTooLarge, kLocalFile, kAlreadyExists };
+enum SmbMutation { kCreateDirectory, kRename, kDeleteFile, kDeleteDirectory, kDeleteTree, kEnsureDirectory };
+enum SmbWriteAccess { kUnknown, kWritable, kReadOnly };
+struct SmbServer { string name; string address; uint16 port; };
+struct SmbEntry {
+  string name;
+  bool directory;
+  uint64 size;
+  mojo_base.mojom.Time modified;
+  mojo_base.mojom.Time created;
+};
+struct SmbListing { SmbError error; array<SmbEntry> entries; bool limited; SmbWriteAccess write_access; };
+struct SmbDownload { SmbError error; uint64 bytes; uint64 total; bool done; };
+
+// One page owns one worker and at most one outstanding SMB operation. Passwords
+// travel only over IPC, never in process arguments, logs or workspace state.
+interface SmbService {
+  Discover(bool refresh) => (array<SmbServer> servers);
+  Connect(string server, string user, string password, string domain, string share, string path) => (SmbListing listing);
+  List(string share, string path, bool complete) => (SmbListing listing);
+  Download(string share, string path, mojo_base.mojom.File destination) => (SmbDownload state);
+  ContinueDownload() => (SmbDownload state);
+  Mutate(string share, string path, SmbMutation operation, string target) => (SmbError error);
+  Upload(string share, string path, mojo_base.mojom.File source) => (SmbDownload state);
+  ContinueUpload() => (SmbDownload state);
+  CheckWritable(string share, string path) => (SmbError error);
+};

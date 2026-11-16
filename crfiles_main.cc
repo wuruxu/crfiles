@@ -53,6 +53,7 @@
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 #include "crFiles/crfiles_theme.h"
 #include "crFiles/crfiles_search.h"
+#include "crFiles/crfiles_network.h"
 #include "crFiles/crfiles_archive.h"
 #include "crFiles/crfiles_video_thumbnail.h"
 #include "crFiles/crfiles_version.h"
@@ -481,7 +482,9 @@ int CrFilesEntry(int argc, char** argv) {
   const auto* launch = base::CommandLine::ForCurrentProcess();
   if (launch->GetProgram().BaseName().value() == "crFiles Helper" &&
       !launch->HasSwitch(crfiles::kArchiveProcessSwitch) &&
-      !launch->HasSwitch(crfiles::kSearchProcessSwitch)) return 1;
+      !launch->HasSwitch(crfiles::kSearchProcessSwitch) &&
+      !launch->HasSwitch(crfiles::kSmbProcessSwitch) &&
+      !launch->HasSwitch(crfiles::kSmbDiscoverySwitch)) return 1;
 #endif
   base::i18n::InitializeICU();
   LogStartupStage("mojo_icu_ready");
@@ -492,6 +495,14 @@ int CrFilesEntry(int argc, char** argv) {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kSearchProcessSwitch)) {
     base::FeatureList::InitInstance("", "");
     return crfiles::RunSearchProcess();
+  }
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kSmbProcessSwitch)) {
+    base::FeatureList::InitInstance("", "");
+    return crfiles::RunSmbProcess();
+  }
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(crfiles::kSmbDiscoverySwitch)) {
+    base::FeatureList::InitInstance("", "");
+    return crfiles::RunSmbDiscovery();
   }
   ui::RegisterPathProvider();
 #if BUILDFLAG(IS_MAC)

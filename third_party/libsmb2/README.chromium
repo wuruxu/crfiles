@@ -1,0 +1,23 @@
+Name: libsmb2
+URL: https://github.com/sahlberg/libsmb2
+Version: 6.3 (libsmb2-6.3 release)
+Revision archive: sahlberg-libsmb2-6e7078b
+Archive SHA-256: 473ead31591b9b2a51227c0cc725f3f5fc4d9cc9354396783d2757900778758e
+License: LGPL-2.1-or-later
+License File: LICENCE-LGPL-2.1.txt
+Security Critical: yes
+Shipped: yes
+
+Local changes: GN build and desktop config.h; omitted examples, tests,
+utilities and console-platform build directories. Library sources unchanged.
+Non-Windows builds use GNU C11 for upstream typeof/statement expressions in
+alloc.c and dcerpc.c. Windows retains the upstream _MSC_VER fallback.
+The library target opts out of Chromium's unsafe-buffers Clang plugin for
+upstream C pointer-based buffers; crFiles application targets retain the check.
+NTLMSSP authentication; no Kerberos, SMB1 or optional system libraries.
+Only the crFiles SMB worker uses this library.
+
+Redistributors must retain the license and provide the corresponding library
+source and relinking materials required by LGPL 2.1 when statically linked.
+The full library source is retained here; keep the exact crFiles source/build
+configuration and linkable object files with each distributed binary release.

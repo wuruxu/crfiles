@@ -34,6 +34,7 @@
 	<string>crFiles needs location permission to identify Wi-Fi networks, connect to a nearby device's hotspot for Quick Share, and restore your previous Wi-Fi connection.</string>
 	<key>NSBonjourServices</key>
 	<array>
+		<string>_smb._tcp</string>
 		<string>_crphotos._tcp</string>
 		<string>_crphotos-media._tcp</string>
 		<string>_crphotos-connect._tcp</string>

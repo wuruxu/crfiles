@@ -121,6 +121,11 @@ copy("app_icon") {
   outputs = [ "$root_out_dir/crfiles_resources/{{source_file_part}}" ]
 }
 
+copy("smb_license") {
+  sources = [ "third_party/libsmb2/LICENCE-LGPL-2.1.txt" ]
+  outputs = [ "$root_out_dir/libsmb2-LICENSE.txt" ]
+}
+
 copy("file_icons") {
   sources = [
     "resources/file_icons/COPYRIGHT",
@@ -131,10 +136,13 @@ copy("file_icons") {
     "resources/file_icons/font-x-generic.svg",
     "resources/file_icons/image-x-generic.svg",
     "resources/file_icons/inode-directory.svg",
+    "resources/file_icons/network-server.svg",
+    "resources/file_icons/network-workgroup.svg",
     "resources/file_icons/package-x-generic.svg",
     "resources/file_icons/text-html.svg",
     "resources/file_icons/text-x-generic.svg",
     "resources/file_icons/text-x-script.svg",
+    "resources/file_icons/user-trash.svg",
     "resources/file_icons/video-x-generic.svg",
     "resources/file_icons/x-office-document.svg",
     "resources/file_icons/x-office-presentation.svg",
@@ -185,6 +193,16 @@ crfiles_sources = [
   "crfiles_pdf_reader.h",
   "crfiles_process_singleton.cc",
   "crfiles_process_singleton.h",
+  "crfiles_network.cc",
+  "crfiles_network.h",
+  "crfiles_network_discovery.cc",
+  "crfiles_network_discovery.h",
+  "crfiles_network_process.cc",
+  "crfiles_network_share.cc",
+  "crfiles_network_share.h",
+  "crfiles_network_transfer.cc",
+  "crfiles_network_transfer.h",
+  "crfiles_network_view.cc",
   "crfiles_search.cc",
   "crfiles_search.h",
   "crfiles_search_content.cc",
@@ -244,6 +262,11 @@ mojom("crfiles_archive_mojom") {
   public_deps = [ "//mojo/public/mojom/base" ]
 }
 
+mojom("crfiles_network_mojom") {
+  sources = [ "crfiles_network.mojom" ]
+  public_deps = [ "//mojo/public/mojom/base" ]
+}
+
 mojom("crfiles_search_mojom") {
   sources = [ "crfiles_search.mojom" ]
 }
@@ -257,6 +280,7 @@ action("crfiles_buildtime") {
   script = "tools/generate_buildtime.py"
   inputs = crfiles_sources + [
              "crfiles_archive.mojom",
+             "crfiles_network.mojom",
              "crfiles_search.mojom",
              "crfiles_video_thumbnail.mojom",
              "VERSION",
@@ -347,6 +371,7 @@ executable("crFiles") {
     foreach(name,
             [
               "crfiles_archive",
+              "crfiles_network",
               "crfiles_search",
               "crfiles_video_thumbnail",
             ]) {
@@ -368,6 +393,7 @@ executable("crFiles") {
       "//crpdf:reader_mojom",
       ":crfiles_archive_mojom",
       ":crfiles_buildtime",
+      ":crfiles_network_mojom",
       ":crfiles_search_mojom",
       ":crfiles_strings",
       ":crfiles_version",
@@ -451,11 +477,13 @@ executable("crFiles") {
       deps += [ "//third_party/fontconfig" ]
     }
   }
+  deps += [ "third_party/libsmb2" ]
   data_deps = [
     ":app_icon",
     ":crfiles_resources_200_percent_pak",
     ":crfiles_resources_pak",
     ":file_icons",
+    ":smb_license",
     "//crpdf:resources",
   ]
   foreach(locale, crfiles_locales) {

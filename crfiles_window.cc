@@ -9,6 +9,9 @@
 #include "crFiles/crfiles_tags.h"
 #include "crFiles/crfiles_tags_view.h"
 #include "crFiles/crfiles_search_view.h"
+#include "crFiles/crfiles_network.h"
+#include "crFiles/crfiles_network_share.h"
+#include "crFiles/crfiles_network_transfer.h"
 #include "crFiles/crfiles_context_actions.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -517,6 +520,9 @@ struct FileViewOptions {
   bool created_column = false, permissions_column = false;
   std::array<int, 6> column_widths = {280, 90, 140, 160, 160, 140};
   bool operator==(const FileViewOptions&) const = default;
+  NetworkColumns NetworkColumnOptions() const {
+    return {size_column, type_column, modified_column, created_column};
+  }
 };
 struct Entry {
   base::FilePath path;
@@ -2150,6 +2156,7 @@ class PathCompletion {
  public:
   explicit PathCompletion(views::Textfield* field);
   ~PathCompletion();
+  void Cancel() { ClosePopup(); }
   void Changed() {
     if (updating_) return;
     ++generation_; pending_ = true; timer_.Stop();
@@ -2646,6 +2653,7 @@ END_METADATA
 class BreadcrumbButton : public views::LabelButton {
   METADATA_HEADER(BreadcrumbButton, views::LabelButton)
  public:
+  views::View* NameAnchor() const { return label(); }
   BreadcrumbButton(base::RepeatingClosure callback, std::u16string title, bool current, bool first, NavigationStyle style, bool animate_current)
       : views::LabelButton(std::move(callback), title), current_(current), first_(first), style_(style) {
     // Breadcrumbs are painted into a transparent layer for path transitions.
@@ -2890,7 +2898,7 @@ class FileRow : public views::Button {
     cc::PaintFlags flags;
     if (icons_ && background()) {
       flags.setAntiAlias(true);
-      flags.setColor(GetColorProvider()->GetColor(ui::kColorSysSurfaceVariant));
+      flags.setColor(background()->color().ResolveToSkColor(GetColorProvider()));
       canvas->DrawRoundRect(GetLocalBounds(), 16, flags);
     }
     const float opacity = GetState() == STATE_PRESSED ? 0.18f :
@@ -3699,6 +3707,7 @@ bool FolderScrollView::BoundaryRowReached(double offset, bool bottom) const {
 class FileButton : public views::LabelButton {
   METADATA_HEADER(FileButton, views::LabelButton)
  public:
+  views::View* NameAnchor() const { return label(); }
   FileButton(views::Button::PressedCallback callback, std::u16string name, bool icons, int icon_size)
       : views::LabelButton(std::move(callback), name), icons_(icons), icon_size_(icon_size) {
     AnimateButton(this);
@@ -3784,6 +3793,10 @@ class FileButton : public views::LabelButton {
 };
 BEGIN_METADATA(FileButton)
 END_METADATA
+constexpr int kTabIconSize = 18;
+constexpr int kTabIconSpacing = 2;
+constexpr int kTabMinimumWidth = 80 + kTabIconSize + kTabIconSpacing;
+constexpr int kTabPreferredWidth = 184 + kTabIconSize + kTabIconSpacing;
 class TabButton : public views::LabelButton, public views::ContextMenuController,
                   public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(TabButton, views::LabelButton)
@@ -3794,9 +3807,10 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     set_context_menu_controller(this);
     if (pinned_) {
       SetTooltipText(std::u16string(GetText()) + u" · " + Text(IDS_CRFILES_PIN));
-      SetImageModel(views::Button::STATE_NORMAL,
-          ui::ImageModel::FromVectorIcon(kKeepIcon, ui::kColorSysPrimary, 14));
-      SetImageLabelSpacing(4);
+      pin_icon_ = AddChildView(std::make_unique<views::ImageView>());
+      pin_icon_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+      pin_icon_->SetCanProcessEventsWithinSubtree(false);
+      pin_icon_->SetImage(ui::ImageModel::FromVectorIcon(kKeepIcon, ui::kColorSysOnSurfaceSecondary, 14));
     }
   }
   bool pinned() const { return pinned_; }
@@ -3880,6 +3894,8 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     SetHorizontalAlignment(gfx::ALIGN_LEFT);
     SetTooltipText(title);
     SetEnabledTextColors(active ? ui::kColorSysOnSurface : ui::kColorSysOnSurfaceSecondary);
+    SetImageLabelSpacing(kTabIconSpacing);
+    SetLocationIcon(ui::ImageModel::FromVectorIcon(vector_icons::kFolderOpenIcon, ui::kColorSysOnSurfaceSecondary, kTabIconSize));
     close_ = AddIconButton(this, kCloseIcon, IDS_CRFILES_CLOSE, std::move(close));
     close_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
     close_->SetRequestFocusOnPress(false);
@@ -3894,13 +3910,26 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     views::InstallCircleHighlightPathGenerator(close_);
     UpdateCloseVisibility();
   }
+  void SetLocationIcon(const ui::ImageModel& icon) {
+    if (location_icon_ == icon) return;
+    location_icon_ = icon;
+    search_state_.reset();
+    if (search_icon_) {
+      search_icon_->SetVisible(false);
+      search_spinner_->Stop(); search_spinner_->SetVisible(false);
+    }
+    SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(5, 16, 0, 32)));
+    SetImageModel(views::Button::STATE_NORMAL, icon);
+    SetTooltipText(std::u16string(GetText()) + (pinned_ ? u" · " + Text(IDS_CRFILES_PIN) : std::u16string()));
+  }
   void SetSearchState(SearchPageState state) {
     if (search_state_ == state) return;
     search_state_ = state;
+    SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel());
+    SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(5, 16 + kTabIconSize + kTabIconSpacing, 0, 32)));
     if (!search_icon_) {
-      SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(5, 40, 0, 32)));
       search_icon_ = AddChildView(std::make_unique<views::ImageView>());
-      search_spinner_ = AddChildView(std::make_unique<views::Throbber>(16));
+      search_spinner_ = AddChildView(std::make_unique<views::Throbber>(kTabIconSize));
       for (views::View* view : {static_cast<views::View*>(search_icon_.get()), static_cast<views::View*>(search_spinner_.get())}) {
         view->SetProperty(views::kViewIgnoredByLayoutKey, true);
         view->SetCanProcessEventsWithinSubtree(false);
@@ -3921,8 +3950,9 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     search_icon_->SetVisible(!working); search_spinner_->SetVisible(working);
     if (working) search_spinner_->Start(); else search_spinner_->Stop();
     search_icon_->SetImage(ui::ImageModel::FromVectorIcon(*icon,
-        state == SearchPageState::kFailed ? ui::kColorSysError : ui::kColorSysPrimary, 16));
-    SetTooltipText(std::u16string(GetText()) + u" · " + Text(description));
+        state == SearchPageState::kFailed ? ui::kColorSysError : ui::kColorSysPrimary, kTabIconSize));
+    SetTooltipText(std::u16string(GetText()) + u" · " + Text(description) +
+        (pinned_ ? u" · " + Text(IDS_CRFILES_PIN) : std::u16string()));
     InvalidateLayout(); SchedulePaint();
   }
   void AddedToWidget() override {
@@ -3943,9 +3973,10 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     UpdateCloseVisibility();
     LayoutSuperclass<views::LabelButton>(this);
     close_->SetBounds(std::max(0, width() - 34), (height() - 24) / 2, 24, 24);
+    if (pin_icon_) pin_icon_->SetBounds(std::max(0, width() - 29), (height() - 14) / 2, 14, 14);
     if (search_icon_) {
-      search_icon_->SetBounds(16, (height() - 16) / 2, 16, 16);
-      search_spinner_->SetBounds(16, (height() - 16) / 2, 16, 16);
+      search_icon_->SetBounds(16, (height() - kTabIconSize) / 2, kTabIconSize, kTabIconSize);
+      search_spinner_->SetBounds(16, (height() - kTabIconSize) / 2, kTabIconSize, kTabIconSize);
     }
   }
   void OnPaintBackground(gfx::Canvas* canvas) override {
@@ -4004,6 +4035,8 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
   int drag_delta_ = 0;
   bool pressed_ = false, dragging_ = false;
   std::optional<SearchPageState> search_state_;
+  ui::ImageModel location_icon_;
+  raw_ptr<views::ImageView> pin_icon_ = nullptr;
   raw_ptr<views::ImageView> search_icon_ = nullptr;
   raw_ptr<views::Throbber> search_spinner_ = nullptr;
   base::CallbackListSubscription paint_active_subscription_;
@@ -4030,9 +4063,9 @@ class TabStrip : public views::View {
   }
   gfx::Size CalculatePreferredSize(const views::SizeBounds& available) const override {
     const int count = static_cast<int>(children().size());
-    const int minimum = count * 81;
+    const int minimum = count * (kTabMinimumWidth + 1);
     return gfx::Size(available.width().is_bounded() ?
-        std::max(minimum, available.width().value()) : count * 185, 36);
+        std::max(minimum, available.width().value()) : count * (kTabPreferredWidth + 1), 36);
   }
   void Layout(PassKey) override {
     PositionTabs(false);
@@ -4077,7 +4110,7 @@ class TabStrip : public views::View {
  private:
   int TabWidth() const {
     const int count = std::max(1, static_cast<int>(children().size()));
-    return std::clamp((width() - count) / count, 80, 184);
+    return std::clamp((width() - count) / count, kTabMinimumWidth, kTabPreferredWidth);
   }
   void PositionTabs(bool animate) {
     const int tab_width = TabWidth();
@@ -4114,7 +4147,29 @@ END_METADATA
 
 // Keep the add button next to short tab strips, but outside an overflowing
 // viewport. Complete scrolling layout before revealing the selected tab.
-constexpr int kNewTabButtonSize = 25;
+constexpr int kNewTabButtonSize = 28;
+constexpr int kNewTabButtonLeftPadding = 6;
+class NewTabButton : public views::LabelButton {
+  METADATA_HEADER(NewTabButton, views::LabelButton)
+ public:
+  explicit NewTabButton(base::RepeatingClosure callback)
+      : views::LabelButton(std::move(callback), std::u16string()) {
+    AnimateButton(this);
+  }
+  void OnPaintBackground(gfx::Canvas* canvas) override {
+    const float opacity = GetState() == STATE_PRESSED ? 0.20f :
+        0.12f * static_cast<float>(hover_animation().GetCurrentValue());
+    if (opacity <= 0.f) return;
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysPrimary));
+    flags.setAlphaf(opacity);
+    canvas->DrawCircle(gfx::PointF(width() / 2.f, height() / 2.f),
+        std::min(width(), height()) / 2.f, flags);
+  }
+};
+BEGIN_METADATA(NewTabButton)
+END_METADATA
 class TabBar : public views::View {
   METADATA_HEADER(TabBar, views::View)
  public:
@@ -4128,11 +4183,11 @@ class TabBar : public views::View {
     // against those stale bounds would leave the new tab out of view.
     if (!scroll_synchronizer_)
       scroll_synchronizer_ = scroll->EnableScrollSynchronization();
-    const int desired = static_cast<int>(scroll->contents()->children().size()) * 185;
+    const int desired = static_cast<int>(scroll->contents()->children().size()) * (kTabPreferredWidth + 1);
     const int viewport_width = std::min(desired,
-        std::max(0, width() - kNewTabButtonSize - 4));
+        std::max(0, width() - kNewTabButtonSize - kNewTabButtonLeftPadding - 2));
     scroll->SetBounds(0, 0, viewport_width, 36);
-    children()[1]->SetBounds(viewport_width + 2, (36 - kNewTabButtonSize) / 2,
+    children()[1]->SetBounds(viewport_width + kNewTabButtonLeftPadding, (36 - kNewTabButtonSize) / 2,
                             kNewTabButtonSize, kNewTabButtonSize);
     LayoutSuperclass<views::View>(this);
     scroll->DeprecatedLayoutImmediately();
@@ -4275,7 +4330,10 @@ class NewFolderView : public views::View, public views::TextfieldController {
     error_->SetMultiLine(true); error_->SetMaximumWidth(260); error_->SetVisible(false);
   }
   views::Textfield* field() { return name_; }
-  void Failed() { submitting_ = false; name_->SetEnabled(true); create_button_->SetEnabled(true); error_->SetVisible(true); InvalidateLayout(); name_->RequestFocus(); }
+  void Failed(std::u16string message = {}) {
+    if (!message.empty()) error_->SetText(message);
+    submitting_ = false; name_->SetEnabled(true); create_button_->SetEnabled(true); error_->SetVisible(true); InvalidateLayout(); name_->RequestFocus();
+  }
   void ContentsChanged(views::Textfield*, const std::u16string&) override {
     if (completion_) completion_->Changed();
   }
@@ -4339,11 +4397,12 @@ class IconSizeSlider : public views::Slider {
 };
 BEGIN_METADATA(IconSizeSlider)
 END_METADATA
+enum class ViewOptionsPage { kLocal, kNetworkRoot, kNetworkDirectory };
 class ViewOptions : public views::View, public views::SliderListener {
   METADATA_HEADER(ViewOptions, views::View)
  public:
   ViewOptions(FileViewOptions options, base::RepeatingCallback<void(FileViewOptions)> changed,
-              base::RepeatingClosure resized)
+              base::RepeatingClosure resized, ViewOptionsPage page)
       : options_(options), changed_(std::move(changed)), resized_(std::move(resized)) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets(4), 4));
@@ -4368,6 +4427,8 @@ class ViewOptions : public views::View, public views::SliderListener {
       auto* tick = ticks->AddChildView(std::make_unique<views::Label>(base::NumberToString16(size)));
       ticks_layout->SetFlexForView(tick, 1);
     }
+    // Discovery and share roots have no file metadata or hidden-file filter.
+    if (page == ViewOptionsPage::kNetworkRoot) return;
     Separator();
     hidden_ = AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_SHOW_HIDDEN)));
     AnimateButton(hidden_); hidden_->SetChecked(options_.show_hidden);
@@ -4386,6 +4447,8 @@ class ViewOptions : public views::View, public views::SliderListener {
     const std::array checked = {options_.size_column, options_.type_column, options_.modified_column, options_.created_column, options_.permissions_column};
     static_assert(column_labels.size() == checked.size());
     for (size_t i = 0; i < column_labels.size(); ++i) {
+      // SMB permissions require separate ACL handling.
+      if (page == ViewOptionsPage::kNetworkDirectory && i == 4) continue;
       auto* checkbox = columns_->AddChildView(std::make_unique<views::Checkbox>(Text(column_labels[i])));
       AnimateButton(checkbox); checkbox->SetChecked(checked[i]);
       checkbox->SetCallback(base::BindRepeating(&ViewOptions::Column, base::Unretained(this), static_cast<int>(i), base::Unretained(checkbox)));
@@ -5059,7 +5122,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     bookmarks_->BookmarkPaths(std::move(paths));
   }
-  explicit FilesView(FilesView* root = nullptr, base::FilePath initial_path = {}, bool history_page = false, bool deferred_start = false, bool search_page = false, int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}) : search_scope_(std::move(search_scope)), tag_id_(tag_id), tag_name_(std::move(tag_name)), history_page_(history_page || search_page), search_page_(search_page), root_(root), sharing_(root ? nullptr : std::make_shared<NearbySharing>()) {
+  explicit FilesView(FilesView* root = nullptr, base::FilePath initial_path = {}, bool history_page = false, bool deferred_start = false, bool search_page = false, int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}, bool network_page = false) : search_scope_(std::move(search_scope)), tag_id_(tag_id), tag_name_(std::move(tag_name)), history_page_(history_page || search_page || network_page), search_page_(search_page), network_page_(network_page), root_(root), sharing_(root ? nullptr : std::make_shared<NearbySharing>()) {
     if (!root_) g_contents = this;
     if (root_) {
       // Keep the pane outline in the same layer subtree as its scrolling content.
@@ -5099,6 +5162,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // The toolbar already contributes 4px spacing on each side.
     navigation_separator->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 2)));
     auto* path_area = toolbar_->AddChildView(std::make_unique<views::View>());
+    path_area_ = path_area;
     path_area->SetLayoutManager(std::make_unique<views::FillLayout>());
     path_area->SetPreferredSize(gfx::Size(240, 32));
     tools->SetFlexForView(path_area, 1);
@@ -5170,7 +5234,32 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
     add_place(vector_icons::kFolderOpenIcon, IDS_CRFILES_RECEIVED, base::BindRepeating(&FilesView::Received, base::Unretained(this)));
     sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetVisible(false);
+    add_place(vector_icons::kDevicesIcon, IDS_CRFILES_NETWORK, base::BindRepeating(&FilesView::ShowNetworkTab, base::Unretained(this)));
     add_place(kDeleteIcon, IDS_CRFILES_TRASH, base::BindRepeating(&FilesView::Trash, base::Unretained(this)));
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce([] { return std::array{LoadTrashIcon(), LoadTrashIcon(kTabIconSize), LoadNetworkWorkgroupIcon(kTabIconSize), LoadNetworkWorkgroupIcon(20)}; }),
+        base::BindOnce([](base::WeakPtr<FilesView> view, std::array<gfx::ImageSkia, 4> images) {
+          if (!view) return;
+          if (!images[0].isNull()) {
+            auto* button = view->sidebar_buttons_.at(IDS_CRFILES_TRASH).get();
+            for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+                               views::Button::STATE_PRESSED, views::Button::STATE_DISABLED})
+              button->SetImageModel(state, ui::ImageModel::FromImageSkia(images[0]));
+          }
+          if (!images[1].isNull()) view->trash_tab_icon_ = ui::ImageModel::FromImageSkia(images[1]);
+          if (!images[2].isNull()) view->network_tab_icon_ = ui::ImageModel::FromImageSkia(images[2]);
+          if (!images[3].isNull()) {
+            view->network_location_icon_ = ui::ImageModel::FromImageSkia(images[3]);
+            auto* sidebar = view->sidebar_buttons_.at(IDS_CRFILES_NETWORK).get();
+            auto* breadcrumb = views::AsViewClass<BreadcrumbButton>(view->network_breadcrumb_.view());
+            for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+                               views::Button::STATE_PRESSED, views::Button::STATE_DISABLED}) {
+              sidebar->SetImageModel(state, view->network_location_icon_);
+              if (breadcrumb) breadcrumb->SetImageModel(state, view->network_location_icon_);
+            }
+          }
+          view->UpdateTabStates();
+        }, weak_.GetWeakPtr()));
     sidebar->AddChildView(std::make_unique<views::Separator>());
     add_place(kTagsIcon, IDS_CRFILES_TAGS, base::BindRepeating(&FilesView::ShowTagsTab, base::Unretained(this)));
     sidebar->AddChildView(std::make_unique<views::Separator>());
@@ -5399,6 +5488,40 @@ class FilesView : public views::View, public views::TextfieldController, public 
         LoadTagFiles();
         return;
       }
+      if (network_page_) {
+        tabs_.push_back(Tab{.id = next_id_++});
+        Current().sidebar_selection = IDS_CRFILES_NETWORK;
+        files_->SetVisible(false); footer_->SetVisible(false);
+        network_view_ = center->AddChildViewAt(CreateNetworkPage(
+            base::BindRepeating([](base::WeakPtr<FilesView> pane, base::FilePath path) {
+              if (pane) pane->Open(path, false);
+            }, weak_.GetWeakPtr()),
+            base::BindRepeating([](base::WeakPtr<FilesView> pane, std::unique_ptr<ConnectedSmbSession> session) {
+              if (!pane) return;
+              auto* shell = pane->root_.get();
+              shell->AddPaneTab({}, false, false, -1, {}, {}, true);
+              AdoptNetworkSession(shell->ActivePane()->network_view_, std::move(session));
+            }, weak_.GetWeakPtr()),
+            base::BindRepeating([](base::WeakPtr<FilesView> pane) {
+              if (pane && pane->root_) pane->root_->PaneNavigated(pane.get());
+            }, weak_.GetWeakPtr()),
+            base::BindRepeating([](base::WeakPtr<FilesView> pane) -> views::View* {
+              return pane && pane->root_ ? pane->root_->network_address_anchor_.view() : nullptr;
+            }, weak_.GetWeakPtr()),
+            base::BindRepeating([](base::WeakPtr<FilesView> pane, SmbCredentials credentials, int direction) {
+              if (!pane) return;
+              if (direction < 0) pane->root_->OpenNetworkDevice(std::move(credentials));
+              else pane->root_->SplitPane(pane.get(), direction, {}, std::move(credentials));
+            }, weak_.GetWeakPtr()),
+            base::BindRepeating([](base::WeakPtr<FilesView> pane, int sort) {
+              if (!pane) return;
+              pane->Current().options.sort = static_cast<FileSort>(sort);
+              pane->root_->ScheduleWorkspaceSave();
+            }, weak_.GetWeakPtr())), 0);
+        center_layout->SetFlexForView(network_view_, 1);
+        ConfigureNetworkFooter();
+        return;
+      }
       if (search_page_) {
         tabs_.push_back(Tab{.id = next_id_++}); Current().path = initial_path;
         files_->SetVisible(false); footer_->SetVisible(false);
@@ -5421,7 +5544,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
               if (!destination->Current().loading) destination->RenderFiles();
             }, weak_.GetWeakPtr()),
             base::BindRepeating([](base::WeakPtr<FilesView> pane) {
-              if (pane && pane->root_) pane->root_->UpdateSearchTabStates();
+              if (pane && pane->root_) pane->root_->UpdateTabStates();
             }, weak_.GetWeakPtr()), search_scope_), 0);
         center_layout->SetFlexForView(search_view_, 1);
         return;
@@ -5660,6 +5783,30 @@ class FilesView : public views::View, public views::TextfieldController, public 
           pane->Current().InvalidateOrder(); pane->RenderFiles();
         }, weak_.GetWeakPtr(), token, request));
   }
+  void ShowNetworkTab() {
+    if (root_) { root_->ShowNetworkTab(); return; }
+    EndAddressEditing();
+    for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->network_view_ &&
+        NetworkPageUrl(tab.active_pane->network_view_).empty()) { SelectPaneTab(tab.id); return; }
+    AddPaneTab({}, false, false, -1, {}, {}, true);
+  }
+  void OpenNetworkDevice(SmbCredentials credentials) {
+    AddPaneTab({}, false, false, -1, {}, {}, true);
+    ConnectNetworkPage(ActivePane()->network_view_, std::move(credentials));
+  }
+  bool NavigateNetworkAddress(std::string address) {
+    auto* pane = ActivePane();
+    if (pane->network_view_ && NavigateNetworkPage(pane->network_view_, address)) return true;
+    if (address.starts_with('/') && pane->network_view_) {
+      const auto current = ParseSmbLocation(NetworkPageUrl(pane->network_view_));
+      if (current) address = "smb://" + current->server + address;
+    }
+    const auto location = ParseSmbLocation(address);
+    if (!location) return false;
+    AddPaneTab({}, false, false, -1, {}, {}, true);
+    PromptNetworkPage(ActivePane()->network_view_, location->Url());
+    return true;
+  }
   void ShowSearchTab() {
     auto* pane = ActivePane();
     if (!pane || pane->history_page_ || pane->Current().loading || pane->Current().error) return;
@@ -5680,13 +5827,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ShowHistoryTab() {
     if (root_) { root_->ShowHistoryTab(); return; }
-    for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->history_page_ && !tab.active_pane->search_page_ && tab.active_pane->tag_id_ < 0) { SelectPaneTab(tab.id); return; }
+    for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->history_page_ && !tab.active_pane->search_page_ && !tab.active_pane->network_page_ && tab.active_pane->tag_id_ < 0) { SelectPaneTab(tab.id); return; }
     AddPaneTab({}, true);
   }
   void LoadHistory() { RequestHistory(false); }
   void LoadMoreHistory() { RequestHistory(true); }
   void RequestHistory(bool append) {
-    if (!history_page_ || search_page_ || tag_id_ >= 0 || history_loading_) return;
+    if (!history_page_ || search_page_ || network_page_ || tag_id_ >= 0 || history_loading_) return;
     auto* list = views::AsViewClass<HistoryList>(files_->contents());
     append = append && list && history_cache_valid_ &&
         history_loaded_query_ == history_query_ && history_loaded_filter_ == history_filter_ &&
@@ -5735,7 +5882,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     contents->Append(std::move(page.entries), more);
     files_->SetContents(std::move(contents));
   }
-  ~FilesView() override { hover_cancel_->store(true); live_cancel_->store(true); if (destination_dialog_) destination_dialog_->ListenerDestroyed(); context_runner_.reset(); read_cancel_->store(true); order_cancel_->store(true); DirectoryReads().Prune(); visual_cancel_->store(true, std::memory_order_relaxed); outside_click_handler_.reset(); CloseNewFolder(); CloseViewOptions(); if (!root_) g_contents = nullptr; }
+  ~FilesView() override { network_share_cancel_->store(true); hover_cancel_->store(true); live_cancel_->store(true); if (destination_dialog_) destination_dialog_->ListenerDestroyed(); context_runner_.reset(); read_cancel_->store(true); order_cancel_->store(true); DirectoryReads().Prune(); visual_cancel_->store(true, std::memory_order_relaxed); outside_click_handler_.reset(); CloseNewFolder(); CloseViewOptions(); if (!root_) g_contents = nullptr; }
   void AddedToWidget() override {
     views::View::AddedToWidget();
     if (root_) {
@@ -5763,7 +5910,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     views::View::RemovedFromWidget();
   }
   void OnResize(int amount, bool done) override {
-    if (!sidebar_viewport_ || !ActivePane() || (ActivePane()->history_page_ && ActivePane()->tag_id_ < 0)) return;
+    if (!sidebar_viewport_ || !ActivePane() || (ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0)) return;
     if (!sidebar_drag_start_) {
       sidebar_animation_timer_.Stop();
       sidebar_drag_start_ = sidebar_display_width_;
@@ -5781,7 +5928,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateSidebarPresentation() {
     if (!sidebar_viewport_) return;
-    const bool history = ActivePane() && ActivePane()->history_page_ && ActivePane()->tag_id_ < 0;
+    const bool history = ActivePane() && ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0;
     sidebar_viewport_->SetPreferredSize(gfx::Size(sidebar_display_width_, 0));
     sidebar_viewport_->SetVisible(!history && sidebar_display_width_ > 0);
     sidebar_resize_->SetVisible(!history);
@@ -5808,7 +5955,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateSidebarPresentation();
   }
   void RestoreSidebar() {
-    if (!ActivePane() || (ActivePane()->history_page_ && ActivePane()->tag_id_ < 0)) return;
+    if (!ActivePane() || (ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0)) return;
     sidebar_drag_start_.reset();
     AnimateSidebarTo(sidebar_width_);
     ActivePane()->DefaultFocusView()->RequestFocus();
@@ -5824,6 +5971,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       const int footer_height = trash ? static_cast<int>(std::lround(preferred.height() * 1.08)) : preferred.height();
       if (auto* layout = views::AsViewClass<FileLayout>(files_->contents()))
         layout->SetBottomPadding(tag_id_ == 0 ? 0 : footer_height + 10);
+      if (network_view_) SetNetworkPageBottomInset(network_view_, network_footer_visible_ ? footer_height + 10 : 0);
       footer_->SetBounds(area.x() + (area.width() - footer_width) / 2,
           std::max(area.y(), area.bottom() - footer_height -
               (Current().path == TrashRoot() ? 2 : 0)), footer_width, footer_height);
@@ -5847,9 +5995,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       fullscreen_shown_ = false;
     }
   }
-  views::View* DefaultFocusView() { return root_ ? (search_view_ ? search_view_.get() : files_.get()) : ActivePane()->DefaultFocusView(); }
+  views::View* DefaultFocusView() { return root_ ? (network_view_ ? network_view_.get() : search_view_ ? search_view_.get() : files_.get()) : ActivePane()->DefaultFocusView(); }
   gfx::Size GetMinimumSize() const override { return root_ ? gfx::Size(300, 140) : gfx::Size(900, 500); }
   void PrepareToClose() {
+    network_share_cancel_->store(true);
     if (!root_) sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetBreathing(false);
 #if BUILDFLAG(IS_MAC)
     titlebar_click_monitor_.RunAndReset();
@@ -5858,6 +6007,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!root_) CloseHoverPreview(false);
     live_watches_.clear(); timer_.Stop();
     if (search_view_) StopSearchPage(search_view_);
+    if (network_view_) StopNetworkPage(network_view_);
     sidebar_animation_timer_.Stop();
     CancelDirectoryWork();
     CancelFileVisuals();
@@ -5902,8 +6052,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     tabs_view_ = scroll->SetContents(std::make_unique<TabStrip>(
         base::BindRepeating(&FilesView::ReorderTabs, weak_.GetWeakPtr())));
     container->AddChildView(std::move(scroll));
-    auto* add = AddIconButton(container.get(), vector_icons::kAdd2Icon, IDS_CRFILES_NEW_TAB,
-        Deferred(base::BindRepeating(&FilesView::NewCurrentTab, weak_.GetWeakPtr())));
+    auto* add = container->AddChildView(std::make_unique<NewTabButton>(
+        Deferred(base::BindRepeating(&FilesView::NewCurrentTab, weak_.GetWeakPtr()))));
     add->SetFocusBehavior(views::View::FocusBehavior::NEVER);
     add->SetRequestFocusOnPress(false);
     add->SetTooltipText(Text(IDS_CRFILES_NEW_TAB));
@@ -5917,9 +6067,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
         ui::ImageModel::FromVectorIcon(vector_icons::kAdd2Icon, ui::kColorSysOnSurface, 14));
     add->SetInstallFocusRingOnFocus(false);
     views::InstallCircleHighlightPathGenerator(add);
-    auto* ink = views::InkDrop::Get(add);
-    ink->SetMode(views::InkDropHost::InkDropMode::ON);
-    ink->GetInkDrop()->SetShowHighlightOnFocus(false);
+    // Paint the hover directly on the titlebar, without a separate ink layer.
+    add->SetHasInkDropActionOnClick(false);
+    views::InkDrop::Get(add)->SetMode(views::InkDropHost::InkDropMode::OFF);
     for (auto state : {views::Button::STATE_HOVERED, views::Button::STATE_PRESSED})
       add->SetImageModel(state, ui::ImageModel::FromVectorIcon(vector_icons::kAdd2Icon, ui::kColorSysPrimary, 14));
     RenderTabs();
@@ -5944,7 +6094,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     RefreshReceivedSidebar();
   }
   void ContentsChanged(views::Textfield* sender, const std::u16string& contents) override {
-    if (sender == address_) { address_completion_->Changed(); return; }
+    if (sender == address_) {
+      if ((!tabs_.empty() && Current().active_pane && ActivePane()->network_page_) ||
+          base::StartsWith(contents, u"smb://", base::CompareCase::INSENSITIVE_ASCII)) address_completion_->Cancel();
+      else address_completion_->Changed();
+      return;
+    }
     if (sender != history_search_) return;
     history_query_ = base::UTF16ToUTF8(contents);
     ++history_generation_;
@@ -5960,6 +6115,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     if (event.type() != ui::EventType::kKeyPressed || sender->IsIMEComposing()) return false;
     if (event.key_code() == ui::VKEY_RETURN) {
+      const auto address = base::UTF16ToUTF8(address_->GetText());
+      if (base::StartsWith(address, "smb://", base::CompareCase::INSENSITIVE_ASCII) ||
+          (ActivePane()->network_view_ && address.starts_with('/'))) {
+        const bool valid = NavigateNetworkAddress(address);
+        address_->SetInvalid(!valid);
+        if (valid) EndAddressEditing();
+        return true;
+      }
       auto path = ParseNavigationPath(address_->GetText());
       if (!path) { address_->SetInvalid(true); return true; }
       address_->SetInvalid(false);
@@ -5976,6 +6139,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (a.key_code() == ui::VKEY_C || a.key_code() == ui::VKEY_X || a.key_code() == ui::VKEY_V) {
       auto* pane = ActivePane();
       auto* focused = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
+      if (pane && pane->network_view_ && focused && pane->network_view_->Contains(focused)) {
+        for (auto* view = focused; view; view = view->parent())
+          if (views::AsViewClass<views::Textfield>(view)) return false;
+        if (a.key_code() == ui::VKEY_C) CopyNetworkPageSelection(pane->network_view_);
+        else if (a.key_code() == ui::VKEY_V) PasteNetworkPage(pane->network_view_);
+        return a.key_code() != ui::VKEY_X;
+      }
       if (!pane || pane->history_page_ || !focused || !pane->files_->Contains(focused)) return false;
     }
     switch (a.key_code()) {
@@ -6140,11 +6310,21 @@ class FilesView : public views::View, public views::TextfieldController, public 
           if (!shell) return;
           if (auto* view = shell->sharing_folders_dialog_.view(); view && view->GetWidget())
             view->GetWidget()->Close();
-          if (target.tag_id > 0) shell->AddPaneTab({}, false, false, target.tag_id, target.name);
+          if (!target.network_url.empty()) {
+            const auto credentials = shell->network_share_credentials_.find(target.network_url);
+            if (credentials != shell->network_share_credentials_.end()) shell->OpenNetworkDevice(credentials->second);
+            else {
+              shell->AddPaneTab({}, false, false, -1, {}, {}, true);
+              PromptNetworkPage(shell->ActivePane()->network_view_, target.network_url);
+            }
+          } else if (target.tag_id > 0) shell->AddPaneTab({}, false, false, target.tag_id, target.name);
           else shell->NewTab(target.directory);
         }, weak_.GetWeakPtr()),
         base::BindRepeating([](base::WeakPtr<FilesView> shell, NearbySharing::SharedTarget target) {
           if (!shell) return;
+          shell->network_share_checks_.erase(target.network_url);
+          shell->network_share_credentials_.erase(target.network_url);
+          shell->network_share_attempted_.erase(target.network_url);
           std::erase_if(shell->shared_directories_, [&](const auto& shared) { return shared.id == target.id; });
           shell->SyncSharedTargets(); shell->ScheduleWorkspaceSave();
         }, weak_.GetWeakPtr())));
@@ -6162,7 +6342,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ToggleSidebarFromTitlebar() { ToggleSidebar(); }
   bool SidebarVisible() {
-    return sidebar_visible_ && !(ActivePane() && ActivePane()->history_page_ && ActivePane()->tag_id_ < 0);
+    return sidebar_visible_ && !(ActivePane() && ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0);
   }
   void ShowMoreMenu() {
     if (!root_ || (more_menu_runner_ && more_menu_runner_->IsRunning())) return;
@@ -6468,8 +6648,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (context_paths_.size() == 1 && !context_directory_ && IsExtractableArchive(context_paths_.front())) {
         context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
         add(kContextExtractHere, IDS_CRFILES_EXTRACT_HERE, &vector_icons::kFolderOpenIcon);
+        auto extract_label = l10n_util::GetStringFUTF16(
+            IDS_CRFILES_EXTRACT_NAMED, ArchiveFolderName(context_paths_.front()).AsUTF16Unsafe());
+#if BUILDFLAG(IS_WIN)
+        // The separator follows the name inside some translations, not at the end.
+        std::ranges::replace(extract_label, u'/', u'\\');
+#endif
         context_menu_->AddItemWithIcon(kContextExtractFolder,
-            l10n_util::GetStringFUTF16(IDS_CRFILES_EXTRACT_NAMED, ArchiveFolderName(context_paths_.front()).AsUTF16Unsafe()),
+            extract_label,
             image(vector_icons::kFolderOpenIcon));
         add(kContextExtractTo, IDS_CRFILES_EXTRACT_TO, &vector_icons::kFolderOpenIcon);
       }
@@ -6507,8 +6693,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     SetWindowsClipboardMove(cut);
 #endif
     root_->clipboard_sequence_ = ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
+    NetworkFileClipboard();
   }
   bool HasFileClipboard() const {
+    if (NetworkFileClipboard()) return true;
 #if BUILDFLAG(IS_MAC)
     if (HasFileClipboardMac()) return true;
 #endif
@@ -6519,9 +6707,22 @@ class FilesView : public views::View, public views::TextfieldController, public 
         *root_->clipboard_sequence_ == ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
   }
   void PasteSelection(bool force_move = false) {
+    if (network_view_) { PasteNetworkPage(network_view_); return; }
     if (IsTagListing()) return;
     if (IsDrivesLocation(Current().path)) return;
     if (!root_ || history_page_ || Current().loading || root_->local_operation_busy_ || !HasFileClipboard()) return;
+    if (auto source = NetworkFileClipboard()) {
+      const auto destination = Current().path;
+      EnsureDirectoryAccess(GetWidget(), destination, true, base::BindOnce(
+          [](base::WeakPtr<FilesView> pane, std::shared_ptr<const NetworkClipboard> source, base::FilePath destination, bool granted) {
+            if (!pane || !granted) return;
+            CopyNetworkSelection(pane->GetWidget(), std::move(source), {}, std::nullopt, destination,
+                base::BindOnce([](base::WeakPtr<FilesView> pane, base::FilePath destination) {
+                  if (pane && pane->Current().path == destination) pane->QueueLiveRead();
+                }, pane, destination));
+          }, weak_.GetWeakPtr(), std::move(source), destination));
+      return;
+    }
 #if BUILDFLAG(IS_WIN)
     if (!root_->clipboard_paths_.empty() && root_->clipboard_sequence_ &&
         *root_->clipboard_sequence_ == ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste)) {
@@ -6598,7 +6799,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void ShowReceivedFiles() { Received(); }
   void ShowReceivedDirectory(const base::FilePath& directory) {
     if (directory.empty() || !directory.IsAbsolute()) return;
-    if (auto* pane = ActivePane()) pane->Navigate(directory);
+    if (auto* pane = ActivePane()) {
+      if (pane->network_page_ || pane->history_page_) AddPaneTab(directory);
+      else pane->Navigate(directory);
+    }
   }
   void ChooseDestination(bool move) {
     if (destination_dialog_) return;
@@ -7219,6 +7423,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateFooterVisibility() {
     if (!root_ || !footer_) return;
+    if (network_page_) {
+      footer_hide_timer_.Stop(); footer_expired_ = false;
+      footer_shown_ = network_footer_visible_; footer_restore_pending_ = false;
+      footer_->SetVisible(network_footer_visible_);
+      footer_->SetCanProcessEventsWithinSubtree(network_footer_visible_);
+      auto* layer = footer_->layer(); layer->GetAnimator()->StopAnimating();
+      layer->SetTransform(gfx::Transform()); layer->SetOpacity(network_footer_visible_ ? 1.f : 0.f);
+      return;
+    }
     if (history_page_ || tag_id_ == 0) {
       footer_hide_timer_.Stop(); footer_shown_ = false; footer_restore_pending_ = true;
       footer_->SetVisible(false); return;
@@ -7353,6 +7566,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
   Tab& Current() { return tabs_[active_]; }
   const Tab& Current() const { return tabs_[active_]; }
   std::string PaneName() const {
+    if (network_page_) {
+      const auto location = network_view_ ? ParseSmbLocation(NetworkPageUrl(network_view_)) : std::nullopt;
+      return location ? location->server : base::UTF16ToUTF8(Text(IDS_CRFILES_NETWORK));
+    }
     if (tag_id_ > 0 && !IsTagListing()) return base::UTF16ToUTF8(EntryName(Current().path));
     if (tag_id_ >= 0) return base::UTF16ToUTF8(Text(IDS_CRFILES_TAGS)) + (tag_id_ > 0 ? " · " + tag_name_ : "");
     if (search_page_) return base::UTF16ToUTF8(Text(IDS_CRFILES_SEARCH) + u" · " +
@@ -7381,6 +7598,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         result.Set("search_tag", base::NumberToString(pane->search_scope_.tag_id));
         result.Set("search_scope_title", base::UTF16ToUTF8(pane->search_scope_.title));
       }
+      result.Set("network_page", pane->network_page_);
       result.Set("history_page", pane->history_page_); result.Set("search_page", pane->search_page_);
       result.Set("id", pane->pane_id_); result.Set("name", pane->pane_name_);
       result.Set("path", tab.path.AsUTF8Unsafe()); result.Set("scroll", pane->restored_scroll_.value_or(tab.scroll));
@@ -7404,6 +7622,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       base::DictValue item;
       item.Set("id", target.id); item.Set("name", target.name);
       item.Set("path", target.directory.AsUTF8Unsafe());
+      if (!target.network_url.empty()) item.Set("network_url", target.network_url);
       if (target.tag_id > 0) item.Set("tag_id", base::NumberToString(target.tag_id));
       shares.Append(std::move(item));
     }
@@ -7477,6 +7696,21 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }
       }
       pane->restored_scroll_ = std::max(0, data.FindInt("scroll").value_or(0));
+      return pane;
+    }
+    if (data.FindBool("network_page").value_or(false)) {
+      ++leaves;
+      auto pane = std::make_unique<FilesView>(this, base::FilePath(), false, false, false, -1, std::string(), SearchScope(), true);
+      auto& options = pane->Current().options;
+      options.icons = data.FindBool("icons").value_or(true);
+      options.icon_index = std::clamp(data.FindInt("icon_index").value_or(1), 0, static_cast<int>(kFileIconSizes.size()) - 1);
+      options.show_hidden = data.FindBool("hidden").value_or(false);
+      options.size_column = data.FindBool("size_column").value_or(true);
+      options.type_column = data.FindBool("type_column").value_or(true);
+      options.modified_column = data.FindBool("modified_column").value_or(true);
+      options.created_column = data.FindBool("created_column").value_or(false);
+      options.sort = static_cast<FileSort>(std::clamp(data.FindInt("sort").value_or(2), 0, 9));
+      SetNetworkPageLayout(pane->network_view_, options.icons, kFileIconSizes[options.icon_index], options.show_hidden, options.NetworkColumnOptions(), static_cast<int>(options.sort));
       return pane;
     }
     if (data.FindBool("search_page").value_or(false)) {
@@ -7584,6 +7818,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         if (const auto* path = active->FindString("path")) tab.path = base::FilePath::FromUTF8Unsafe(*path);
         if (const auto* name = active->FindString("name")) tab.deferred_title = *name;
         if (active->FindBool("history_page").value_or(false)) tab.deferred_title = base::UTF16ToUTF8(Text(active->FindBool("search_page").value_or(false) ? IDS_CRFILES_SEARCH : IDS_CRFILES_HISTORY));
+        if (active->FindBool("network_page").value_or(false)) tab.deferred_title = base::UTF16ToUTF8(Text(IDS_CRFILES_NETWORK));
         if (active->FindString("search_tag")) {
           if (const auto* title = active->FindString("search_scope_title"))
             tab.deferred_title = base::UTF16ToUTF8(Text(IDS_CRFILES_SEARCH)) + " · " + *title;
@@ -7599,11 +7834,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // Read the central registry before materializing any tab. An explicitly
     // empty registry must not resurrect legacy shares in deferred tab trees.
     shared_directories_.clear();
+    network_share_cancel_->store(true); network_share_cancel_ = std::make_shared<std::atomic<bool>>(false);
+    network_share_credentials_.clear(); network_share_checks_.clear(); network_share_attempted_.clear(); network_share_errors_.clear();
     if (const auto* shares = workspace.FindList("shared_directories")) {
       for (const auto& value : *shares) {
         const auto* item = value.GetIfDict();
         if (item) RestoreSharedDirectory(item->FindString("id"),
-            item->FindString("name"), item->FindString("path"), item->FindString("tag_id"));
+            item->FindString("name"), item->FindString("path"), item->FindString("tag_id"), item->FindString("network_url"));
       }
     } else {
       for (const auto& tab : tabs_)
@@ -7633,10 +7870,92 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const auto* shell = root_ ? root_.get() : this;
     const auto directory = ShareDirectoryKey(path);
     return std::ranges::any_of(shell->shared_directories_, [&](const auto& target) {
-      return target.tag_id == 0 && target.directory == directory;
+      return target.tag_id == 0 && target.network_url.empty() && target.directory == directory;
     });
   }
+  void UpdateNetworkShareButton() {
+    if (!network_share_button_) return;
+    auto* shell = root_ ? root_.get() : this;
+    const auto url = NetworkPageUrl(network_view_);
+    const auto target = std::ranges::find(shell->shared_directories_, url, &NearbySharing::SharedTarget::network_url);
+    const bool shared = !url.empty() && target != shell->shared_directories_.end() && target->remote;
+    const bool checking = shell->network_share_checks_.contains(url);
+    const auto error = shell->network_share_errors_.find(url);
+    const bool denied = NetworkPageWriteAccess(network_view_) == mojom::SmbWriteAccess::kReadOnly ||
+        (error != shell->network_share_errors_.end() && error->second == mojom::SmbError::kAccessDenied);
+    const auto credentials = NetworkPageCredentials(network_view_);
+    const bool available = credentials && !credentials->location.share.empty();
+    network_share_button_->SetEnabled(!network_footer_busy_ && !checking && !denied && available &&
+        error == shell->network_share_errors_.end());
+    network_share_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
+    network_share_button_->GetViewAccessibility().SetCheckedState(shared ? ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
+    network_share_button_->SetBackground(shared ? views::CreateRoundedRectBackground(ui::kColorSysPrimaryContainer, 8) : nullptr);
+    network_share_button_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
+        vector_icons::kScreenShareIcon, shared ? ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface, 20));
+    const int label = checking ? IDS_CRFILES_NETWORK_CHECKING_WRITE : denied ? IDS_CRFILES_NETWORK_NO_WRITE :
+        error != shell->network_share_errors_.end() ? IDS_CRFILES_NETWORK_WRITE_UNKNOWN :
+        shared ? IDS_CRFILES_SHARED_PANE : IDS_CRFILES_SHARE_PANE;
+    network_share_button_->SetTooltipText(Text(label) + (url.empty() ? std::u16string() : u"\n" + base::UTF8ToUTF16(url)));
+    network_share_button_->SetAccessibleName(Text(label));
+  }
+  void BeginNetworkShare(SmbCredentials credentials) {
+    if (root_) { root_->BeginNetworkShare(std::move(credentials)); return; }
+    const auto url = credentials.location.Url();
+    if (credentials.location.share.empty() || network_share_checks_.contains(url)) return;
+    auto found = std::ranges::find(shared_directories_, url, &NearbySharing::SharedTarget::network_url);
+    NearbySharing::SharedTarget target;
+    if (found != shared_directories_.end()) target = *found;
+    else {
+      target.id = base::Uuid::GenerateRandomV4().AsLowercaseString(); target.network_url = url;
+      const auto& location = credentials.location;
+      target.name = location.path.empty() ? location.share : location.path.substr(location.path.find_last_of('/') + 1);
+      if (!ValidPaneName(target.name)) target.name = base::UTF16ToUTF8(Text(IDS_CRFILES_FOLDER));
+      const auto prefs = GetNearbySharingPreferences();
+      target.directory = (prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory() :
+          base::FilePath::FromUTF8Unsafe(prefs.directory)).AppendASCII("SMB-" + target.id);
+    }
+    const uint64_t serial = ++network_share_serial_;
+    network_share_checks_[url] = serial; network_share_attempted_.insert(url); network_share_errors_.erase(url);
+    SyncSharedTargets();
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
+        {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&CheckNetworkShareWritable, credentials, target.directory,
+            base::BindRepeating([](std::shared_ptr<std::atomic<bool>> canceled) { return canceled->load(); }, network_share_cancel_)),
+        base::BindOnce([](base::WeakPtr<FilesView> shell, uint64_t serial, NearbySharing::SharedTarget target,
+                         SmbCredentials credentials, mojom::SmbError error) {
+          if (!shell || shell->network_share_cancel_->load()) return;
+          const auto check = shell->network_share_checks_.find(target.network_url);
+          if (check == shell->network_share_checks_.end() || check->second != serial) return;
+          shell->network_share_checks_.erase(check);
+          auto found = std::ranges::find(shell->shared_directories_, target.network_url, &NearbySharing::SharedTarget::network_url);
+          if (error == mojom::SmbError::kOk) {
+            target.remote = CreateNetworkReceiveTarget(credentials);
+            shell->network_share_credentials_[target.network_url] = std::move(credentials);
+            if (found == shell->shared_directories_.end()) shell->shared_directories_.push_back(std::move(target));
+            else *found = std::move(target);
+          } else {
+            shell->network_share_errors_[target.network_url] = error;
+            shell->network_share_credentials_.erase(target.network_url);
+            if (found != shell->shared_directories_.end()) found->remote.reset();
+          }
+          shell->SyncSharedTargets(); shell->ScheduleWorkspaceSave();
+        }, weak_.GetWeakPtr(), serial, target, credentials));
+  }
+  void ToggleNetworkShare() {
+    if (!network_share_button_ || !network_share_button_->GetEnabled()) return;
+    auto credentials = NetworkPageCredentials(network_view_);
+    if (!credentials || credentials->location.share.empty()) return;
+    auto* shell = root_ ? root_.get() : this;
+    const auto url = credentials->location.Url();
+    const auto found = std::ranges::find(shell->shared_directories_, url, &NearbySharing::SharedTarget::network_url);
+    if (found != shell->shared_directories_.end() && found->remote) {
+      shell->shared_directories_.erase(found); shell->network_share_credentials_.erase(url);
+      shell->network_share_checks_.erase(url); shell->network_share_attempted_.erase(url);
+      shell->SyncSharedTargets(); shell->ScheduleWorkspaceSave();
+    } else shell->BeginNetworkShare(std::move(*credentials));
+  }
   void UpdateShareButton() {
+    if (network_view_) { UpdateNetworkShareButton(); return; }
     if (!share_button_ || tabs_.empty()) return;
     const bool tag_target = tag_id_ > 0 && IsTagListing();
     const bool shared = tag_target ? std::ranges::any_of(root_->shared_directories_,
@@ -7653,10 +7972,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void RemoveSharedDirectory(const base::FilePath& path) {
     const auto directory = ShareDirectoryKey(path);
-    std::erase_if(shared_directories_, [&](const auto& target) { return target.tag_id == 0 && target.directory == directory; });
+    std::erase_if(shared_directories_, [&](const auto& target) { return target.tag_id == 0 && target.network_url.empty() && target.directory == directory; });
     SyncSharedTargets(); ScheduleWorkspaceSave();
   }
   void TogglePaneShare() {
+    if (network_view_) { ToggleNetworkShare(); return; }
     if (tag_id_ == 0) return;
     if (IsTagListing()) {
       auto& targets = root_->shared_directories_;
@@ -7707,11 +8027,22 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (auto* second = data.FindDict("second")) ClearSavedShares(*second);
   }
   void RestoreSharedDirectory(const std::string* id, const std::string* name,
-                              const std::string* path, const std::string* saved_tag = nullptr) {
+                              const std::string* path, const std::string* saved_tag = nullptr,
+                              const std::string* network_url = nullptr) {
     int64_t tag = 0;
     if (saved_tag && (!base::StringToInt64(*saved_tag, &tag) || tag <= 0)) return;
     if (!id || !path || !base::Uuid::ParseLowercase(*id).is_valid()) return;
     const auto directory = ShareDirectoryKey(base::FilePath::FromUTF8Unsafe(*path));
+    if (network_url) {
+      const auto location = ParseSmbLocation(*network_url);
+      if (!location || location->share.empty() || !directory.IsAbsolute() || directory.ReferencesParent() ||
+          std::ranges::any_of(shared_directories_, [&](const auto& target) {
+            return target.id == *id || target.network_url == location->Url();
+          })) return;
+      shared_directories_.push_back({*id, name && ValidPaneName(*name) ? *name : location->share,
+          directory, 0, location->Url()});
+      return;  // Login and a fresh write probe are required before publication.
+    }
     if (!directory.IsAbsolute() || directory.ReferencesParent() ||
         directory == TrashRoot() || TrashRoot().IsParent(directory) ||
         (tag == 0 ? IsDirectoryShared(directory) : std::ranges::any_of(shared_directories_, [&](const auto& target) { return target.tag_id == tag; }))) return;
@@ -7743,6 +8074,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const auto default_directory = share_prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory() : base::FilePath::FromUTF8Unsafe(share_prefs.directory);
     for (auto& target : shared_directories_) if (target.tag_id > 0) target.directory = default_directory;
     auto targets = shared_directories_;
+    std::erase_if(targets, [](const auto& target) { return !target.network_url.empty() && !target.remote; });
     for (auto& target : targets) if (target.tag_id > 0) {
       target.name = std::string(base::TruncateUTF8ToByteSize(target.name, 64));
       if (!NearbySharing::IsValidConfiguration(target.name, target.directory)) target.name = base::UTF16ToUTF8(Text(IDS_CRFILES_TAGS)) + " " + base::NumberToString(target.tag_id);
@@ -7750,7 +8082,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // Withdraw only revoked/changed targets immediately. An unrelated pane
     // update must not cancel an ongoing receive to a still-valid target.
     std::erase_if(published_targets_, [&](const auto& old) {
-      return std::ranges::none_of(targets, [&](const auto& target) { return target.id == old.id && target.directory == old.directory && target.tag_id == old.tag_id; });
+      return std::ranges::none_of(targets, [&](const auto& target) {
+        return target.id == old.id && target.directory == old.directory && target.tag_id == old.tag_id && target.remote == old.remote;
+      });
     });
     sharing_->SetSharedTargets(published_targets_);
     const auto generation = ++shared_targets_generation_;
@@ -7894,14 +8228,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }));
   }
   void AddPaneTab(base::FilePath path, bool history_page = false, bool search_page = false,
-                  int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}) {
+                  int64_t tag_id = -1, std::string tag_name = {}, SearchScope search_scope = {}, bool network_page = false) {
     SuspendPanePopups();
     for (auto& tab : tabs_) tab.pane_host->SetVisible(false);
     tabs_.push_back(Tab{.id = next_id_++}); active_ = tabs_.size() - 1;
     auto* host = split_host_->AddChildView(std::make_unique<views::View>());
     host->SetLayoutManager(std::make_unique<views::FillLayout>());
     Current().pane_host = host;
-    auto pane = std::make_unique<FilesView>(this, path.empty() ? Home() : path, history_page, false, search_page, tag_id, std::move(tag_name), std::move(search_scope));
+    auto pane = std::make_unique<FilesView>(this, path.empty() ? Home() : path, history_page, false, search_page, tag_id, std::move(tag_name), std::move(search_scope), network_page);
     Current().active_pane = host->AddChildView(std::move(pane));
     UpdatePaneControls(); SyncNavigation();
     if (GetWidget()) ActivePane()->DefaultFocusView()->RequestFocus();
@@ -7989,10 +8323,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void RequestSplit(int direction) {
     if (root_) root_->SplitPane(this, direction);
   }
-  void SplitPane(FilesView* target, int direction, base::FilePath path = {}) {
+  void SplitPane(FilesView* target, int direction, base::FilePath path = {}, std::optional<SmbCredentials> network = std::nullopt) {
     if (!Current().pane_host->Contains(target)) return;
     target->CloseNewFolder(); target->CloseViewOptions();
-    auto pane = std::make_unique<FilesView>(this, path.empty() ? (target->tag_id_ >= 0 ? Home() : target->Current().path) : path, false, true);
+    if (!network && target->network_view_) network = NetworkPageCredentials(target->network_view_);
+    auto pane = std::make_unique<FilesView>(this, network ? base::FilePath() : path.empty() ? (target->tag_id_ >= 0 ? Home() : target->Current().path) : path,
+        false, true, false, -1, std::string(), SearchScope(), network.has_value());
     pane->Current().options = target->Current().options;
     auto* added = pane.get();
     auto* parent = target->parent();
@@ -8007,9 +8343,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (outer) outer->Replace(target, split.get());
     parent->AddChildView(std::move(split));
     Current().active_pane = added;
-    added->Navigate(added->Current().path);
+    if (network) {
+      const auto& options = added->Current().options;
+      SetNetworkPageLayout(added->network_view_, options.icons, kFileIconSizes[options.icon_index], options.show_hidden, options.NetworkColumnOptions(), static_cast<int>(options.sort));
+      ConnectNetworkPage(added->network_view_, std::move(*network));
+    } else added->Navigate(added->Current().path);
     EndAddressEditing(); UpdatePaneControls(); SyncNavigation();
-    parent->InvalidateLayout(); added->files_->RequestFocus();
+    parent->InvalidateLayout(); added->DefaultFocusView()->RequestFocus();
     ScheduleWorkspaceSave();
   }
   void RequestClosePane() { if (root_) root_->ClosePane(this); }
@@ -8101,7 +8441,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ActivateSidebar(int label, base::RepeatingClosure action) {
     ActivePane()->DefaultFocusView()->RequestFocus();
-    ActivePane()->Current().sidebar_selection = label;
+    if (label != IDS_CRFILES_NETWORK && !ActivePane()->network_page_)
+      ActivePane()->Current().sidebar_selection = label;
     action.Run();
     UpdateSidebarHighlight();
   }
@@ -8310,6 +8651,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateStatus();
   }
   void Up() {
+    if (auto* pane = ActivePane(); pane->network_view_) {
+      auto location = ParseSmbLocation(NetworkPageUrl(pane->network_view_));
+      if (!location) return;
+      if (location->share.empty()) { ShowNetworkTab(); return; }
+      if (location->path.empty()) location->share.clear();
+      else { const auto slash = location->path.rfind('/'); location->path = slash == std::string::npos ? "" : location->path.substr(0, slash); }
+      NavigateNetworkPage(pane->network_view_, location->Url()); return;
+    }
     if (auto* pane = ActivePane(); pane->tag_id_ >= 0) {
       if (pane->IsTagListing()) { if (pane->tag_id_ > 0) pane->NavigateTag({0, {}, {}, {}}); }
       else if (pane->Current().path == pane->tag_directory_root_) pane->NavigateTag({pane->tag_id_, pane->tag_name_, {}, {}});
@@ -8595,6 +8944,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     } else RenderTabs();
   }
   void History(int delta) {
+    if (ActivePane()->network_view_) { NetworkPageGo(ActivePane()->network_view_, delta); return; }
     if (ActivePane()->history_page_) return;
     if (!root_) { ActivePane()->History(delta); return; }
     if (!tag_history_.empty()) {
@@ -8605,9 +8955,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
     int index = Current().history_index + delta;
     if (index >= 0 && index < static_cast<int>(Current().history.size())) Navigate(Current().history[index], index);
   }
-  void Refresh() { if (ActivePane()->IsTagListing()) { ActivePane()->LoadTagFiles(); return; } if (ActivePane()->search_view_) RefreshSearchPage(ActivePane()->search_view_); else if (ActivePane()->history_page_) ActivePane()->LoadHistory(); else Navigate(ActivePane()->Current().path, -1, true); }
+  void Refresh() { if (ActivePane()->network_view_) { RefreshNetworkPage(ActivePane()->network_view_); return; } if (ActivePane()->IsTagListing()) { ActivePane()->LoadTagFiles(); return; } if (ActivePane()->search_view_) RefreshSearchPage(ActivePane()->search_view_); else if (ActivePane()->history_page_) ActivePane()->LoadHistory(); else Navigate(ActivePane()->Current().path, -1, true); }
   void ToggleViewMode() {
     if (!root_) { ActivePane()->ToggleViewMode(); return; }
+    if (network_view_) {
+      CloseViewOptions();
+      Current().options.icons = !Current().options.icons;
+      SetNetworkPageLayout(network_view_, Current().options.icons, kFileIconSizes[Current().options.icon_index],
+          Current().options.show_hidden, Current().options.NetworkColumnOptions(), static_cast<int>(Current().options.sort));
+      root_->SyncNavigation(); root_->ScheduleWorkspaceSave(); return;
+    }
     CloseViewOptions();
     CancelFileVisuals();
     Current().options.icons = !Current().options.icons; Current().scroll = 0;
@@ -8629,6 +8986,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void ViewOptionsChanged(int id, FileViewOptions options) {
     auto found = std::ranges::find(tabs_, id, &Tab::id);
     if (found == tabs_.end()) return;
+    if (network_view_) {
+      found->options = options;
+      if (Current().id == id) SetNetworkPageLayout(network_view_, options.icons,
+          kFileIconSizes[options.icon_index], options.show_hidden, options.NetworkColumnOptions(), static_cast<int>(options.sort));
+      root_->ScheduleWorkspaceSave(); return;
+    }
     auto previous = found->options;
     previous.icon_index = options.icon_index;
     if (previous == options) {
@@ -8643,7 +9006,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   bool AdjustIconSize(int delta) {
     auto* pane = ActivePane();
-    if (!pane || pane->history_page_) return false;
+    if (!pane || (pane->history_page_ && !pane->network_view_)) return false;
     for (auto* focus = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
          focus; focus = focus->parent())
       if (views::AsViewClass<views::Textfield>(focus)) return false;
@@ -8659,6 +9022,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     return true;
   }
   void UpdateIconSize() {
+    if (network_view_) {
+      SetNetworkPageLayout(network_view_, Current().options.icons, kFileIconSizes[Current().options.icon_index],
+          Current().options.show_hidden, Current().options.NetworkColumnOptions(), static_cast<int>(Current().options.sort));
+      root_->ScheduleWorkspaceSave(); return;
+    }
     CancelFileVisuals();
     root_->ScheduleWorkspaceSave();
     const auto index = Current().options.icon_index;
@@ -8684,6 +9052,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void CloseNewFolder() {
     rename_focus_observer_.reset();
     ++new_folder_generation_;
+    new_folder_network_url_.clear();
     new_folder_contents_ = nullptr;
     if (new_folder_delegate_) new_folder_delegate_->SetAnchorView(nullptr);
     if (new_folder_widget_) {
@@ -8692,12 +9061,18 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_delegate_.reset();
   }
   void ShowNewFolder() {
-    if (tag_id_ == 0) { ShowFileTagEditor(GetWidget(), {}, base::BindRepeating(&FilesView::LoadTagFiles, weak_.GetWeakPtr())); return; }
-    if (IsTagListing()) return;
-    if (IsDrivesLocation(Current().path)) return;
+    if (network_view_) {
+      if (!network_new_folder_ || !network_new_folder_->IsDrawn() || !network_new_folder_->GetEnabled()) return;
+    } else {
+      if (tag_id_ == 0) { ShowFileTagEditor(GetWidget(), {}, base::BindRepeating(&FilesView::LoadTagFiles, weak_.GetWeakPtr())); return; }
+      if (IsTagListing()) return;
+      if (IsDrivesLocation(Current().path)) return;
+    }
     if (new_folder_widget_) { CloseNewFolder(); return; }
     CloseNewFolder();
-    new_folder_delegate_ = std::make_unique<views::BubbleDialogDelegate>(new_folder_button_, views::BubbleBorder::BOTTOM_LEFT);
+    new_folder_network_url_ = network_view_ ? NetworkPageUrl(network_view_) : std::string();
+    views::View* anchor = network_view_ ? network_new_folder_.get() : new_folder_button_.get();
+    new_folder_delegate_ = std::make_unique<views::BubbleDialogDelegate>(anchor, views::BubbleBorder::BOTTOM_LEFT);
     // Visible arrows require a Views-drawn shadow, including on macOS.
     new_folder_delegate_->set_shadow(views::BubbleBorder::STANDARD_SHADOW);
     new_folder_delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
@@ -8714,6 +9089,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         base::BindOnce([](base::WeakPtr<FilesView> view, views::Widget::ClosedReason) {
           if (!view) return;
           view->new_folder_contents_ = nullptr;
+          view->new_folder_network_url_.clear();
           view->new_folder_delegate_->SetAnchorView(nullptr); view->new_folder_widget_.reset(); view->UpdateFooterVisibility();
         }, weak_.GetWeakPtr()));
     new_folder_delegate_->GetBubbleFrameView()->SetDisplayVisibleArrow(true);
@@ -8721,6 +9097,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_widget_->Show(); UpdateFooterVisibility();
   }
   void CreateFolder(std::u16string name) {
+    if (network_view_) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+          base::BindOnce(&FilesView::CreateSharedFolder, weak_.GetWeakPtr(), new_folder_network_url_, new_folder_generation_, std::move(name)));
+      return;
+    }
     if (IsTagListing()) return;
     if (IsDrivesLocation(Current().path)) return;
     const auto child = base::FilePath::FromUTF16Unsafe(name);
@@ -8744,6 +9125,25 @@ class FilesView : public views::View, public views::TextfieldController, public 
           return entry;
         }, path),
         base::BindOnce(&FilesView::FolderCreated, weak_.GetWeakPtr(), Current().id, parent, new_folder_generation_));
+  }
+  void CreateSharedFolder(std::string url, uint64_t generation, std::u16string name) {
+    if (generation != new_folder_generation_ || !new_folder_contents_) return;
+    if (!network_view_ || url.empty() || url != NetworkPageUrl(network_view_)) { CloseNewFolder(); return; }
+    CreateNetworkFolder(network_view_, std::move(name),
+        base::BindOnce(&FilesView::SharedFolderCreated, weak_.GetWeakPtr(), url, generation));
+  }
+  void SharedFolderCreated(std::string url, uint64_t generation, mojom::SmbError error) {
+    if (!network_view_ || url != NetworkPageUrl(network_view_)) return;
+    if (generation != new_folder_generation_ || !new_folder_contents_) return;
+    if (error == mojom::SmbError::kOk) {
+      CloseNewFolder();
+      if (root_->ActivePane() == this && IsDrawn()) network_view_->RequestFocus();
+      return;
+    }
+    const int message = error == mojom::SmbError::kAlreadyExists ? IDS_CRFILES_NETWORK_EXISTS :
+        error == mojom::SmbError::kInvalidAddress ? IDS_CRFILES_NEW_FOLDER_ERROR :
+        error == mojom::SmbError::kAccessDenied ? IDS_CRFILES_NETWORK_ERROR : IDS_CRFILES_NETWORK_OPERATION_ERROR;
+    new_folder_contents_->Failed(Text(message)); new_folder_delegate_->SizeToContents();
   }
   void FolderCreated(int id, base::FilePath parent, uint64_t generation, std::optional<Entry> entry) {
     if (Current().id != id || Current().path != parent) return;
@@ -8771,9 +9171,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     options_delegate_->SetShowTitle(false); options_delegate_->SetShowCloseButton(false);
     options_delegate_->set_close_on_deactivate(true); options_delegate_->set_margins(gfx::Insets(8));
     options_delegate_->set_adjust_if_offscreen(true);
+    auto page = ViewOptionsPage::kLocal;
+    if (network_view_) {
+      const auto location = ParseSmbLocation(NetworkPageUrl(network_view_));
+      page = location && !location->share.empty() ? ViewOptionsPage::kNetworkDirectory : ViewOptionsPage::kNetworkRoot;
+    }
     options_delegate_->SetContentsView(std::make_unique<ViewOptions>(Current().options,
         base::BindRepeating(&FilesView::ViewOptionsChanged, weak_.GetWeakPtr(), Current().id),
-        base::BindRepeating(&FilesView::ResizeOptions, weak_.GetWeakPtr())));
+        base::BindRepeating(&FilesView::ResizeOptions, weak_.GetWeakPtr()), page));
     options_widget_ = CreateCrFilesBubble(options_delegate_.get(),
         base::BindOnce(&FilesView::OptionsClosed, weak_.GetWeakPtr()));
     options_widget_->Show();
@@ -8812,17 +9217,55 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!toolbar_ || !toolbar_->GetVisible() || ActivePane()->tag_id_ >= 0) return;
     if (!address_editing_) {
       address_->SetInvalid(false);
-      address_->SetText(NavigationPath(ActivePane()->Current().path));
+      address_->SetText(ActivePane()->network_view_ ? base::UTF8ToUTF16(NetworkPageUrl(ActivePane()->network_view_)) : NavigationPath(ActivePane()->Current().path));
       TransitionPath(true);
     }
     address_->RequestFocus(); address_->SelectAll(false);
   }
-  void UpdateSearchTabStates() {
+  ui::ImageModel TabLocationIcon(const Tab& tab) {
+    const auto vector = [](const gfx::VectorIcon& icon) {
+      return ui::ImageModel::FromVectorIcon(icon, ui::kColorSysOnSurfaceSecondary, kTabIconSize);
+    };
+    const auto network = [&] {
+      return network_tab_icon_.IsEmpty() ? vector(vector_icons::kDevicesIcon) : network_tab_icon_;
+    };
+    auto path = tab.path;
+    if (const auto* pane = tab.active_pane.get()) {
+      if (pane->network_page_) return network();
+      if (pane->IsTagListing()) return vector(kTagsIcon);
+      if (pane->search_page_) return vector(vector_icons::kSearchIcon);
+      if (pane->history_page_ && pane->tag_id_ < 0) return vector(vector_icons::kHistoryIcon);
+      path = pane->Current().path;
+    } else if (tab.deferred_tree) {
+      const auto* saved = SavedActivePane(*tab.deferred_tree, tab.deferred_active);
+      if (!saved) saved = SavedActivePane(*tab.deferred_tree, {});
+      if (saved) {
+        if (saved->FindBool("network_page").value_or(false)) return network();
+        const auto* tag_root = saved->FindString("tag_root");
+        if (saved->FindString("tag_id") && (!tag_root || tag_root->empty())) return vector(kTagsIcon);
+        if (saved->FindBool("search_page").value_or(false)) return vector(vector_icons::kSearchIcon);
+        if (saved->FindBool("history_page").value_or(false) && !saved->FindString("tag_id"))
+          return vector(vector_icons::kHistoryIcon);
+      }
+    }
+    if (path == TrashRoot() || TrashRoot().IsParent(path))
+      return trash_tab_icon_.IsEmpty() ? vector(kDeleteIcon) : trash_tab_icon_;
+    if (IsDrivesLocation(path)) return vector(vector_icons::kDevicesIcon);
+    if (!path.empty()) {
+      if (path == Home()) return vector(vector_icons::kHomeIcon);
+      if (path == DesktopPath()) return vector(vector_icons::kDesktopWindowsIcon);
+      if (path == NearbySharing::DefaultReceiveDirectory().DirName()) return vector(vector_icons::kDownloadIcon);
+    }
+    return vector(vector_icons::kFolderOpenIcon);
+  }
+  void UpdateTabStates() {
     if (!tabs_view_) return;
     for (size_t index = 0; index < tabs_.size() && index < tabs_view_->children().size(); ++index) {
       auto* pane = tabs_[index].active_pane.get();
       auto* button = views::AsViewClass<TabButton>(tabs_view_->children()[index].get());
-      if (button && pane && pane->search_view_) button->SetSearchState(GetSearchPageState(pane->search_view_));
+      if (!button) continue;
+      button->SetLocationIcon(TabLocationIcon(tabs_[index]));
+      if (pane && pane->search_view_) button->SetSearchState(GetSearchPageState(pane->search_view_));
     }
   }
   void TabMenuAction(int id, int command) {
@@ -8865,7 +9308,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     for (const auto& tab : tabs_) titles.emplace_back(tab.id,
         tab.active_pane ? base::UTF8ToUTF16(tab.active_pane->PaneName()) :
         (tab.deferred_title.empty() ? Text(IDS_CRFILES_NEW_TAB) : base::UTF8ToUTF16(tab.deferred_title)));
-    if (rendered_tab_id_ == Current().id && rendered_tab_titles_ == titles) { UpdateSearchTabStates(); return; }
+    if (rendered_tab_id_ == Current().id && rendered_tab_titles_ == titles) { UpdateTabStates(); return; }
     rendered_tab_id_ = Current().id; rendered_tab_titles_ = std::move(titles);
     active_tab_ = nullptr;
     static_cast<TabStrip*>(tabs_view_.get())->ResetDrag();
@@ -8876,7 +9319,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       auto* button = tabs_view_->AddChildView(std::make_unique<TabButton>(
           Deferred(base::BindRepeating(&FilesView::SelectTab, weak_.GetWeakPtr(), tab.id)),
           Deferred(base::BindRepeating(&FilesView::CloseTab, weak_.GetWeakPtr(), tab.id)), title, tab.id == Current().id));
-      button->SetPreferredSize(gfx::Size(184, 36));
+      button->SetPreferredSize(gfx::Size(kTabPreferredWidth, 36));
+      button->SetLocationIcon(TabLocationIcon(tab));
       button->SetTabMenu(tab.pinned,
           base::BindRepeating(&FilesView::TabMenuAction, weak_.GetWeakPtr(), tab.id));
       button->SetPaintToLayer();
@@ -8926,10 +9370,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // The outer inset belongs to navigation chrome; each pane paints its own
     // content surface. Keep the sidebar and toolbar consistent across tabs.
     SetBackground(std::make_unique<NavigationBackground>());
-    toolbar_->SetVisible(!pane->history_page_ || pane->tag_id_ >= 0);
+    toolbar_->SetVisible(!pane->history_page_ || pane->tag_id_ >= 0 || pane->network_page_);
     view_toggle_->SetEnabled(true);
     options_button_->SetEnabled(true);
-    if (pane->history_page_ && pane->tag_id_ < 0 && sidebar_drag_start_) {
+    if (pane->history_page_ && !pane->network_page_ && pane->tag_id_ < 0 && sidebar_drag_start_) {
       sidebar_drag_start_.reset();
       AnimateSidebarTo(sidebar_display_width_ < 110 ? 0 : std::clamp(sidebar_display_width_, 220, 360));
     }
@@ -8941,6 +9385,71 @@ class FilesView : public views::View, public views::TextfieldController, public 
         pane->Current().history_index + 1 < static_cast<int>(pane->Current().history.size()) :
         pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* leaf) { leaf->FileViewportChanged(); }));
+    if (pane->network_view_) {
+      address_completion_->Cancel();
+      const bool icons = pane->Current().options.icons;
+      view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
+          icons ? kGridViewIcon : kListAltIcon, ui::kColorSysOnSurface, 20));
+      view_toggle_->SetTooltipText(Text(icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
+      view_toggle_->SetAccessibleName(Text(icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
+      back_->SetEnabled(NetworkPageCanGo(pane->network_view_, -1));
+      forward_->SetEnabled(NetworkPageCanGo(pane->network_view_, 1));
+      const auto url = NetworkPageUrl(pane->network_view_);
+      if (rendered_network_url_ != url) pane->CloseViewOptions();
+      const auto style = GetNavigationStyle();
+      if (rendered_network_url_ == url && rendered_crumb_pane_ == pane->pane_id_ && rendered_navigation_style_ == style) return;
+      rendered_network_url_ = url; rendered_crumb_pane_ = pane->pane_id_; rendered_navigation_style_ = style;
+      network_address_anchor_.SetView(nullptr);
+      rendered_crumb_path_ = {}; rendered_crumb_buttons_.clear();
+      auto crumbs = std::make_unique<views::View>();
+      auto* layout = crumbs->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(2, style == NavigationStyle::kConnected ? 2 : 0), 0));
+      layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+      if (style == NavigationStyle::kConnected) crumbs->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysHeaderContainerInactive, 8));
+      auto* network = crumbs->AddChildView(std::make_unique<BreadcrumbButton>(
+          Deferred(base::BindRepeating(&FilesView::ShowNetworkTab, weak_.GetWeakPtr())),
+          std::u16string(), url.empty(), true, style, false));
+      network_breadcrumb_.SetView(network);
+      network->SetAccessibleName(Text(IDS_CRFILES_NETWORK));
+      network->SetTooltipText(Text(IDS_CRFILES_NETWORK));
+      network->SetHorizontalAlignment(gfx::ALIGN_CENTER); network->SetImageCentered(true);
+      const auto color = url.empty() && (style == NavigationStyle::kRaised || style == NavigationStyle::kConnected) ?
+          ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface;
+      for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+                         views::Button::STATE_PRESSED, views::Button::STATE_DISABLED}) {
+        network->SetImageModel(state, network_location_icon_.IsEmpty() ?
+            ui::ImageModel::FromVectorIcon(vector_icons::kDevicesIcon,
+                state == views::Button::STATE_DISABLED ? ui::kColorSysStateDisabled : color, 20) : network_location_icon_);
+      }
+      const auto location = ParseSmbLocation(url);
+      if (location) {
+        SmbLocation segment{location->server, {}, {}};
+        auto add = [&](std::u16string title) {
+          if (style == NavigationStyle::kConnected) crumbs->AddChildView(std::make_unique<BreadcrumbDivider>());
+          else if (style != NavigationStyle::kRaised) {
+            auto* divider = crumbs->AddChildView(std::make_unique<views::Label>(base::i18n::IsRTL() ? u"‹" : u"›"));
+            divider->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 3)));
+          }
+          auto* button = crumbs->AddChildView(std::make_unique<BreadcrumbButton>(Deferred(base::BindRepeating(
+              [](base::WeakPtr<FilesView> pane, std::string url) { if (pane) NavigateNetworkPage(pane->network_view_, url); },
+              pane->weak_.GetWeakPtr(), segment.Url())), title, segment.Url() == url, false, style, false));
+          button->SetTooltipText(base::UTF8ToUTF16(segment.Url()));
+          if (segment.share.empty()) network_address_anchor_.SetView(button->NameAnchor());
+        };
+        add(base::UTF8ToUTF16(segment.Url()));
+        if (!location->share.empty()) {
+          segment.share = location->share; add(base::UTF8ToUTF16(segment.share));
+          for (const auto& part : base::SplitString(location->path, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+            if (!segment.path.empty()) segment.path += '/';
+            segment.path += part; add(base::UTF8ToUTF16(part));
+          }
+        }
+      }
+      crumbs_scroll_->SetContents(std::move(crumbs));
+      return;
+    }
+    rendered_network_url_.clear();
+    network_address_anchor_.SetView(nullptr);
     if (pane->tag_id_ >= 0) {
       rendered_crumb_path_ = {}; rendered_crumb_pane_.clear(); rendered_crumb_buttons_.clear();
       view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
@@ -9159,6 +9668,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     files_->InvalidateLayout(); root_->ScheduleWorkspaceSave();
   }
   bool FileKeyPressed(const ui::KeyEvent& event) {
+    if (network_view_) return NetworkPageKey(network_view_, event);
     if (history_page_ || Current().loading || order_pending_ || displayed_entries_.empty() || !files_->contents()) return false;
     auto* focused = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
     if (!focused || !files_->Contains(focused)) return false;
@@ -10317,7 +10827,118 @@ class FilesView : public views::View, public views::TextfieldController, public 
       visual_flush_timer_.Start(FROM_HERE, base::Milliseconds(16), this, &FilesView::FlushFileVisuals);
     RequestFileVisuals();
   }
+  void ConfigureNetworkFooter() {
+    normal_footer_actions_->SetVisible(false); trash_footer_actions_->SetVisible(false);
+    footer_folder_name_->SetVisible(false);
+    auto* outer = static_cast<views::BoxLayout*>(footer_->GetLayoutManager());
+    outer->SetFlexForView(footer_status_, 1);
+    // Retain the ordinary footer's labels and FlexLayout for directory stats.
+    auto* middle = static_cast<views::FlexLayout*>(footer_status_->GetLayoutManager());
+    middle->SetMainAxisAlignment(views::LayoutAlignment::kStart);
+    status_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    status_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(0, 6, 0, 0)));
+    status_->SetProperty(views::kMarginsKey, gfx::Insets());
+    auto* left = footer_->AddChildViewAt(std::make_unique<views::View>(), 0);
+    auto* right = footer_->AddChildView(std::make_unique<views::View>());
+    network_footer_left_ = left; network_footer_right_ = right;
+    // Reserve space for actions at the toolbar edges.
+    for (auto* side : {left, right}) {
+      side->SetPreferredSize(gfx::Size(102, 26));
+      auto* layout = side->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+      layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+      layout->set_main_axis_alignment(side == left ? views::BoxLayout::MainAxisAlignment::kStart : views::BoxLayout::MainAxisAlignment::kEnd);
+    }
+    auto button = [&](views::View* side, const gfx::VectorIcon& icon, int label, base::RepeatingClosure callback) {
+      auto* action = AddIconButton(side, icon, label, std::move(callback));
+      action->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(3, 5)));
+      action->SetPreferredSize(gfx::Size(30, 26)); action->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+      auto* ink = views::InkDrop::Get(action->ink_drop_view());
+      ink->SetHighlightOpacity(0.18f); ink->SetVisibleOpacity(0.30f);
+      for (auto state : {views::Button::STATE_HOVERED, views::Button::STATE_PRESSED})
+        action->SetImageModel(state, ui::ImageModel::FromVectorIcon(icon, ui::kColorSysPrimary, 20));
+      return action;
+    };
+    network_share_button_ = button(left, vector_icons::kScreenShareIcon, IDS_CRFILES_SHARE_PANE,
+        base::BindRepeating(&FilesView::TogglePaneShare, weak_.GetWeakPtr()));
+    network_new_folder_ = button(left, vector_icons::kFolderOpenIcon, IDS_CRFILES_NEW_FOLDER,
+        base::BindRepeating(&FilesView::ShowNewFolder, weak_.GetWeakPtr()));
+    network_paste_ = button(left, kContentPasteIcon, IDS_CRFILES_PASTE,
+        base::BindRepeating([](base::WeakPtr<FilesView> pane) { if (pane) PasteNetworkPage(pane->network_view_); }, weak_.GetWeakPtr()));
+    network_cancel_ = button(right, kCloseIcon, IDS_CRFILES_CANCEL,
+        base::BindRepeating([](base::WeakPtr<FilesView> pane) { if (pane) CancelNetworkPageOperation(pane->network_view_); }, weak_.GetWeakPtr()));
+    SetNetworkPageNewFolderHandler(network_view_, base::BindRepeating(&FilesView::ShowNewFolder, weak_.GetWeakPtr()));
+    SetNetworkPageFooter(network_view_, base::BindRepeating(&FilesView::UpdateNetworkFooter, weak_.GetWeakPtr()));
+  }
+  void UpdateNetworkFooter(NetworkFooterState state) {
+    if (!new_folder_network_url_.empty() &&
+        (!state.visible || !state.show_actions || new_folder_network_url_ != NetworkPageUrl(network_view_))) CloseNewFolder();
+    const bool visibility_changed = network_footer_visible_ != state.visible;
+    const bool actions_changed = network_new_folder_->GetVisible() != state.show_actions;
+    const bool summary_changed = footer_folder_name_->GetVisible() != state.show_summary;
+    auto* shell = root_ ? root_.get() : this;
+    const auto network_url = NetworkPageUrl(network_view_);
+    if (state.busy && !network_footer_busy_) {
+      shell->network_share_errors_.erase(network_url); shell->network_share_attempted_.erase(network_url);
+    }
+    network_footer_busy_ = state.busy;
+    network_footer_visible_ = state.visible;
+    footer_folder_name_->SetVisible(state.show_summary);
+    auto* middle = static_cast<views::FlexLayout*>(footer_status_->GetLayoutManager());
+    middle->SetMainAxisAlignment(state.show_summary ? views::LayoutAlignment::kEnd : views::LayoutAlignment::kStart);
+    status_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    status_->SetBorder(views::CreateEmptyBorder(state.show_summary ? gfx::Insets() : gfx::Insets::TLBR(0, 6, 0, 0)));
+    status_->SetProperty(views::kMarginsKey, state.show_summary ? gfx::Insets::TLBR(0, 4, 0, 0) : gfx::Insets());
+    if (state.show_summary) {
+      const auto url = NetworkPageUrl(network_view_);
+      const auto location = ParseSmbLocation(url);
+      const auto name = location ? base::UTF8ToUTF16(location->share.empty() ? location->server :
+          location->path.empty() ? location->share : location->path.substr(location->path.find_last_of('/') + 1)) :
+          Text(IDS_CRFILES_NETWORK);
+      footer_folder_name_->SetText(name);
+      footer_folder_name_->SetTooltipText(url.empty() ? name : base::UTF8ToUTF16(url));
+      status_->SetText(u"· " + state.text);
+      status_->SetTooltipText(name + u" · " + state.text +
+          (url.empty() ? std::u16string() : u"\n" + base::UTF8ToUTF16(url)));
+    } else {
+      status_->SetText(state.text); status_->SetTooltipText(state.text);
+    }
+    network_share_button_->SetVisible(state.show_actions);
+    network_new_folder_->SetVisible(state.show_actions);
+    network_paste_->SetVisible(state.show_actions);
+    network_new_folder_->SetEnabled(state.connected && !state.busy);
+    network_paste_->SetEnabled(state.connected && !state.busy);
+    network_cancel_->SetVisible(state.show_actions && state.busy);
+    auto* outer = static_cast<views::BoxLayout*>(footer_->GetLayoutManager());
+    // Idle network pages use the same action/info flex ratio as local folders.
+    // Progress and errors start at the left edge of the status area.
+    outer->SetFlexForView(network_footer_left_, state.show_summary ? 1 : 0);
+    outer->SetFlexForView(footer_status_, state.show_summary ? 2 : 1);
+    network_footer_left_->SetPreferredSize(gfx::Size(state.show_summary ? 280 : state.show_actions ? 102 : 0, 26));
+    network_footer_right_->SetPreferredSize(gfx::Size(state.show_actions ? 102 : 0, 26));
+    network_footer_right_->SetVisible(!state.show_summary);
+    if (actions_changed) footer_->SetBackground(std::make_unique<FooterBackground>(
+        state.show_actions ? kFolderSurfaceColor : ui::kColorSysBase));
+    UpdateFooterVisibility();
+    if (!state.busy && state.connected && state.show_actions) {
+      const auto target = std::ranges::find(shell->shared_directories_, network_url, &NearbySharing::SharedTarget::network_url);
+      auto credentials = NetworkPageCredentials(network_view_);
+      if (target != shell->shared_directories_.end() && credentials) {
+        const auto active = shell->network_share_credentials_.find(network_url);
+        if (state.write_access == mojom::SmbWriteAccess::kReadOnly && target->remote &&
+            active != shell->network_share_credentials_.end() && active->second.user == credentials->user &&
+            active->second.domain == credentials->domain && active->second.password == credentials->password) {
+          target->remote.reset(); shell->network_share_credentials_.erase(active);
+          shell->network_share_errors_[network_url] = mojom::SmbError::kAccessDenied;
+          shell->SyncSharedTargets();
+        } else if (!target->remote && state.write_access != mojom::SmbWriteAccess::kReadOnly &&
+            !shell->network_share_attempted_.contains(network_url)) shell->BeginNetworkShare(std::move(*credentials));
+      }
+    }
+    UpdateNetworkShareButton();
+    if (visibility_changed || actions_changed || summary_changed) InvalidateLayout();
+  }
   void UpdateStatus() {
+    if (network_page_) { UpdateFooterVisibility(); return; }
     auto& tab = Current();
     const auto root = TrashRoot();
     const bool tag_results = tag_id_ > 0 && IsTagListing();
@@ -10481,11 +11102,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::optional<gfx::Rect> area;
     const auto shared = std::ranges::find(shared_directories_, target, &NearbySharing::SharedTarget::id);
     if (shared != shared_directories_.end() && !tabs_.empty()) VisitPanes(Current().pane_host,
-        base::BindRepeating([](const base::FilePath& directory, int64_t tag, std::optional<gfx::Rect>* bounds, FilesView* pane) {
+        base::BindRepeating([](const base::FilePath& directory, int64_t tag, const std::string& network_url,
+                              std::optional<gfx::Rect>* bounds, FilesView* pane) {
           if (!pane->history_page_ && !pane->search_page_ && !pane->tabs_.empty() &&
-              (tag > 0 ? pane->tag_id_ == tag && pane->IsTagListing() : ShareDirectoryKey(pane->Current().path) == directory) && pane->IsDrawn())
+              (!network_url.empty() ? pane->network_view_ && NetworkPageUrl(pane->network_view_) == network_url :
+              tag > 0 ? pane->tag_id_ == tag && pane->IsTagListing() : ShareDirectoryKey(pane->Current().path) == directory) && pane->IsDrawn())
             *bounds = pane->GetBoundsInScreen();
-        }, shared->directory, shared->tag_id, &area));
+        }, shared->directory, shared->tag_id, shared->network_url, &area));
     return area;
   }
   ShareBubbleAnchor SessionBubbleAnchor(const NearbySharing::Snapshot& state, bool use_share_dialog = true) {
@@ -10607,11 +11230,22 @@ class FilesView : public views::View, public views::TextfieldController, public 
     sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetBreathing(
         visible && !widget->IsMinimized() && s.busy && s.receiving &&
         s.receive_target.empty());
-    if (s.stage == NearbySharing::Stage::kComplete && s.receiving && s.session != last_received_session_) {
+    if (s.receiving && s.session != last_received_session_ && (s.stage == NearbySharing::Stage::kComplete ||
+        (!s.receive_url.empty() && !s.busy && (s.stage == NearbySharing::Stage::kError || s.stage == NearbySharing::Stage::kCanceled)))) {
       last_received_session_ = s.session;
-      for (auto& tab : tabs_) VisitPanes(tab.pane_host, base::BindRepeating([](const base::FilePath& batch, FilesView* pane) {
+      for (auto& tab : tabs_) VisitPanes(tab.pane_host, base::BindRepeating([](const base::FilePath& batch, const std::string& url, FilesView* pane) {
+        if (!url.empty() && pane->network_view_ && NetworkPageUrl(pane->network_view_) == url) {
+          RefreshNetworkPage(pane->network_view_); return;
+        }
         if (!batch.empty() && (pane->Current().path == batch || pane->Current().path == batch.DirName())) pane->Refresh();
-      }, s.batch_directory));
+      }, s.batch_directory, s.receive_url));
+      if (s.receive_write_denied && !s.receive_url.empty()) {
+        const auto target = std::ranges::find(shared_directories_, s.receive_target, &NearbySharing::SharedTarget::id);
+        if (target != shared_directories_.end()) target->remote.reset();
+        network_share_credentials_.erase(s.receive_url); network_share_checks_.erase(s.receive_url);
+        network_share_attempted_.insert(s.receive_url); network_share_errors_[s.receive_url] = mojom::SmbError::kAccessDenied;
+        SyncSharedTargets();
+      }
     }
     // A single controller handles both directions, even while the browser and
     // sender dialog are hidden. Its bubble has no native parent.
@@ -10652,6 +11286,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::string pane_id_, pane_name_;
   // Root-owned directory registry; independent of tab/pane lifetimes.
   std::vector<NearbySharing::SharedTarget> shared_directories_;
+  std::map<std::string, SmbCredentials> network_share_credentials_;
+  std::map<std::string, uint64_t> network_share_checks_;
+  std::set<std::string> network_share_attempted_;
+  std::map<std::string, mojom::SmbError> network_share_errors_;
+  uint64_t network_share_serial_ = 0;
+  std::shared_ptr<std::atomic<bool>> network_share_cancel_ = std::make_shared<std::atomic<bool>>(false);
   raw_ptr<views::LabelButton> share_button_ = nullptr;
   base::OneShotTimer workspace_timer_;
   bool restoring_workspace_ = false;
@@ -10670,6 +11310,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool history_page_ = false;
   base::FilePath pending_search_selection_;
   bool search_page_ = false;
+  bool network_page_ = false;
+  raw_ptr<views::View> network_view_ = nullptr;
   raw_ptr<views::View> search_view_ = nullptr;
   raw_ptr<views::LabelButton> search_action_ = nullptr;
   bool history_loading_ = false;
@@ -10727,6 +11369,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   uint64_t new_folder_generation_ = 0;
   raw_ptr<views::LabelButton> new_folder_button_ = nullptr;
   raw_ptr<NewFolderView> new_folder_contents_ = nullptr;
+  std::string new_folder_network_url_;
   std::unique_ptr<RenameFocusObserver> rename_focus_observer_;
   std::unique_ptr<views::BubbleDialogDelegate> new_folder_delegate_;
   std::unique_ptr<views::Widget> new_folder_widget_;
@@ -10763,6 +11406,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
   bool trash_busy_ = false, trash_error_ = false;
   raw_ptr<views::LabelButton> restore_action_ = nullptr, empty_trash_action_ = nullptr;
   raw_ptr<views::View> normal_footer_actions_ = nullptr, trash_footer_actions_ = nullptr;
+  raw_ptr<views::LabelButton> network_share_button_ = nullptr, network_new_folder_ = nullptr, network_paste_ = nullptr, network_cancel_ = nullptr;
+  raw_ptr<views::View> network_footer_left_ = nullptr, network_footer_right_ = nullptr;
+  views::ViewTracker network_address_anchor_;
+  views::ViewTracker network_breadcrumb_;
+  bool network_footer_visible_ = false, network_footer_busy_ = false;
   bool received_check_pending_ = false;
   bool received_recheck_ = false;
   base::FilePath received_checked_path_;
@@ -10789,6 +11437,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   std::unique_ptr<views::Widget> options_widget_;
   std::optional<NavigationStyle> rendered_navigation_style_;
   raw_ptr<NavigationPathView> crumbs_scroll_ = nullptr;
+  raw_ptr<views::View> path_area_ = nullptr;
   raw_ptr<views::ScrollView> files_ = nullptr;
   raw_ptr<views::Textfield> address_ = nullptr;
   std::unique_ptr<PathCompletion> address_completion_;
@@ -10841,8 +11490,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
   base::OneShotTimer visual_icon_retry_timer_;
   size_t next_visual_pane_ = 0;
   int rendered_tab_id_ = -1;
+  ui::ImageModel trash_tab_icon_, network_tab_icon_;
+  ui::ImageModel network_location_icon_;
   std::vector<std::pair<int, std::u16string>> rendered_tab_titles_;
   std::string rendered_crumb_pane_;
+  std::string rendered_network_url_;
   std::vector<std::pair<base::FilePath, base::WeakPtr<views::View>>> rendered_crumb_buttons_;
   base::FilePath rendered_crumb_path_;
   base::RepeatingTimer timer_;
@@ -10877,6 +11529,199 @@ class FilesDelegate : public views::WidgetDelegate {
  private:
   base::OnceClosure quit_;
 };
+}
+namespace {
+struct NetworkDisplayItem {
+  std::string name, id;
+  bool directory;
+  uint64_t size;
+  base::Time modified, created;
+};
+std::unique_ptr<views::View> CreateNetworkItemGrid(const std::vector<NetworkDisplayItem>& items,
+    bool icons, int icon_size, bool devices, NetworkColumns columns, const gfx::ImageSkia& image,
+    views::ContextMenuController* menu, base::RepeatingCallback<void(std::string, bool)> open,
+    base::RepeatingCallback<void(size_t, bool, const ui::Event&)> select = {}) {
+  const std::array visible = {columns.size, columns.type, columns.modified, columns.created};
+  constexpr std::array widths = {90, 140, 160, 160};
+  constexpr std::array labels = {IDS_CRFILES_SIZE, IDS_CRFILES_TYPE, IDS_CRFILES_LAST_MODIFIED, IDS_CRFILES_CREATED};
+  int metadata_width = 0;
+  for (size_t i = 0; i < visible.size(); ++i) if (visible[i]) metadata_width += widths[i];
+  auto contents = std::make_unique<FileLayout>(icons, icon_size, icons || !metadata_width ? 0 : 280 + metadata_width);
+  contents->SetItemCount(items.size());
+  contents->set_context_menu_controller(menu);
+  if (!icons) {
+    auto header = std::make_unique<views::View>();
+    auto* layout = header->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal));
+    auto* name = header->AddChildView(std::make_unique<views::Label>(Text(IDS_CRFILES_NAME)));
+    name->SetHorizontalAlignment(gfx::ALIGN_LEFT); name->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(0, 8)));
+    layout->SetFlexForView(name, 1);
+    for (size_t i = 0; i < visible.size(); ++i) {
+      if (!visible[i]) continue;
+      auto* label = header->AddChildView(std::make_unique<views::Label>(Text(labels[i])));
+      label->SetHorizontalAlignment(gfx::ALIGN_LEFT); label->SetPreferredSize(gfx::Size(widths[i], kListHeaderHeight));
+    }
+    contents->SetHeader(contents->AddChildView(std::move(header)));
+  }
+  for (size_t index = 0; index < items.size(); ++index) {
+    const auto& item = items[index];
+    auto* row = contents->AddChildView(std::make_unique<FileRow>(icons));
+    row->SetAccessibleName(base::UTF8ToUTF16(item.name));
+    row->set_context_menu_controller(menu);
+    row->SetVirtualPosition(index, items.size());
+    row->SetTooltipCallback(base::BindRepeating([](std::string text) { return base::UTF8ToUTF16(text); }, devices ? "smb://" + item.id + "/" : item.name));
+    row->SetCallback(base::BindRepeating(
+        [](FileLayout* contents, FileRow* selected, base::RepeatingCallback<void(std::string, bool)> open,
+           std::string id, bool directory, bool device, size_t index,
+           base::RepeatingCallback<void(size_t, bool, const ui::Event&)> select, const ui::Event& event) {
+          if (!select) for (const auto& child : contents->children()) {
+            if (auto* row = views::AsViewClass<FileRow>(child.get()))
+              row->SetBackground(row == selected ? views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant, 8) : nullptr);
+          }
+          const bool single = directory && (device || GetFileViewPreferences().single_click_folders) && event.IsMouseEvent() &&
+              event.AsMouseEvent()->IsOnlyLeftMouseButton() && !event.IsControlDown() &&
+              !event.IsCommandDown() && !event.IsShiftDown() && !event.IsAltDown();
+          const bool activate = single || (event.IsMouseEvent() && event.AsMouseEvent()->GetClickCount() == 2) ||
+              (event.IsKeyEvent() && event.AsKeyEvent()->key_code() == ui::VKEY_RETURN);
+          if (select) select.Run(index, activate, event);
+          else if (activate) open.Run(std::move(id), directory);
+        }, base::Unretained(contents.get()), base::Unretained(row), open, item.id, item.directory, devices, index, select));
+    auto* layout = row->SetLayoutManager(std::make_unique<views::BoxLayout>(icons ?
+        views::BoxLayout::Orientation::kVertical : views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets(icons ? 2 : 0), icons ? 4 : 0));
+    if (icons) layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
+    auto* button = row->AddChildView(std::make_unique<FileButton>(views::Button::PressedCallback(),
+        base::UTF8ToUTF16(item.name), icons, icon_size));
+    button->SetCanProcessEventsWithinSubtree(false);
+    button->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+    views::InkDrop::Get(button->ink_drop_view())->SetMode(views::InkDropHost::InkDropMode::OFF);
+    if (!icons) { button->SetHorizontalAlignment(gfx::ALIGN_LEFT); layout->SetFlexForView(button, 1); }
+    const auto& fallback = devices ? vector_icons::kDevicesIcon : item.directory ? vector_icons::kFolderOpenIcon : vector_icons::kInsertDriveFileOutlineOldIcon;
+    button->SetFileImage(image.isNull() ? ui::ImageModel::FromVectorIcon(fallback, ui::kColorSysOnSurface, icon_size) : ui::ImageModel::FromImageSkia(image));
+    if (!icons) {
+      for (size_t i = 0; i < visible.size(); ++i) {
+        if (!visible[i]) continue;
+        std::u16string value;
+        switch (i) {
+          case 0: value = item.directory ? std::u16string() : ui::FormatBytes(base::ByteSize(item.size)); break;
+          case 1: {
+            if (item.directory) value = Text(IDS_CRFILES_FOLDER);
+            else {
+              // Use the built-in MIME table; remote names are not local files.
+              auto extension = base::FilePath::FromUTF8Unsafe(item.name).FinalExtension();
+              if (!extension.empty()) extension.erase(0, 1);
+              std::string mime;
+              if (!net::GetWellKnownMimeTypeFromExtension(extension, &mime)) mime = "application/octet-stream";
+              value = base::UTF8ToUTF16(mime);
+            }
+            break;
+          }
+          case 2: value = item.modified.is_null() ? std::u16string() : base::TimeFormatShortDateAndTime(item.modified); break;
+          case 3: value = CreatedText(item.created); break;
+        }
+        auto* label = row->AddChildView(std::make_unique<views::Label>(value));
+        label->SetHorizontalAlignment(gfx::ALIGN_LEFT); label->SetSubpixelRenderingEnabled(false);
+        label->SetCanProcessEventsWithinSubtree(false); label->SetHandlesTooltips(false);
+        label->SetPreferredSize(gfx::Size(widths[i], std::max(36, icon_size + 12) - 8));
+      }
+    }
+    contents->PlaceItem(index, row);
+  }
+  return contents;
+}
+}  // namespace
+std::unique_ptr<views::View> CreateNetworkDevicesView(const std::vector<mojom::SmbServerPtr>& servers,
+    bool icons, int icon_size, const gfx::ImageSkia& image, base::RepeatingCallback<void(std::string)> open) {
+  std::vector<NetworkDisplayItem> items;
+  for (const auto& server : servers) items.push_back({server->name,
+      server->address + (server->port == 445 ? std::string() : ":" + base::NumberToString(server->port)), true, 0, {}, {}});
+  return CreateNetworkItemGrid(items, icons, icon_size, true, {false, false, false, false}, image, nullptr, base::BindRepeating(
+      [](base::RepeatingCallback<void(std::string)> open, std::string address, bool) { open.Run(std::move(address)); }, std::move(open)));
+}
+std::unique_ptr<views::View> CreateNetworkFilesView(const std::vector<mojom::SmbEntryPtr>& entries,
+    bool icons, int icon_size, NetworkColumns columns, views::ContextMenuController* menu,
+    base::RepeatingCallback<void(size_t, bool, const ui::Event&)> select) {
+  std::vector<NetworkDisplayItem> items;
+  for (const auto& entry : entries) items.push_back({entry->name, entry->name, entry->directory, entry->size, entry->modified, entry->created});
+  return CreateNetworkItemGrid(items, icons, icon_size, false, columns, gfx::ImageSkia(), menu, {}, std::move(select));
+}
+void SetNetworkFilesDragController(views::View* contents, views::DragController* controller,
+    base::RepeatingClosure done) {
+  for (const auto& child : contents->children()) if (auto* row = views::AsViewClass<FileRow>(child.get())) {
+    row->set_drag_controller(controller);
+    row->SetDragDoneCallback(done);
+  }
+}
+void SetNetworkFileSelection(views::View* contents, const std::set<size_t>& selected,
+    std::optional<size_t> drop_target) {
+  size_t index = 0;
+  for (const auto& child : contents->children()) if (auto* row = views::AsViewClass<FileRow>(child.get())) {
+    const bool incoming = drop_target == index;
+    const bool active = selected.contains(index++);
+    row->SetBackground(incoming ? views::CreateRoundedRectBackground(ui::kColorSysPrimaryContainer, 8) :
+        active ? views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant, 8) : nullptr);
+    row->GetViewAccessibility().SetIsSelected(active);
+  }
+}
+void SetNetworkMarquee(views::View* contents,
+    base::RepeatingCallback<void(std::set<size_t>, bool, bool, bool)> select) {
+  auto* layout = views::AsViewClass<FileLayout>(contents);
+  if (!layout) return;
+  layout->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+  layout->GetViewAccessibility().SetIsMultiselectable(true);
+  layout->SetSelectionCallback(base::BindRepeating(
+      [](FileLayout* layout, base::RepeatingCallback<void(std::set<size_t>, bool, bool, bool)> select,
+         gfx::Rect rect, bool additive, bool begin, bool end) {
+        std::set<size_t> indices;
+        const auto [first, last] = layout->ItemsInRect(rect);
+        for (size_t i = first; i < last; ++i) if (layout->ItemBounds(i).Intersects(rect)) indices.insert(i);
+        select.Run(std::move(indices), additive, begin, end);
+      }, base::Unretained(layout), std::move(select)));
+}
+size_t NetworkFileColumns(views::View* contents) {
+  auto* layout = views::AsViewClass<FileLayout>(contents);
+  return layout ? std::max<size_t>(1, layout->Columns()) : 1;
+}
+void FocusNetworkFile(views::View* contents, size_t index) {
+  auto* layout = views::AsViewClass<FileLayout>(contents);
+  if (!layout) return;
+  layout->ScrollRectToVisible(layout->ItemBounds(index));
+  size_t current = 0;
+  for (const auto& child : contents->children()) if (auto* row = views::AsViewClass<FileRow>(child.get())) {
+    if (current++ == index) { row->RequestFocus(); return; }
+  }
+}
+std::optional<size_t> NetworkFileIndex(views::View* contents, views::View* source) {
+  auto* layout = views::AsViewClass<FileLayout>(contents);
+  return layout ? layout->IndexOf(source) : std::nullopt;
+}
+views::View* NetworkFileNameAnchor(views::View* contents, size_t index) {
+  if (!contents) return nullptr;
+  size_t position = 0;
+  for (const auto& child : contents->children()) if (auto* row = views::AsViewClass<FileRow>(child.get())) {
+    if (position++ != index || row->children().empty()) continue;
+    return static_cast<FileButton*>(row->children().front().get())->NameAnchor();
+  }
+  return nullptr;
+}
+void SetNetworkFilesImages(views::View* contents, const std::vector<gfx::ImageSkia>& images) {
+  if (!views::AsViewClass<FileLayout>(contents)) return;
+  size_t index = 0;
+  for (const auto& child : contents->children()) {
+    auto* row = views::AsViewClass<FileRow>(child.get());
+    if (!row) continue;
+    if (index >= images.size()) break;
+    if (!row->children().empty() && !images[index].isNull())
+      static_cast<FileButton*>(row->children().front().get())->SetFileImage(ui::ImageModel::FromImageSkia(images[index]));
+    ++index;
+  }
+}
+void SetNetworkDevicesImage(views::View* contents, const gfx::ImageSkia& image) {
+  if (image.isNull() || !views::AsViewClass<FileLayout>(contents)) return;
+  for (const auto& child : contents->children()) {
+    auto* row = views::AsViewClass<FileRow>(child.get());
+    if (row && !row->children().empty())
+      static_cast<FileButton*>(row->children().front().get())->SetFileImage(ui::ImageModel::FromImageSkia(image));
+  }
 }
 std::unique_ptr<views::View> CreateCrFilesTabStrip(views::Widget*) { return g_contents ? g_contents->CreateTabs() : nullptr; }
 void ShowCrFilesTrustedDevices() { if (g_contents) g_contents->ShowTrustedDevices(); }

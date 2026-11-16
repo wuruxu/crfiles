@@ -1,6 +1,8 @@
 # Include from the Chromium source root Makefile. Never invoke ninja directly.
 # Shared by the Linux and Windows packaging targets; matches crFiles/BUILD.gn.
 CRFILES_LINUX_OUT_DIR ?= out/debian
+CRFILES_LINUX_RUNTIME_FILES += libsmb2-LICENSE.txt
+CRFILES_WIN_RUNTIME_FILES += libsmb2-LICENSE.txt
 CRFILES_LOCALES := zh-CN zh-HK zh-TW ar fr fr-CA ru es es-419 pt-BR pt-PT ja ko
 CRFILES_RESOURCE_PAKS := crfiles_resources.pak crfiles_resources_200_percent.pak $(addprefix crfiles_resources_,$(addsuffix .pak,$(CRFILES_LOCALES)))
 CRFILES_PDF_RESOURCE_PAKS := crpdf_resources.pak crpdf_resources_200_percent.pak $(addprefix crpdf_resources_,$(addsuffix .pak,$(CRFILES_LOCALES)))
