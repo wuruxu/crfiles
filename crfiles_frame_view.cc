@@ -455,6 +455,12 @@ class FilesFrameView : public views::FrameView, public views::WidgetObserver,
       }
       return HTCAPTION;
     }
+    auto client_point = point;
+    views::View::ConvertPointToWidget(this, &client_point);
+    // Path-bar blank areas opt into native caption dragging and double-clicks.
+    if (!IsCrFilesWindowBlockedByModal(widget_) &&
+        views::GetHitTestComponent(widget_->client_view(), client_point) == HTCAPTION)
+      return HTCAPTION;
     const int hit = widget_->client_view()->NonClientHitTest(point);
     if (hit != HTNOWHERE) return hit;
     return point.y() < kTitlebarHeight + ShadowMargin() ? HTCAPTION : HTNOWHERE;

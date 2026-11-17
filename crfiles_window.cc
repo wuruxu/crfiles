@@ -2563,11 +2563,27 @@ class NavigationScrollButton : public views::ImageButton {
 };
 BEGIN_METADATA(NavigationScrollButton)
 END_METADATA
+class PathEditArea : public views::LabelButton {
+  METADATA_HEADER(PathEditArea, views::LabelButton)
+ public:
+  explicit PathEditArea(base::RepeatingClosure edit)
+      : views::LabelButton(std::move(edit), std::u16string()) {
+    SetAccessibleName(Text(IDS_CRFILES_LOCATION));
+    SetFocusBehavior(FocusBehavior::NEVER);
+    SetRequestFocusOnPress(false);
+    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
+  }
+  ui::Cursor GetCursor(const ui::MouseEvent&) override {
+    return ui::Cursor(ui::mojom::CursorType::kIBeam);
+  }
+};
+BEGIN_METADATA(PathEditArea)
+END_METADATA
 class NavigationPathView : public views::View {
   METADATA_HEADER(NavigationPathView, views::View)
  public:
   explicit NavigationPathView(base::RepeatingClosure edit) {
-    scroll_ = AddChildView(std::make_unique<NavigationScrollView>(std::move(edit)));
+    scroll_ = AddChildView(std::make_unique<NavigationScrollView>(edit));
     left_ = AddChildView(std::make_unique<NavigationScrollButton>(
         base::BindRepeating(&NavigationPathView::Scroll, base::Unretained(this), -1),
         kKeyboardArrowLeftIcon, IDS_CRFILES_SCROLL_PATH_LEFT));
@@ -2575,13 +2591,28 @@ class NavigationPathView : public views::View {
         base::BindRepeating(&NavigationPathView::Scroll, base::Unretained(this), 1),
         kKeyboardArrowRightIcon, IDS_CRFILES_SCROLL_PATH_RIGHT));
     left_->SetVisible(false); right_->SetVisible(false);
+    caption_left_ = AddChildView(std::make_unique<views::View>());
+    caption_right_ = AddChildView(std::make_unique<views::View>());
+    for (auto* caption : {caption_left_.get(), caption_right_.get()}) {
+      caption->SetProperty(views::kHitTestComponentKey, static_cast<int>(HTCAPTION));
+      caption->GetViewAccessibility().SetIsIgnored(true);
+      caption->SetVisible(false);
+    }
+    edit_area_ = AddChildView(std::make_unique<PathEditArea>(std::move(edit)));
+    edit_area_->SetVisible(false);
     scroll_subscription_ = scroll_->AddContentsScrolledCallback(base::BindRepeating(
         &NavigationPathView::UpdateButtons, base::Unretained(this)));
   }
   views::View* contents() const { return scroll_->contents(); }
+  void SetEditingAllowed(bool allowed) {
+    if (editing_allowed_ == allowed) return;
+    editing_allowed_ = allowed;
+    UpdateBlankAreas();
+  }
   bool OnMouseWheel(const ui::MouseWheelEvent& event) override { return scroll_->OnMouseWheel(event); }
   void OnScrollEvent(ui::ScrollEvent* event) override { scroll_->OnScrollEvent(event); }
   void SetContents(std::unique_ptr<views::View> contents) {
+    caption_left_->SetVisible(false); caption_right_->SetVisible(false); edit_area_->SetVisible(false);
     scroll_->StopScrolling();
     scroll_->SetContents(std::move(contents));
     reveal_current_ = true;
@@ -2621,9 +2652,41 @@ class NavigationPathView : public views::View {
     const bool before = offset > 0.5f, after = offset < max_offset - 0.5f;
     left_->SetAvailable(base::i18n::IsRTL() ? after : before);
     right_->SetAvailable(base::i18n::IsRTL() ? before : after);
+    UpdateBlankAreas();
+  }
+  void UpdateBlankAreas() {
+    if (!contents() || contents()->children().empty() || width() <= 0 ||
+        contents()->GetPreferredSize({}).width() > width()) {
+      caption_left_->SetVisible(false); caption_right_->SetVisible(false); edit_area_->SetVisible(false);
+      return;
+    }
+    // Inspect actual child bounds: the scroll contents can fill the viewport
+    // even when the breadcrumbs use only a small part of it.
+    int occupied_left = width(), occupied_right = 0;
+    for (const auto& child : contents()->children()) {
+      if (!child->GetVisible()) continue;
+      const auto bounds = views::View::ConvertRectToTarget(child.get(), this, child->GetLocalBounds());
+      occupied_left = std::min(occupied_left, bounds.x());
+      occupied_right = std::max(occupied_right, bounds.right());
+    }
+    occupied_left = std::clamp(occupied_left - contents()->GetInsets().left(), 0, width());
+    occupied_right = std::clamp(occupied_right + contents()->GetInsets().right(), occupied_left, width());
+    const int edit_width = editing_allowed_ ? std::min(108, width() - occupied_right) : 0;
+    // Coordinates above are physical; compensate for Views' RTL mirroring so
+    // the editing target stays at the left edge of the blank space after the path.
+    auto place = [this](views::View* view, int x, int width) {
+      view->SetBounds(GetMirroredXWithWidthInView(x, width), 0, width, height());
+      view->SetVisible(width > 0);
+    };
+    place(caption_left_, 0, occupied_left);
+    place(caption_right_, occupied_right + edit_width, width() - occupied_right - edit_width);
+    place(edit_area_, occupied_right, edit_width);
   }
   raw_ptr<NavigationScrollView> scroll_ = nullptr;
   raw_ptr<NavigationScrollButton> left_ = nullptr, right_ = nullptr;
+  raw_ptr<views::View> caption_left_ = nullptr, caption_right_ = nullptr;
+  raw_ptr<PathEditArea> edit_area_ = nullptr;
+  bool editing_allowed_ = true;
   bool reveal_current_ = false;
   std::unique_ptr<views::ScrollView::ScopedScrollSynchronizer> scroll_synchronizer_;
   base::CallbackListSubscription scroll_subscription_;
@@ -3845,6 +3908,7 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
   }
   bool OnMousePressed(const ui::MouseEvent& event) override {
     pressed_ = event.IsOnlyLeftMouseButton();
+    double_click_ = pressed_ && event.GetClickCount() == 2;
     dragging_ = false;
     press_point_ = event.location();
     views::View::ConvertPointToScreen(this, &press_point_);
@@ -3861,6 +3925,7 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
     return true;
   }
   void OnMouseReleased(const ui::MouseEvent& event) override {
+    const bool double_click = std::exchange(double_click_, false);
     pressed_ = false;
     if (dragging_) {
       dragging_ = false;
@@ -3868,9 +3933,27 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
       drag_callback_.Run(drag_delta_, true);
       return;
     }
+    if (double_click && HitTestPoint(event.location()) && GetWidget()) {
+      auto* window = GetWidget()->GetTopLevelWidget();
+      if (!window->IsClosed() && !window->IsFullscreen() &&
+          window->widget_delegate()->CanMaximize() && !IsCrFilesWindowBlockedByModal(window)) {
+        views::LabelButton::OnMouseCaptureLost();
+        // Finish mouse dispatch before changing window bounds or tab layout.
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+            base::BindOnce([](base::WeakPtr<views::Widget> widget) {
+              if (!widget || widget->IsClosed() || widget->IsFullscreen() ||
+                  !widget->widget_delegate()->CanMaximize() ||
+                  IsCrFilesWindowBlockedByModal(widget.get())) return;
+              if (widget->IsMaximized()) widget->Restore();
+              else widget->Maximize();
+            }, window->GetWeakPtr()));
+        return;
+      }
+    }
     views::LabelButton::OnMouseReleased(event);
   }
   void OnMouseCaptureLost() override {
+    double_click_ = false;
     pressed_ = false;
     if (dragging_) {
       dragging_ = false;
@@ -4034,6 +4117,7 @@ class TabButton : public views::LabelButton, public views::ContextMenuController
   gfx::Point press_point_;
   int drag_delta_ = 0;
   bool pressed_ = false, dragging_ = false;
+  bool double_click_ = false;
   std::optional<SearchPageState> search_state_;
   ui::ImageModel location_icon_;
   raw_ptr<views::ImageView> pin_icon_ = nullptr;
@@ -9367,6 +9451,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void SyncNavigation() {
     if (tabs_.empty() || !Current().active_pane) return;
     auto* pane = ActivePane();
+    crumbs_scroll_->SetEditingAllowed(pane->tag_id_ < 0);
     // The outer inset belongs to navigation chrome; each pane paints its own
     // content surface. Keep the sidebar and toolbar consistent across tabs.
     SetBackground(std::make_unique<NavigationBackground>());
@@ -10831,11 +10916,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
     normal_footer_actions_->SetVisible(false); trash_footer_actions_->SetVisible(false);
     footer_folder_name_->SetVisible(false);
     auto* outer = static_cast<views::BoxLayout*>(footer_->GetLayoutManager());
+    outer->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     outer->SetFlexForView(footer_status_, 1);
     // Retain the ordinary footer's labels and FlexLayout for directory stats.
     auto* middle = static_cast<views::FlexLayout*>(footer_status_->GetLayoutManager());
     middle->SetMainAxisAlignment(views::LayoutAlignment::kStart);
+    middle->SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
     status_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    status_->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
     status_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(0, 6, 0, 0)));
     status_->SetProperty(views::kMarginsKey, gfx::Insets());
     auto* left = footer_->AddChildViewAt(std::make_unique<views::View>(), 0);
