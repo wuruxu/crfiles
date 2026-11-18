@@ -31,6 +31,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/scoped_observation.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "base/pickle.h"
 #include "base/uuid.h"
 #include "base/strings/string_number_conversions.h"
@@ -74,12 +76,14 @@
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 
 namespace crfiles {
 namespace {
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
 using Error = mojom::SmbError;
 using Mutation = mojom::SmbMutation;
+constexpr size_t kRowsPerPage = 512;
 enum class ConnectionMessageKind { kInfo, kProgress, kError };
 // Only an opaque, per-drag token crosses the OS drag service. Credentials and
 // source refresh callbacks remain in this process and expire when dragging ends.
@@ -133,7 +137,7 @@ int ErrorText(Error error) {
   switch (error) {
     case Error::kAccessDenied: return IDS_CRFILES_NETWORK_AUTH_ERROR;
     case Error::kInvalidAddress: return IDS_CRFILES_NETWORK_ADDRESS_ERROR;
-    case Error::kTooLarge: return IDS_CRFILES_NETWORK_TOO_LARGE;
+    case Error::kTooLarge: return IDS_CRFILES_NETWORK_TREE_LIMIT;
     case Error::kLocalFile: return IDS_CRFILES_NETWORK_SAVE_ERROR;
     case Error::kAlreadyExists: return IDS_CRFILES_NETWORK_EXISTS;
     default: return IDS_CRFILES_NETWORK_ERROR;
@@ -186,6 +190,8 @@ base::FilePath PublishDownload(std::shared_ptr<DownloadFile> file) {
 class NetworkPage : public views::View, public views::TextfieldController,
                     public views::ContextMenuController,
                     public views::DragController,
+                    public views::WidgetObserver,
+                    public mojom::SmbDirectoryObserver,
                     public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(NetworkPage, views::View)
  public:
@@ -219,6 +225,14 @@ class NetworkPage : public views::View, public views::TextfieldController,
     list_ = scroll->SetContents(std::make_unique<views::View>());
     list_->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(), 4));
     layout->SetFlexForView(scroll, 1);
+    pager_ = AddChildView(std::make_unique<views::View>());
+    auto* pages = pager_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+    pages->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
+    previous_page_ = Button(pager_, IDS_CRFILES_BACK, base::BindRepeating(&NetworkPage::ChangePage, base::Unretained(this), false));
+    page_number_ = pager_->AddChildView(std::make_unique<views::Label>());
+    next_page_ = Button(pager_, IDS_CRFILES_FORWARD, base::BindRepeating(&NetworkPage::ChangePage, base::Unretained(this), true));
+    pager_->SetVisible(false);
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(&NetworkPage::Home, weak_.GetWeakPtr()));
   }
   ~NetworkPage() override { RemovePreTargetHandler(&drag_modifiers_); Stop(); }
@@ -246,12 +260,15 @@ class NetworkPage : public views::View, public views::TextfieldController,
   }
   void CancelOperation() { if (busy_) Cancel(); }
   void Stop() {
+    StopWatch(); automatic_reload_ = false;
     FinishDrag(); drop_text_.clear(); drop_target_.reset();
     CloseFileMenu(); entries_.clear(); visible_entries_.clear(); selected_.clear(); anchor_.reset(); cursor_.reset(); ++listing_generation_;
     CloseConnection(false);
     weak_.InvalidateWeakPtrs(); poll_.Stop(); deadline_.Stop(); empty_.Stop();
     connection_.Stop(); running_ = false; connected_ = false; busy_ = false; discovering_ = false; refresh_requested_ = false; download_.reset();
     pending_history_ = -1; icon_loading_ = false;
+    ++directory_request_; reading_pages_ = false; page_start_ = 0; pager_->SetVisible(false);
+    deleting_.clear(); cancel_delete_ = false; delete_notice_.clear();
     // Resolve the form even when cancellation/disconnection invalidates the IPC
     // callback. Defer UI notification until Stop (or destruction) has unwound.
     if (create_folder_done_) base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
@@ -273,7 +290,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
   std::string Url() const { return server_address_.empty() ? std::string() : SmbLocation{server_address_, share_, path_}.Url(); }
   bool CanGo(int delta) const {
     const int next = history_index_ + delta;
-    return connected_ && !busy_ && next >= 0 && next < static_cast<int>(history_.size());
+    return connected_ && (!busy_ || reading_pages_) && next >= 0 && next < static_cast<int>(history_.size());
   }
   void Go(int delta) {
     if (!CanGo(delta)) return;
@@ -285,7 +302,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
     const auto location = ParseSmbLocation(address.starts_with('/') && !server_address_.empty()
         ? "smb://" + server_address_ + address : address);
     if (!location || location->server != server_address_) return false;
-    if (busy_) return true;
+    if (busy_ && !reading_pages_) return true;
     if (connected_) Load(location->share, location->path);
     else Prompt(location->Url());
     return true;
@@ -371,7 +388,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
   }
   void WriteDragDataForView(views::View* sender, const gfx::Point&, ui::OSExchangeData* data) override {
     if (!connected_ || busy_ || share_.empty()) return;
-    const auto index = NetworkFileIndex(list_, sender);
+    const auto index = EntryIndex(sender);
     if (!index || *index >= visible_entries_.size()) return;
     const auto& name = visible_entries_[*index]->name;
     if (!selected_.contains(name)) { selected_.clear(); selected_.insert(name); }
@@ -419,11 +436,11 @@ class NetworkPage : public views::View, public views::TextfieldController,
     if (!scroll_->GetVisibleRect().Contains(point)) return std::nullopt;
     // Headers and scrollbars are not drop targets. Empty file-grid space is.
     auto* hit = list_->GetEventHandlerForPoint(point);
-    const auto index = hit ? NetworkFileIndex(list_, hit) : std::nullopt;
+    const auto index = hit ? EntryIndex(hit) : std::nullopt;
     auto destination = Credentials();
     if (index) {
       if (*index >= visible_entries_.size() || !visible_entries_[*index]->directory) return std::nullopt;
-      destination->location.path = ChildPath(visible_entries_[*index]->name); *target = index;
+      destination->location.path = ChildPath(visible_entries_[*index]->name); *target = *index - page_start_;
     } else if (hit && hit != list_) return std::nullopt;
     if (!ValidNetworkTransferDestination(*NetworkDrag().source, *destination)) return std::nullopt;
     return destination;
@@ -497,7 +514,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
     }
     if (visible_entries_.empty()) return false;
     const size_t last = visible_entries_.size() - 1;
-    const size_t current = std::min(cursor_.value_or(0), last);
+    const size_t current = std::min(cursor_.value_or(page_start_), last);
     size_t next = current; const auto columns = NetworkFileColumns(list_);
     switch (event.key_code()) {
       case ui::VKEY_RETURN:
@@ -513,7 +530,11 @@ class NetworkPage : public views::View, public views::TextfieldController,
       case ui::VKEY_SPACE: SelectIndex(current, false, event); return true;
       default: return false;
     }
-    if (!cursor_ && event.key_code() != ui::VKEY_END) next = 0;
+    if (!cursor_ && event.key_code() != ui::VKEY_END && event.key_code() != ui::VKEY_HOME) next = page_start_;
+    if (next / kRowsPerPage != page_start_ / kRowsPerPage) {
+      page_start_ = next / kRowsPerPage * kRowsPerPage;
+      RenderRows(false);
+    }
     SelectIndex(next, false, event);
     const auto generation = listing_generation_;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(
@@ -521,14 +542,80 @@ class NetworkPage : public views::View, public views::TextfieldController,
           if (!page || page->busy_ || page->listing_generation_ != generation || !page->IsDrawn() ||
               !page->GetWidget() || !page->GetWidget()->IsActive()) return;
           auto* focused = page->GetFocusManager() ? page->GetFocusManager()->GetFocusedView() : nullptr;
-          if (focused && (focused == page.get() || page->list_->Contains(focused))) FocusNetworkFile(page->list_, index);
+          if (focused && (focused == page.get() || page->list_->Contains(focused))) FocusNetworkFile(page->list_, index - page->page_start_);
         }, weak_.GetWeakPtr(), generation, next));
     return true;
   }
  private:
   void VisibilityChanged(views::View* starting_from, bool is_visible) override {
     views::View::VisibilityChanged(starting_from, is_visible);
-    if (!is_visible) { CloseFileMenu(); CloseConnection(); }
+    if (!is_visible) { CloseFileMenu(); CloseConnection(); StopWatch(); }
+    else UpdateWatch();
+  }
+  void AddedToWidget() override {
+    views::View::AddedToWidget();
+    observed_widget_.Observe(GetWidget()); UpdateWatch();
+  }
+  void RemovedFromWidget() override {
+    StopWatch(); observed_widget_.Reset(); views::View::RemovedFromWidget();
+  }
+  void OnWidgetDestroyed(views::Widget*) override {
+    StopWatch(); observed_widget_.Reset();
+  }
+  void OnWidgetVisibilityChanged(views::Widget*, bool visible) override {
+    if (visible) UpdateWatch(); else StopWatch();
+  }
+  void OnWidgetShowStateChanged(views::Widget*) override { UpdateWatch(); }
+
+  void StopWatch() {
+    watch_receiver_.reset(); watch_connection_.Stop();
+    watch_url_.clear(); watch_dirty_ = false;
+    watch_refresh_.Stop(); watch_recovery_.Stop();
+  }
+  void UpdateWatch() {
+    if (!connected_ || share_.empty() || !IsDrawn() || !GetWidget() ||
+        !GetWidget()->IsVisible() || GetWidget()->IsMinimized()) {
+      StopWatch(); return;
+    }
+    if (watch_url_ == Url()) return;
+    StopWatch();
+    watch_url_ = Url();
+    if (!watch_connection_.Start(base::BindOnce(&NetworkPage::Unavailable, weak_.GetWeakPtr(), false))) {
+      Unavailable(false); return;
+    }
+    watch_connection_.service()->WatchDirectory(server_address_, credentials_.user, credentials_.password,
+        credentials_.domain, share_, path_, watch_receiver_.BindNewPipeAndPassRemote());
+    watch_receiver_.set_disconnect_handler(base::BindOnce(&NetworkPage::Unavailable, weak_.GetWeakPtr(), false));
+  }
+  void Changed() override {
+    watch_dirty_ = true;
+    ScheduleWatchRefresh();
+  }
+  void ScheduleWatchRefresh() {
+    if (watch_url_.empty() || !watch_dirty_ || busy_ || watch_refresh_.IsRunning()) return;
+    watch_refresh_.Start(FROM_HERE, base::Milliseconds(500), this, &NetworkPage::RefreshIfIdle);
+  }
+  void RefreshIfIdle() {
+    if (busy_ || !watch_dirty_ || watch_url_ != Url()) return;
+    if (connection_widget_ || (menu_runner_ && menu_runner_->IsRunning()) ||
+        !NetworkDrag().token.empty() || IsCrFilesWindowBlockedByModal(GetWidget())) {
+      ScheduleWatchRefresh(); return;
+    }
+    Load(share_, path_, true);
+  }
+  void Unavailable(bool permanent) override {
+    watch_receiver_.reset(); watch_connection_.Stop();
+    if (watch_url_.empty()) return;
+    if (permanent) {
+      // Some shares allow enumeration but do not implement notifications.
+      Changed();
+      watch_recovery_.Start(FROM_HERE, base::Seconds(30), this, &NetworkPage::Changed);
+    } else {
+      watch_recovery_.Start(FROM_HERE, base::Seconds(15), this, &NetworkPage::RetryWatch);
+    }
+  }
+  void RetryWatch() {
+    StopWatch(); UpdateWatch(); Changed();
   }
   void ClearConnectionFields() {
     form_ = nullptr; user_ = nullptr;
@@ -661,11 +748,13 @@ class NetworkPage : public views::View, public views::TextfieldController,
     if (busy) KeepFocusInFileArea();
     busy_ = busy;
     cancel_->SetVisible(busy);
-    list_->SetEnabled(!busy);
+    list_->SetEnabled(!busy || reading_pages_);
+    pager_->SetEnabled(!busy || reading_pages_);
     if (form_) form_->SetEnabled(!busy);
     if (connection_widget_) connection_dialog_->SetButtonEnabled(ui::mojom::DialogButton::kOk, !busy);
     UpdateStatusPresentation();
     changed_.Run();
+    if (!busy) ScheduleWatchRefresh();
   }
   void Watchdog() {
     deadline_.Start(FROM_HERE, base::Seconds(40), this, &NetworkPage::Failed);
@@ -694,11 +783,23 @@ class NetworkPage : public views::View, public views::TextfieldController,
         page->SetStatus(Text(IDS_CRFILES_NETWORK_NO_SERVERS));
     }, weak_.GetWeakPtr()));
   }
-  void Cancel() { Stop(); ResetList(); Busy(false); SetStatus(Text(IDS_CRFILES_CANCELED)); if (!device_mode_) Home(); }
+  void Cancel() {
+    if (!deleting_.empty()) { cancel_delete_ = true; return; }
+    Stop(); ResetList(); Busy(false); SetStatus(Text(IDS_CRFILES_CANCELED)); if (!device_mode_) Home(); }
   void Failed() {
+    if (!deleting_.empty()) {
+      auto notice = Text(IDS_CRFILES_NETWORK_DISCONNECTED) + u" · " + DeletedCount();
+      auto credentials = credentials_;
+      credentials.location = {server_address_, share_, path_};
+      StartConnection(std::move(credentials));
+      delete_notice_ = std::move(notice);
+      if (!running_) SetStatus(delete_notice_);
+      return;
+    }
+    auto notice = std::move(delete_notice_);
     Stop(); running_ = false;
     Busy(false); ResetList();
-    SetStatus(Text(IDS_CRFILES_NETWORK_DISCONNECTED));
+    SetStatus(notice.empty() ? Text(IDS_CRFILES_NETWORK_DISCONNECTED) : std::move(notice));
   }
   void Discover(bool refresh) {
     if (refresh) LOG(INFO) << "SMB page refresh requested; running=" << running_
@@ -864,16 +965,27 @@ class NetworkPage : public views::View, public views::TextfieldController,
     if (reuse_page) AdoptSession(std::move(session));
     else open_device_.Run(std::move(session));
   }
-  void Load(std::string share, std::string path) {
-    if (busy_ || !running_) return;
-    CloseFileMenu(); CloseConnection();
-    Busy(true); Watchdog(); SetStatus(Text(IDS_CRFILES_LOADING));
+  void Load(std::string share, std::string path, bool automatic = false) {
+    if ((busy_ && !reading_pages_) || !running_) return;
+    automatic_reload_ = automatic;
+    if (share == share_ && path == path_) { watch_dirty_ = false; watch_refresh_.Stop(); }
+    ++directory_request_; reading_pages_ = false;
+    if (!automatic) { CloseFileMenu(); CloseConnection(); SetStatus(Text(IDS_CRFILES_LOADING)); }
+    Busy(true); Watchdog();
     connection_.service()->List(share, path, false, base::BindOnce(&NetworkPage::Loaded, weak_.GetWeakPtr(), share, path));
   }
   void Loaded(std::string share, std::string path, mojom::SmbListingPtr listing) {
     deadline_.Stop();
     if (listing->error != Error::kOk) {
-      Busy(false); SetStatus(Text(connected_ && listing->error == Error::kAccessDenied ? IDS_CRFILES_NETWORK_ERROR : ErrorText(listing->error)));
+      Busy(false);
+      if (automatic_reload_) {
+        automatic_reload_ = false;
+        listing_limited_ = true; SetStatus(Text(IDS_CRFILES_NETWORK_PARTIAL_LIST));
+        return;
+      }
+      auto message = Text(connected_ && listing->error == Error::kAccessDenied ? IDS_CRFILES_NETWORK_ERROR : ErrorText(listing->error));
+      if (!delete_notice_.empty()) message += u" · " + std::exchange(delete_notice_, {});
+      SetStatus(std::move(message));
       ConnectionStatus(ErrorText(listing->error), ConnectionMessageKind::kError);
       if (password_ && connection_widget_ && !connection_widget_->IsClosed()) password_->RequestFocus();
       pending_history_ = -1;
@@ -885,27 +997,77 @@ class NetworkPage : public views::View, public views::TextfieldController,
       return;
     }
     CloseConnection();
-    if (share_ != share || path_ != path) { selected_.clear(); anchor_.reset(); cursor_.reset(); }
+    const bool same_folder = share_ == share && path_ == path;
+    if (!same_folder) { page_start_ = 0; selected_.clear(); anchor_.reset(); cursor_.reset(); }
     connected_ = true; credentials_needed_ = false; credential_url_.clear(); share_ = std::move(share); path_ = std::move(path);
     if (pending_history_ >= 0) history_index_ = std::exchange(pending_history_, -1);
     else if (history_index_ < 0 || history_[history_index_] != Url()) {
       history_.resize(history_index_ + 1); history_.push_back(Url()); history_index_ = history_.size() - 1;
     }
+    UpdateWatch();
     write_access_ = listing->write_access;
-    Busy(false);
     entries_ = std::move(listing->entries);
     listing_limited_ = listing->limited;
-    RenderListing();
-    UpdateListingStatus();
+    reading_pages_ = listing->more;
+    Busy(reading_pages_);
+    // Keep the old sorted page (including its scroll offset and selection)
+    // visible while a refresh replaces its metadata in the background.
+    refreshing_listing_ = same_folder && reading_pages_ && !visible_entries_.empty();
+    if (!refreshing_listing_) RenderListing(same_folder);
+    next_render_count_ = std::max(kRowsPerPage, entries_.size() * 2);
+    next_render_time_ = base::TimeTicks::Now() + base::Milliseconds(500);
+    if (reading_pages_) ReadNextPage();
+    else ListingFinished();
+  }
+  void ReadNextPage() {
+    if (!automatic_reload_) SetStatus(Text(IDS_CRFILES_LOADING) + u" · " + base::NumberToString16(entries_.size()));
+    Watchdog();
+    connection_.service()->NextPage(base::BindOnce(&NetworkPage::PageReceived, weak_.GetWeakPtr(), directory_request_));
+  }
+  void PageReceived(uint64_t request, mojom::SmbListingPtr page) {
+    if (!reading_pages_ || request != directory_request_) return;
+    deadline_.Stop();
+    if (page->error == Error::kOk) {
+      for (auto& entry : page->entries) entries_.push_back(std::move(entry));
+      if (page->more) {
+        if (!refreshing_listing_ && entries_.size() >= next_render_count_ && base::TimeTicks::Now() >= next_render_time_) {
+          RenderListing(true);
+          next_render_count_ = entries_.size() * 2;
+          next_render_time_ = base::TimeTicks::Now() + base::Milliseconds(500);
+        }
+        ReadNextPage(); return;
+      }
+    }
+    reading_pages_ = false;
+    listing_limited_ = page->limited || page->error != Error::kOk;
+    Busy(false);
+    if (refreshing_listing_ || rendered_entries_ != entries_.size()) RenderListing(true);
+    ListingFinished();
+  }
+  void ListingFinished() {
+    const bool automatic = std::exchange(automatic_reload_, false);
+    // A background refresh should preserve operation feedback such as confirmed
+    // deletions or the result of opening a local copy.
+    if (!automatic || listing_limited_ || status_text_.empty() || status_text_ == Text(IDS_CRFILES_NETWORK_PARTIAL_LIST))
+      UpdateListingStatus();
   }
   void UpdateListingStatus() {
-    SetStatus(listing_limited_ ? Text(IDS_CRFILES_NETWORK_LIMIT) : std::u16string());
+    if (!delete_notice_.empty()) { SetStatus(std::exchange(delete_notice_, {})); return; }
+    SetStatus(listing_limited_ ? Text(share_.empty() ? IDS_CRFILES_NETWORK_LIMIT : IDS_CRFILES_NETWORK_PARTIAL_LIST) : std::u16string());
   }
-  void RenderListing() {
-    FinishDrag(); drop_target_.reset(); drop_text_.clear();
-    CloseFileMenu();
-    KeepFocusInFileArea();
-    const auto generation = ++listing_generation_;
+  void ChangePage(bool forward) {
+    if (forward && page_start_ + kRowsPerPage < visible_entries_.size()) page_start_ += kRowsPerPage;
+    else if (!forward && page_start_ >= kRowsPerPage) page_start_ -= kRowsPerPage;
+    else return;
+    cursor_.reset(); anchor_.reset();
+    RenderRows(false);
+  }
+  std::optional<size_t> EntryIndex(views::View* row) const {
+    const auto index = NetworkFileIndex(list_, row);
+    return index ? std::optional<size_t>(page_start_ + *index) : std::nullopt;
+  }
+  void RenderListing(bool preserve_scroll = true) {
+    rendered_entries_ = entries_.size();
     visible_entries_.clear();
     std::ranges::sort(entries_, [this](const auto& a, const auto& b) {
       if (a->directory != b->directory) return a->directory > b->directory;
@@ -927,22 +1089,47 @@ class NetworkPage : public views::View, public views::TextfieldController,
       if (!share_.empty() && !show_hidden_ && entry->name.starts_with('.')) continue;
       visible_entries_.push_back(entry.Clone());
     }
+    if (!reading_pages_) {
+      std::set<std::string> retained;
+      for (const auto& entry : visible_entries_) if (selected_.contains(entry->name)) retained.insert(entry->name);
+      selected_ = std::move(retained);
+    }
+    page_start_ = visible_entries_.empty() ? 0 : std::min(page_start_, (visible_entries_.size() - 1) / kRowsPerPage * kRowsPerPage);
+    cursor_.reset(); anchor_.reset();
+    RenderRows(preserve_scroll);
+  }
+  void RenderRows(bool preserve_scroll) {
+    const auto offset = preserve_scroll ? scroll_->CurrentOffset() : gfx::PointF();
+    FinishDrag(); drop_target_.reset(); drop_text_.clear();
+    CloseFileMenu(); KeepFocusInFileArea();
+    const auto generation = ++listing_generation_;
+    const size_t start = std::min(page_start_, visible_entries_.size());
+    const auto rows = base::span(visible_entries_).subspan(start).first(
+        std::min(kRowsPerPage, visible_entries_.size() - start));
+    pager_->SetVisible(visible_entries_.size() > kRowsPerPage);
+    previous_page_->SetEnabled(start > 0);
+    next_page_->SetEnabled(start + rows.size() < visible_entries_.size());
+    page_number_->SetText(base::NumberToString16(start / kRowsPerPage + 1) + u" / " +
+        base::NumberToString16(std::max<size_t>(1, (visible_entries_.size() + kRowsPerPage - 1) / kRowsPerPage)));
     scroll_->SetHorizontalScrollBarMode(icons_ ? views::ScrollView::ScrollBarMode::kDisabled : views::ScrollView::ScrollBarMode::kEnabled);
     list_ = nullptr;
     const auto columns = share_.empty() ? NetworkColumns{false, false, false, false} : columns_;
-    list_ = scroll_->SetContents(CreateNetworkFilesView(visible_entries_, icons_, icon_size_, columns, this,
-        base::BindRepeating(&NetworkPage::SelectIndex, weak_.GetWeakPtr())));
+    list_ = scroll_->SetContents(CreateNetworkFilesView(rows, icons_, icon_size_, columns, this,
+        base::BindRepeating([](base::WeakPtr<NetworkPage> page, size_t i, bool activate, const ui::Event& event) {
+          if (page) page->SelectIndex(page->page_start_ + i, activate, event);
+        }, weak_.GetWeakPtr())));
     SetNetworkMarquee(list_, base::BindRepeating(&NetworkPage::Marquee, weak_.GetWeakPtr()));
     if (!share_.empty()) SetNetworkFilesDragController(list_, this,
         base::BindRepeating(&NetworkPage::FinishDrag, weak_.GetWeakPtr()));
-    list_->SetEnabled(!busy_);
-    std::erase_if(selected_, [this](const std::string& name) {
-      return !std::ranges::any_of(visible_entries_, [&](const auto& entry) { return entry->name == name; });
-    });
-    anchor_.reset(); cursor_.reset(); UpdateSelection();
+    list_->SetEnabled(!busy_ || reading_pages_);
+    if (preserve_scroll) {
+      scroll_->DeprecatedLayoutImmediately();
+      scroll_->ScrollToOffset(offset);
+    }
+    UpdateSelection();
     std::vector<std::pair<std::string, bool>> names;
-    names.reserve(visible_entries_.size());
-    for (const auto& entry : visible_entries_) names.emplace_back(entry->name, entry->directory);
+    names.reserve(rows.size());
+    for (const auto& entry : rows) names.emplace_back(entry->name, entry->directory);
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce([](std::vector<std::pair<std::string, bool>> names, int edge) {
           std::vector<gfx::ImageSkia> images; images.reserve(names.size());
@@ -955,7 +1142,8 @@ class NetworkPage : public views::View, public views::TextfieldController,
   }
   void UpdateSelection() {
     std::set<size_t> indices;
-    for (size_t i = 0; i < visible_entries_.size(); ++i) if (selected_.contains(visible_entries_[i]->name)) indices.insert(i);
+    for (size_t i = page_start_; i < std::min(page_start_ + kRowsPerPage, visible_entries_.size()); ++i)
+      if (selected_.contains(visible_entries_[i]->name)) indices.insert(i - page_start_);
     SetNetworkFileSelection(list_, indices, drop_target_);
     UpdateStatusPresentation();
   }
@@ -964,7 +1152,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
     if (begin) { marquee_base_ = selected_; return; }
     if (end) { marquee_base_.clear(); return; }
     selected_ = additive ? marquee_base_ : std::set<std::string>();
-    for (size_t i : indices) if (i < visible_entries_.size()) selected_.insert(visible_entries_[i]->name);
+    for (size_t i : indices) if (page_start_ + i < visible_entries_.size()) selected_.insert(visible_entries_[page_start_ + i]->name);
     anchor_.reset(); cursor_.reset(); UpdateSelection();
   }
   void SelectAll() {
@@ -974,7 +1162,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
     UpdateSelection();
   }
   void SelectIndex(size_t index, bool activate, const ui::Event& event) {
-    if (busy_ || index >= visible_entries_.size()) return;
+    if ((busy_ && !reading_pages_) || index >= visible_entries_.size()) return;
 #if BUILDFLAG(IS_MAC)
     const bool toggle = event.IsCommandDown();
 #else
@@ -997,7 +1185,7 @@ class NetworkPage : public views::View, public views::TextfieldController,
   void ShowContextMenuForViewImpl(views::View* source, const gfx::Point& point, ui::mojom::MenuSourceType type) override {
     if (busy_ || !connected_ || (menu_runner_ && menu_runner_->IsRunning())) return;
     CloseFileMenu();
-    const auto index = NetworkFileIndex(list_, source);
+    const auto index = EntryIndex(source);
     if (index && *index < visible_entries_.size()) {
       const auto& name = visible_entries_[*index]->name;
       if (!selected_.contains(name)) { selected_.clear(); selected_.insert(name); }
@@ -1161,21 +1349,55 @@ class NetworkPage : public views::View, public views::TextfieldController,
     dialog->SetAcceptCallback(base::BindOnce([](base::WeakPtr<NetworkPage> page, std::string url,
                                               std::vector<std::pair<std::string, bool>> entries) {
       if (!page || page->busy_ || !page->connected_ || page->Url() != url) return;
-      page->deleting_ = std::move(entries); page->delete_index_ = 0; page->Busy(true);
+      page->deleting_ = std::move(entries); page->delete_index_ = 0; page->deleted_count_ = 0;
+      page->current_deleted_ = 0; page->cancel_delete_ = false; page->Busy(true);
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(&NetworkPage::DeleteNext, page));
     }, weak_.GetWeakPtr(), Url(), std::move(entries)));
     ShowCrFilesDialog(std::move(dialog), GetWidget());
   }
+  std::u16string DeletedCount() const {
+    return l10n_util::GetStringFUTF16(IDS_CRFILES_NETWORK_DELETED_COUNT,
+        base::NumberToString16(deleted_count_ + current_deleted_));
+  }
+  void FinishDelete(Error error) {
+    deadline_.Stop();
+    if (cancel_delete_ || error != Error::kOk) {
+      delete_notice_ = Text(cancel_delete_ ? IDS_CRFILES_HISTORY_CANCELED : IDS_CRFILES_NETWORK_OPERATION_ERROR) +
+          u" · " + DeletedCount();
+    }
+    deleting_.clear(); cancel_delete_ = false;
+    Busy(false); Load(share_, path_);
+  }
   void DeleteNext() {
-    if (delete_index_ == deleting_.size()) { deleting_.clear(); Busy(false); Load(share_, path_); return; }
-    const auto& [name, directory] = deleting_[delete_index_]; Watchdog(); SetStatus(Text(IDS_CRFILES_NETWORK_DELETE) + u" · " + base::UTF8ToUTF16(name));
-    connection_.service()->Mutate(share_, ChildPath(name), directory ? Mutation::kDeleteTree : Mutation::kDeleteFile, {},
-        base::BindOnce([](base::WeakPtr<NetworkPage> page, Error error) {
-          if (!page) return;
-          page->deadline_.Stop();
-          if (error != Error::kOk) { page->deleting_.clear(); page->Mutated(error); return; }
-          ++page->delete_index_; page->DeleteNext();
-        }, weak_.GetWeakPtr()));
+    if (cancel_delete_ || delete_index_ == deleting_.size()) { FinishDelete(Error::kOk); return; }
+    const auto& [name, directory] = deleting_[delete_index_];
+    Watchdog(); SetStatus(Text(IDS_CRFILES_NETWORK_DELETE) + u" · " + base::UTF8ToUTF16(name));
+    if (directory) {
+      connection_.service()->DeleteTree(share_, ChildPath(name), base::BindOnce(&NetworkPage::DeleteProgress, weak_.GetWeakPtr()));
+    } else {
+      connection_.service()->Mutate(share_, ChildPath(name), Mutation::kDeleteFile, {},
+          base::BindOnce(&NetworkPage::FileDeleted, weak_.GetWeakPtr()));
+    }
+  }
+  void FileDeleted(Error error) {
+    if (error != Error::kOk) { FinishDelete(error); return; }
+    ++deleted_count_; ++delete_index_; DeleteNext();
+  }
+  void DeleteProgress(mojom::SmbDeletionPtr state) {
+    current_deleted_ = state->deleted;
+    if (state->done) {
+      deleted_count_ += current_deleted_; current_deleted_ = 0;
+      if (state->error != Error::kOk) { FinishDelete(state->error); return; }
+      ++delete_index_; DeleteNext(); return;
+    }
+    Watchdog();
+    if (cancel_delete_) {
+      connection_.service()->CancelDelete(base::BindOnce(&NetworkPage::FinishDelete, weak_.GetWeakPtr(), Error::kOk));
+      return;
+    }
+    SetStatus(state->deleting ? DeletedCount() + u" / " + base::NumberToString16(deleted_count_ + state->discovered) :
+        Text(IDS_CRFILES_COMPRESS_PREPARING) + u" · " + base::NumberToString16(state->discovered));
+    connection_.service()->ContinueDelete(base::BindOnce(&NetworkPage::DeleteProgress, weak_.GetWeakPtr()));
   }
   std::string ChildPath(const std::string& name) const { return path_.empty() ? name : path_ + "/" + name; }
   void NewFolder() {
@@ -1243,12 +1465,12 @@ class NetworkPage : public views::View, public views::TextfieldController,
     Load(share_, path_);
   }
   void Select(std::string name, bool directory) {
-    if (busy_) return;
+    if (busy_ && !(directory && reading_pages_)) return;
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
         base::BindOnce(&NetworkPage::Selected, weak_.GetWeakPtr(), std::move(name), directory));
   }
   void Selected(std::string name, bool directory) {
-    if (busy_ || !connected_) return;
+    if ((busy_ && !(directory && reading_pages_)) || !connected_) return;
     if (directory) { Load(share_.empty() ? name : share_, share_.empty() ? "" : ChildPath(name)); return; }
     pending_name_ = std::move(name); BeginDownload({});
   }
@@ -1262,19 +1484,20 @@ class NetworkPage : public views::View, public views::TextfieldController,
     if (!file->file.IsValid()) { Busy(false); SetStatus(Text(IDS_CRFILES_NETWORK_SAVE_ERROR)); return; }
     download_ = std::move(file); Watchdog();
     connection_.service()->Download(share_, path_.empty() ? pending_name_ : path_ + "/" + pending_name_,
-        std::move(download_->file), base::BindOnce(&NetworkPage::Downloaded, weak_.GetWeakPtr()));
+        std::move(download_->file), download_->open ? mojom::SmbTransferPurpose::kPreview : mojom::SmbTransferPurpose::kCopy,
+        connection_.ObserveTransfer(base::BindRepeating(&NetworkPage::DownloadProgress, weak_.GetWeakPtr())),
+        base::BindOnce(&NetworkPage::Downloaded, weak_.GetWeakPtr()));
   }
-  void Downloaded(mojom::SmbDownloadPtr state) {
+  void DownloadProgress(uint64_t bytes, uint64_t total) {
+    Watchdog();
+    SetStatus(Text(IDS_CRFILES_NETWORK_DOWNLOADING) + u" " +
+        base::NumberToString16(total ? static_cast<int>(100.0 * bytes / total) : 0) + u"%");
+  }
+  void Downloaded(Error error) {
     deadline_.Stop();
-    if (state->error != Error::kOk) {
-      download_.reset(); Busy(false); SetStatus(Text(ErrorText(state->error))); RequestCredentialsFor(state->error); return;
-    }
-    if (!state->done) {
-      SetStatus(Text(IDS_CRFILES_NETWORK_DOWNLOADING) + u" " +
-          base::NumberToString16(state->total ? state->bytes * 100 / state->total : 0) + u"%");
-      Watchdog();
-      connection_.service()->ContinueDownload(base::BindOnce(&NetworkPage::Downloaded, weak_.GetWeakPtr()));
-      return;
+    if (error != Error::kOk) {
+      const int message = download_->open && error == Error::kTooLarge ? IDS_CRFILES_NETWORK_PREVIEW_LIMIT : ErrorText(error);
+      download_.reset(); Busy(false); SetStatus(Text(message)); RequestCredentialsFor(error); return;
     }
     cancel_->SetVisible(false);
     const bool open = download_->open;
@@ -1311,10 +1534,21 @@ class NetworkPage : public views::View, public views::TextfieldController,
   bool clipboard_available_ = false;
   std::vector<std::pair<std::string, bool>> deleting_;
   size_t delete_index_ = 0;
+  uint64_t deleted_count_ = 0, current_deleted_ = 0;
+  bool cancel_delete_ = false;
+  std::u16string delete_notice_;
   std::unique_ptr<ui::SimpleMenuModel> sort_menu_, split_menu_;
   bool device_mode_ = false, credentials_needed_ = false;
   bool icons_ = true, icon_loading_ = false;
   bool show_hidden_ = false, listing_limited_ = false;
+  uint64_t directory_request_ = 0;
+  size_t page_start_ = 0;
+  bool reading_pages_ = false, refreshing_listing_ = false;
+  size_t next_render_count_ = 0, rendered_entries_ = 0;
+  base::TimeTicks next_render_time_;
+  raw_ptr<views::View> pager_ = nullptr;
+  raw_ptr<views::LabelButton> previous_page_ = nullptr, next_page_ = nullptr;
+  raw_ptr<views::Label> page_number_ = nullptr;
   NetworkColumns columns_;
   int icon_size_ = 32;
   gfx::ImageSkia server_icon_;
@@ -1347,6 +1581,13 @@ class NetworkPage : public views::View, public views::TextfieldController,
   ConnectionMessageKind connection_message_kind_ = ConnectionMessageKind::kInfo;
   raw_ptr<views::Label> status_;
   raw_ptr<views::LabelButton> cancel_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observed_widget_{this};
+  SmbConnection watch_connection_;
+  mojo::Receiver<mojom::SmbDirectoryObserver> watch_receiver_{this};
+  std::string watch_url_;
+  bool watch_dirty_ = false, automatic_reload_ = false;
+  base::OneShotTimer watch_refresh_;
+  base::RepeatingTimer watch_recovery_;
   base::RepeatingTimer poll_;
   base::OneShotTimer deadline_, empty_;
   base::WeakPtrFactory<NetworkPage> authentication_weak_{this};

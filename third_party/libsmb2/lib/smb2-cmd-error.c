@@ -117,6 +117,21 @@ smb2_process_error_fixed(struct smb2_context *smb2,
         uint16_t struct_size;
 
         smb2_get_uint16(iov, 0, &struct_size);
+        /*
+         * MS-SMB2 3.3.5.15.6 permits COPYCHUNK failures to carry a normal
+         * IOCTL response body. The caller consumes the NTSTATUS and can retry
+         * a smaller range. Consume the remaining body as PDU padding, without
+         * interpreting its CtlCode as the byte count of an SMB2 ERROR.
+         */
+        if (smb2->hdr.command == SMB2_IOCTL && struct_size == SMB2_IOCTL_REPLY_SIZE &&
+            iov->len == (SMB2_ERROR_REPLY_SIZE & 0xfffe)) {
+                uint32_t code;
+                smb2_get_uint32(iov, 4, &code);
+                if (code == SMB2_FSCTL_SRV_COPYCHUNK || code == SMB2_FSCTL_SRV_COPYCHUNK_WRITE) {
+                        pdu->payload = calloc(1, sizeof(struct smb2_error_reply));
+                        return pdu->payload ? 0 : -ENOMEM;
+                }
+        }
         if (struct_size != SMB2_ERROR_REPLY_SIZE ||
             (struct_size & 0xfffe) != iov->len) {
                 smb2_set_error(smb2, "Unexpected size of Error "

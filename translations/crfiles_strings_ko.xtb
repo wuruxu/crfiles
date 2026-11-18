@@ -450,4 +450,8 @@
   <translation id="908462521885202173">공유를 활성화하지 못했습니다. 새로고침한 후 다시 시도하세요.</translation>
   <translation id="2488698877694032221">받은 파일을 네트워크 폴더에 저장하지 못했습니다.</translation>
   <translation id="1162380600466275954">받은 파일이 로컬에 보관되어 있습니다:</translation>
+  <translation id="7933154515064597097">폴더 목록의 일부만 표시됩니다.</translation>
+  <translation id="2442903374287519332">파일이 미리보기 제한인 2 GiB를 초과합니다. 복사는 가능합니다.</translation>
+  <translation id="1746476945685933831">항목 수 또는 경로 길이가 제한을 초과합니다.</translation>
+  <translation id="3190156050551317351">삭제가 확인된 항목 수: <ph name="COUNT"/></translation>
 </translationbundle>

@@ -450,4 +450,8 @@
   <translation id="908462521885202173">تعذّر تفعيل المشاركة. حدّث الصفحة للمحاولة مجددًا.</translation>
   <translation id="2488698877694032221">تعذّر حفظ الملف المستلم في مجلد الشبكة.</translation>
   <translation id="1162380600466275954">تم الاحتفاظ بالملفات المستلمة محليًا:</translation>
+  <translation id="7933154515064597097">قائمة المجلد غير مكتملة.</translation>
+  <translation id="2442903374287519332">يتجاوز هذا الملف حد المعاينة البالغ 2 GiB. لا يزال بإمكانك نسخه.</translation>
+  <translation id="1746476945685933831">يتجاوز عدد العناصر أو طول المسار الحد المسموح به.</translation>
+  <translation id="3190156050551317351">عدد العناصر المؤكد حذفها: <ph name="COUNT"/></translation>
 </translationbundle>

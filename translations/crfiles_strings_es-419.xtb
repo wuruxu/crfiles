@@ -450,4 +450,8 @@
   <translation id="908462521885202173">No se pudo activar el uso compartido. Actualiza para volver a intentarlo.</translation>
   <translation id="2488698877694032221">No se pudo guardar el archivo recibido en la carpeta de red.</translation>
   <translation id="1162380600466275954">Los archivos recibidos se conservan localmente:</translation>
+  <translation id="7933154515064597097">Se muestra solo una parte del contenido de la carpeta.</translation>
+  <translation id="2442903374287519332">Este archivo supera el límite de 2 GiB de la vista previa. Puedes copiarlo.</translation>
+  <translation id="1746476945685933831">El número de elementos o la longitud de la ruta supera el límite permitido.</translation>
+  <translation id="3190156050551317351">Eliminaciones confirmadas: <ph name="COUNT"/></translation>
 </translationbundle>

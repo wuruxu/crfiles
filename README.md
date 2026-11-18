@@ -1393,6 +1393,13 @@ follow `Network icon > smb://server/ > share > folder`. Clicking the network ico
 returns to the existing discovery tab (or opens it if closed), retaining the
 device tab and its connection. Going up from a device root also returns to
 discovery; going up inside a share follows the remote directory hierarchy.
+Visible shared directories subscribe to SMB CHANGE_NOTIFY on an independent
+connection. Changes to names, sizes, attributes and modification times, including
+notification overflow, trigger a coalesced directory reload. Reloads wait for
+active file operations, menus and drags. Hiding a page or leaving the directory
+releases its subscription. Shares that decline notifications refresh every
+30 seconds while visible; a disconnected watcher retries after 15 seconds.
+
 Remote folders and share lists reuse the ordinary file grid, rows and filename
 cells, with icon/list switching and icon-size shortcuts. List mode shows names
 and file metadata. View Options is available on all network pages: discovery and
@@ -1452,7 +1459,7 @@ operation succeeds; the batch complete acknowledgment follows all files.
 Updated senders advertise store_progress support and accept framed storing
 heartbeats while waiting for SMB. Legacy senders remain supported, with a
 200-second remote-store limit per file to stay within their acknowledgment wait.
-The existing SMB limit of 2 GB per file is checked before accepting the manifest.
+Nearby reception checks its 2 GiB per-file cache limit before accepting the manifest.
 
 Successful batches remove their local cache. Failed or canceled batches retain
 received data and expose an Open action and cache path; users can copy remaining
@@ -1494,9 +1501,12 @@ not offered for remote entries. Separate worker processes and a modal progress
 dialog own each copy job; ordinary cancellation stops its SMB workers. A final
 local publication cannot be interrupted. Existing targets are never overwritten
 or merged. Errors stop remote uploads at the failed item; already completed
-items remain. Copying remote files first downloads them into a private temporary
-directory, including for SMB-to-SMB copies. Temporary data is cleaned after the
-job; file contents are never placed in the system clipboard.
+items remain. Copies using the same server address and login request SMB server-side copy
+for each regular file, including copies between shares. If the server declines
+the operation or cannot use the source key across shares,
+the worker relays one file at a time through a bounded memory buffer. Both paths
+verify the source and flush a temporary remote file before publishing it.
+Other remote sources use a private local staging directory, cleaned after the job.
 
 SMB file grids and lists support dragging selected files or folders between
 split panes (and other shared-directory pages in the same crFiles process).
@@ -1510,10 +1520,9 @@ Matching server addresses, shares and login credentials default to a direct
 server-side rename. Files and whole folders move without downloading their
 contents, so the copying size/count limits do not limit a folder's contents for
 this operation. Hold Ctrl (Option on macOS) before starting the drag to request
-Copy instead; copy/paste always remains Copy. Different shares, server addresses
-(including unrecognized aliases) or credentials use the existing private local
-cache and preserve originals. No cross-server move or COPYCHUNK optimization is
-attempted. The drag service receives only an expiring opaque token, never
+Copy instead; copy/paste always remains Copy. Different shares on the same
+server and login use the copy path above. Different server addresses (including
+unrecognized aliases) or credentials use private local staging and preserve originals. The drag service receives only an expiring opaque token, never
 credentials or local filenames for remote files.
 
 Same-directory drops and dropping a folder into itself or its descendants are
@@ -1560,12 +1569,17 @@ copy file trees, rename entries and permanently delete selected files and
 folders recursively after confirmation. Server/account permissions determine which operations
 succeed; the client no longer imposes read-only access. Share roots cannot be
 created, renamed or deleted through these file operations.
-Uploads and downloads are limited to 2 GiB per file; directory and share results
-show at most 1,000 entries. Copy and recursive deletion use complete directory
-enumeration instead of the truncated display list, with a 100,000-entry and
-4,096-byte relative-path limit; exceeding a limit fails instead of silently
-skipping entries. Symlinks and unsupported entry types also fail recursive
-operations. Uploads use a random remote temporary name and a
+Ordinary copies support files larger than 2 GiB. Temporary open/preview copies and
+nearby reception each retain a 2 GiB per-file limit. The worker transfers data
+continuously and sends throttled progress updates to the UI.
+Directory browsing displays the first SMB query results while reading subsequent
+pages. The completed listing is sorted across up to 100,000 entries and displayed
+in pages of 512 rows. The server's share list shows up to 1,000 shares.
+Copy and recursive deletion enumerate complete directories, with a 100,000-entry
+and 4,096-byte relative-path limit. Unsupported entries or exceeding a limit
+fail recursive operations. Recursive deletion reports enumeration and deletion
+progress separately. Cancel waits for the in-flight batch, then refreshes the
+folder and reports confirmed deletions. Uploads use a random remote temporary name and a
 non-overwriting rename after all bytes have been written and flushed. Existing
 targets are never replaced. Normal errors attempt to remove the temporary file;
 a killed worker, network loss or denied cleanup can leave a `.crFiles-upload-*`

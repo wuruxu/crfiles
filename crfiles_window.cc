@@ -11725,7 +11725,7 @@ std::unique_ptr<views::View> CreateNetworkDevicesView(const std::vector<mojom::S
   return CreateNetworkItemGrid(items, icons, icon_size, true, {false, false, false, false}, image, nullptr, base::BindRepeating(
       [](base::RepeatingCallback<void(std::string)> open, std::string address, bool) { open.Run(std::move(address)); }, std::move(open)));
 }
-std::unique_ptr<views::View> CreateNetworkFilesView(const std::vector<mojom::SmbEntryPtr>& entries,
+std::unique_ptr<views::View> CreateNetworkFilesView(base::span<const mojom::SmbEntryPtr> entries,
     bool icons, int icon_size, NetworkColumns columns, views::ContextMenuController* menu,
     base::RepeatingCallback<void(size_t, bool, const ui::Event&)> select) {
   std::vector<NetworkDisplayItem> items;

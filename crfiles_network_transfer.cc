@@ -51,6 +51,10 @@ bool ValidName(const std::string& name) {
   return !name.empty() && name != "." && name != ".." && name.size() <= 1024 && base::IsStringUTF8(name) &&
       !std::ranges::any_of(name, [](unsigned char c) { return c < 32 || c == 127 || c == '/' || c == '\\' || c == ':'; });
 }
+bool SameServerLogin(const SmbCredentials& from, const SmbCredentials& to) {
+  return base::EqualsCaseInsensitiveASCII(from.location.server, to.location.server) &&
+      from.user == to.user && from.domain == to.domain && from.password == to.password;
+}
 struct CopyItem { base::FilePath local; std::string relative; bool directory; };
 struct CopyPlan { Error error = Error::kOk; std::vector<CopyItem> items; };
 bool RegularLocalEntry(const base::FilePath& path) {
@@ -76,7 +80,7 @@ CopyPlan LocalPlan(const std::vector<base::FilePath>& roots) {
     base::File::Info info;
     if (!RegularLocalEntry(item.local) || !base::GetFileInfo(item.local, &info) || info.is_symbolic_link) { plan.error = Error::kLocalFile; break; }
     if (plan.items.size() >= 100000 || item.relative.size() > 4096 ||
-        (!info.is_directory && (info.size < 0 || info.size > int64_t{2} * 1024 * 1024 * 1024))) { plan.error = Error::kTooLarge; break; }
+        (!info.is_directory && info.size < 0)) { plan.error = Error::kTooLarge; break; }
     item.directory = info.is_directory;
     plan.items.push_back(item);
     if (!item.directory) continue;
@@ -148,6 +152,8 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
     }
     if (source_) {
       if (source_->credentials.location.share.empty() || source_->entries.empty()) { Finish(Error::kInvalidAddress); return; }
+      copy_on_server_ = destination_ && SameServerLogin(source_->credentials, *destination_);
+      if (copy_on_server_) { ConnectSource(); return; }
       cache_ = std::make_shared<CopyCache>();
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock()},
           base::BindOnce([](std::shared_ptr<CopyCache> cache) { return cache->directory.CreateUniqueTempDir(); }, cache_),
@@ -160,6 +166,9 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
   }
   void CacheReady(bool ready) {
     if (!ready) { Finish(Error::kLocalFile); return; }
+    ConnectSource();
+  }
+  void ConnectSource() {
     if (!source_worker_.Start(base::BindOnce(&CopyJob::Finish, weak_.GetWeakPtr(), Error::kFailed))) { Finish(Error::kFailed); return; }
     const auto& c = source_->credentials; Watch();
     source_worker_.service()->Connect(c.location.server, c.user, c.password, c.domain, c.location.share, c.location.path,
@@ -171,14 +180,26 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
     std::set<std::string> names;
     for (const auto& entry : source_->entries) {
       if (!ValidName(entry->name) || !names.insert(entry->name).second) { Finish(Error::kInvalidAddress); return; }
-      items_.push_back({cache_->directory.GetPath().Append(base::FilePath::FromUTF8Unsafe(entry->name)), entry->name, entry->directory});
-      roots_.push_back(items_.back().local);
+      AddRemoteItem(entry->name, entry->directory);
+      if (cache_) roots_.push_back(items_.back().local);
       if (entry->directory) folders_.push_back(entry->name);
     }
     Enumerate();
   }
+  void AddRemoteItem(const std::string& relative, bool directory) {
+    base::FilePath local;
+    if (cache_) local = cache_->directory.GetPath().Append(base::FilePath::FromUTF8Unsafe(relative));
+    items_.push_back({std::move(local), relative, directory});
+  }
   void Enumerate() {
-    if (folders_.empty()) { index_ = 0; DownloadNext(); return; }
+    if (folders_.empty()) {
+      index_ = 0;
+      if (copy_on_server_) {
+        destination_worker_.TakeOver(source_worker_, base::BindOnce(&CopyJob::Finish, weak_.GetWeakPtr(), Error::kFailed));
+        UploadNext();
+      } else DownloadNext();
+      return;
+    }
     auto folder = std::move(folders_.front()); folders_.pop_front();
     const auto& location = source_->credentials.location; Watch();
     source_worker_.service()->List(location.share, Join(location.path, folder), true,
@@ -187,20 +208,28 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
   void Enumerated(std::string folder, mojom::SmbListingPtr listing) {
     timer_.Stop();
     if (listing->error != Error::kOk || listing->limited) { Finish(listing->error == Error::kOk ? Error::kTooLarge : listing->error); return; }
-    std::set<std::string> names;
     for (const auto& entry : listing->entries) {
       const auto relative = Join(folder, entry->name);
-      if (!ValidName(entry->name) || !names.insert(entry->name).second) { Finish(Error::kInvalidAddress); return; }
-      if (items_.size() >= 100000 || relative.size() > 4096 || (!entry->directory && entry->size > uint64_t{2} * 1024 * 1024 * 1024)) { Finish(Error::kTooLarge); return; }
-      items_.push_back({cache_->directory.GetPath().Append(base::FilePath::FromUTF8Unsafe(relative)), relative, entry->directory});
+      if (!ValidName(entry->name) || !folder_names_.insert(entry->name).second) { Finish(Error::kInvalidAddress); return; }
+      if (items_.size() >= 100000 || relative.size() > 4096) { Finish(Error::kTooLarge); return; }
+      AddRemoteItem(relative, entry->directory);
       if (entry->directory) folders_.push_back(relative);
     }
+    if (listing->more) {
+      Watch();
+      source_worker_.service()->NextPage(base::BindOnce(&CopyJob::Enumerated, weak_.GetWeakPtr(), folder));
+      return;
+    }
+    folder_names_.clear();
     Enumerate();
+  }
+  void TransferProgress(uint64_t bytes, uint64_t total) {
+    Progress(bytes, total); Watch();
   }
   void Progress(uint64_t bytes = 0, uint64_t total = 0) {
     label_->SetText(Text(move_ ? IDS_CRFILES_HISTORY_MOVE : IDS_CRFILES_HISTORY_COPY) + u" " + base::NumberToString16(index_ + 1) + u" / " +
         base::NumberToString16(items_.size()) + u"\n" + base::UTF8ToUTF16(items_[index_].relative) +
-        (total ? u"\n" + base::NumberToString16(bytes * 100 / total) + u"%" : std::u16string()));
+        (total ? u"\n" + base::NumberToString16(static_cast<int>(100.0 * bytes / total)) + u"%" : std::u16string()));
   }
   void DownloadNext() {
     if (index_ == items_.size()) {
@@ -227,14 +256,14 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
     if (!result.second.IsValid()) { Finish(Error::kLocalFile); return; }
     const auto& location = source_->credentials.location; Watch();
     source_worker_.service()->Download(location.share, Join(location.path, items_[index_].relative), std::move(result.second),
+        mojom::SmbTransferPurpose::kCopy, source_worker_.ObserveTransfer(
+            base::BindRepeating(&CopyJob::TransferProgress, weak_.GetWeakPtr())),
         base::BindOnce(&CopyJob::Downloaded, weak_.GetWeakPtr()));
   }
-  void Downloaded(mojom::SmbDownloadPtr state) {
+  void Downloaded(Error error) {
     timer_.Stop();
-    if (state->error != Error::kOk) { Finish(state->error); return; }
-    if (state->done) { ++index_; DownloadNext(); return; }
-    Progress(state->bytes, state->total); Watch();
-    source_worker_.service()->ContinueDownload(base::BindOnce(&CopyJob::Downloaded, weak_.GetWeakPtr()));
+    if (error != Error::kOk) { Finish(error); return; }
+    ++index_; DownloadNext();
   }
   void Planned(CopyPlan plan) {
     if (plan.error != Error::kOk) { Finish(plan.error); return; }
@@ -274,6 +303,13 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
       Watch();
       destination_worker_.service()->Mutate(location.share, Join(location.path, item.relative), mojom::SmbMutation::kCreateDirectory, {},
           base::BindOnce(&CopyJob::Created, weak_.GetWeakPtr()));
+    } else if (copy_on_server_) {
+      Watch();
+      const auto& from = source_->credentials.location;
+      destination_worker_.service()->CopyFile(from.share, Join(from.path, item.relative),
+          location.share, Join(location.path, item.relative), destination_worker_.ObserveTransfer(
+              base::BindRepeating(&CopyJob::TransferProgress, weak_.GetWeakPtr())),
+          base::BindOnce(&CopyJob::Uploaded, weak_.GetWeakPtr()));
     } else {
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock()},
           base::BindOnce([](std::shared_ptr<CopyCache> cache, base::FilePath path) {
@@ -295,14 +331,14 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
     if (!file.IsValid()) { Finish(Error::kLocalFile); return; }
     const auto& location = destination_->location; Watch();
     destination_worker_.service()->Upload(location.share, Join(location.path, items_[index_].relative), std::move(file),
+        mojom::SmbTransferPurpose::kCopy, destination_worker_.ObserveTransfer(
+            base::BindRepeating(&CopyJob::TransferProgress, weak_.GetWeakPtr())),
         base::BindOnce(&CopyJob::Uploaded, weak_.GetWeakPtr()));
   }
-  void Uploaded(mojom::SmbDownloadPtr state) {
+  void Uploaded(Error error) {
     timer_.Stop();
-    if (state->error != Error::kOk) { Finish(state->error); return; }
-    if (state->done) { ++index_; UploadNext(); return; }
-    Progress(state->bytes, state->total); Watch();
-    destination_worker_.service()->ContinueUpload(base::BindOnce(&CopyJob::Uploaded, weak_.GetWeakPtr()));
+    if (error != Error::kOk) { Finish(error); return; }
+    ++index_; UploadNext();
   }
   void Publish() {
     // The existing local transfer implementation publishes without replacement.
@@ -328,7 +364,7 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
     if (error == Error::kOk) { if (widget_) widget_->Close(); return; }
     const int message = error == Error::kAlreadyExists ? IDS_CRFILES_NETWORK_EXISTS :
         error == Error::kAccessDenied ? IDS_CRFILES_NETWORK_ERROR :
-        error == Error::kTooLarge ? IDS_CRFILES_NETWORK_TOO_LARGE : IDS_CRFILES_NETWORK_OPERATION_ERROR;
+        error == Error::kTooLarge ? IDS_CRFILES_NETWORK_TREE_LIMIT : IDS_CRFILES_NETWORK_OPERATION_ERROR;
     label_->SetText(Text(message) + (index_ < items_.size() ? u"\n" + base::UTF8ToUTF16(items_[index_].relative) : std::u16string()));
     dialog_->SetButtonEnabled(ui::mojom::DialogButton::kCancel, true);
     dialog_->SetButtonLabel(ui::mojom::DialogButton::kCancel, Text(IDS_CRFILES_CLOSE));
@@ -341,9 +377,11 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
   std::shared_ptr<CopyCache> cache_;
   std::vector<CopyItem> items_;
   std::deque<std::string> folders_;
+  std::set<std::string> folder_names_;
   size_t index_ = 0;
   bool finished_ = false;
   const bool move_;
+  bool copy_on_server_ = false;
   SmbConnection source_worker_, destination_worker_;
   raw_ptr<views::DialogDelegate> dialog_ = nullptr;
   raw_ptr<views::Label> label_ = nullptr;
@@ -355,9 +393,8 @@ class CopyJob : public std::enable_shared_from_this<CopyJob> {
 bool CanMoveNetworkSelection(const NetworkClipboard& source, const SmbCredentials& destination) {
   const auto& from = source.credentials;
   return !from.location.share.empty() &&
-      base::EqualsCaseInsensitiveASCII(from.location.server, destination.location.server) &&
-      base::EqualsCaseInsensitiveASCII(from.location.share, destination.location.share) &&
-      from.user == destination.user && from.domain == destination.domain && from.password == destination.password;
+      SameServerLogin(from, destination) &&
+      base::EqualsCaseInsensitiveASCII(from.location.share, destination.location.share);
 }
 bool ValidNetworkTransferDestination(const NetworkClipboard& source, const SmbCredentials& destination) {
   const auto& from = source.credentials.location;

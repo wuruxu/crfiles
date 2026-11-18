@@ -79,19 +79,17 @@ class Delivery {
           mojom::SmbMutation::kEnsureDirectory, {}, base::BindOnce(&Delivery::DirectoryCreated, weak_.GetWeakPtr()));
     } else if (directory_) Finish(Error::kOk);
     else connection_.service()->Upload(credentials_.location.share, target_, std::move(file_),
-        base::BindOnce(&Delivery::Uploaded, weak_.GetWeakPtr()));
+        mojom::SmbTransferPurpose::kNearbyReceive, connection_.ObserveTransfer(
+            base::BindRepeating(&Delivery::UploadProgress, weak_.GetWeakPtr())),
+        base::BindOnce(&Delivery::Finish, weak_.GetWeakPtr()));
   }
   void DirectoryCreated(Error error) {
     if (error != Error::kOk) Finish(error);
     else NextDirectory();
   }
-  void Uploaded(mojom::SmbDownloadPtr progress) {
-    if (progress->error != Error::kOk) { Finish(progress->error); return; }
-    state_->bytes = progress->bytes;
+  void UploadProgress(uint64_t bytes, uint64_t) {
+    state_->bytes = bytes;
     activity_ = base::TimeTicks::Now();
-    if (progress->done) { Finish(Error::kOk); return; }
-    if (state_->canceled) { Finish(Error::kFailed); return; }
-    connection_.service()->ContinueUpload(base::BindOnce(&Delivery::Uploaded, weak_.GetWeakPtr()));
   }
   void Finish(Error error) { error_ = error; loop_.Quit(); }
   const SmbCredentials& credentials_;
@@ -134,7 +132,7 @@ Error Deliver(const SmbCredentials& credentials, std::string relative, base::Fil
 class NetworkReceiveTarget : public Target {
  public:
   explicit NetworkReceiveTarget(SmbCredentials credentials) : credentials_(std::move(credentials)) {}
-  uint64_t MaximumFileSize() const override { return uint64_t{2} * 1024 * 1024 * 1024; }
+  uint64_t MaximumFileSize() const override { return kSmbNearbyFileLimit; }
   Result Store(const std::string& relative, base::File source, bool directory,
                base::RepeatingCallback<bool()> canceled, base::RepeatingCallback<void(uint64_t)> progress) override {
     const auto result = Deliver(credentials_, relative, std::move(source), directory, false, std::move(canceled), std::move(progress));

@@ -499,6 +499,10 @@
       <message name="IDS_CRFILES_NETWORK_WRITE_UNKNOWN" desc="SMB receive target sharing status.">Could not enable sharing. Refresh to try again.</message>
       <message name="IDS_CRFILES_NETWORK_RECEIVE_ERROR" desc="SMB receive target sharing status.">Could not save the received file to the network folder.</message>
       <message name="IDS_CRFILES_NETWORK_RECEIVE_CACHE" desc="SMB receive target sharing status.">Received files are kept locally:</message>
+      <message name="IDS_CRFILES_NETWORK_PARTIAL_LIST" desc="SMB directory and file operation status.">Folder listing is incomplete.</message>
+      <message name="IDS_CRFILES_NETWORK_PREVIEW_LIMIT" desc="SMB directory and file operation status.">This file exceeds the 2 GiB preview limit. You can still copy it.</message>
+      <message name="IDS_CRFILES_NETWORK_TREE_LIMIT" desc="SMB directory and file operation status.">The operation exceeds the entry count or path length limit.</message>
+      <message name="IDS_CRFILES_NETWORK_DELETED_COUNT" desc="SMB directory and file operation status.">Confirmed deletions: <ph name="COUNT">$1<ex>25</ex></ph></message>
 </messages>
   </release>
 </grit>

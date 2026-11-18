@@ -4,7 +4,7 @@ import "mojo/public/mojom/base/file.mojom";
 import "mojo/public/mojom/base/time.mojom";
 
 enum SmbError { kOk, kFailed, kAccessDenied, kInvalidAddress, kTooLarge, kLocalFile, kAlreadyExists };
-enum SmbMutation { kCreateDirectory, kRename, kDeleteFile, kDeleteDirectory, kDeleteTree, kEnsureDirectory };
+enum SmbMutation { kCreateDirectory, kRename, kDeleteFile, kDeleteDirectory, kEnsureDirectory };
 enum SmbWriteAccess { kUnknown, kWritable, kReadOnly };
 struct SmbServer { string name; string address; uint16 port; };
 struct SmbEntry {
@@ -14,19 +14,34 @@ struct SmbEntry {
   mojo_base.mojom.Time modified;
   mojo_base.mojom.Time created;
 };
-struct SmbListing { SmbError error; array<SmbEntry> entries; bool limited; SmbWriteAccess write_access; };
-struct SmbDownload { SmbError error; uint64 bytes; uint64 total; bool done; };
+struct SmbListing { SmbError error; array<SmbEntry> entries; bool limited; bool more; SmbWriteAccess write_access; };
+enum SmbTransferPurpose { kCopy, kPreview, kNearbyReceive };
+interface SmbTransferProgress {
+  Advanced(uint64 bytes, uint64 total);
+};
+struct SmbDeletion { SmbError error; uint32 discovered; uint32 deleted; bool deleting; bool done; };
 
-// One page owns one worker and at most one outstanding SMB operation. Passwords
-// travel only over IPC, never in process arguments, logs or workspace state.
+interface SmbDirectoryObserver {
+  Changed();
+  Unavailable(bool permanent);
+};
+
 interface SmbService {
+  WatchDirectory(string server, string user, string password, string domain, string share, string path,
+                 pending_remote<SmbDirectoryObserver> observer);
+  CopyFile(string source_share, string source, string destination_share, string destination,
+           pending_associated_remote<SmbTransferProgress> progress) => (SmbError error);
   Discover(bool refresh) => (array<SmbServer> servers);
   Connect(string server, string user, string password, string domain, string share, string path) => (SmbListing listing);
   List(string share, string path, bool complete) => (SmbListing listing);
-  Download(string share, string path, mojo_base.mojom.File destination) => (SmbDownload state);
-  ContinueDownload() => (SmbDownload state);
+  NextPage() => (SmbListing listing);
+  Download(string share, string path, mojo_base.mojom.File destination, SmbTransferPurpose purpose,
+           pending_associated_remote<SmbTransferProgress> progress) => (SmbError error);
+  DeleteTree(string share, string path) => (SmbDeletion state);
+  ContinueDelete() => (SmbDeletion state);
+  CancelDelete() => ();
   Mutate(string share, string path, SmbMutation operation, string target) => (SmbError error);
-  Upload(string share, string path, mojo_base.mojom.File source) => (SmbDownload state);
-  ContinueUpload() => (SmbDownload state);
+  Upload(string share, string path, mojo_base.mojom.File source, SmbTransferPurpose purpose,
+         pending_associated_remote<SmbTransferProgress> progress) => (SmbError error);
   CheckWritable(string share, string path) => (SmbError error);
 };

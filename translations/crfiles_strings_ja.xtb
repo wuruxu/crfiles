@@ -450,4 +450,8 @@
   <translation id="908462521885202173">共有を有効にできませんでした。更新して再試行してください。</translation>
   <translation id="2488698877694032221">受信したファイルをネットワークフォルダに保存できませんでした。</translation>
   <translation id="1162380600466275954">受信したファイルのローカル保存先：</translation>
+  <translation id="7933154515064597097">フォルダの一覧は一部のみ表示されています。</translation>
+  <translation id="2442903374287519332">このファイルはプレビューの上限（2 GiB）を超えています。コピーは可能です。</translation>
+  <translation id="1746476945685933831">項目数またはパスの長さが上限を超えています。</translation>
+  <translation id="3190156050551317351">削除を確認した項目数: <ph name="COUNT"/></translation>
 </translationbundle>

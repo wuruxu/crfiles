@@ -450,4 +450,8 @@
   <translation id="908462521885202173">无法开启共享。请刷新后重试。</translation>
   <translation id="2488698877694032221">无法将收到的文件保存到网络文件夹。</translation>
   <translation id="1162380600466275954">收到的文件保留在本机：</translation>
+  <translation id="7933154515064597097">仅显示了部分文件夹内容。</translation>
+  <translation id="2442903374287519332">文件超过 2 GiB 的预览上限，仍可复制。</translation>
+  <translation id="1746476945685933831">项目数量或路径长度超过上限。</translation>
+  <translation id="3190156050551317351">已确认删除 <ph name="COUNT"/> 项</translation>
 </translationbundle>

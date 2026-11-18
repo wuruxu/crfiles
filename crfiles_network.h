@@ -6,7 +6,9 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
+#include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "base/functional/callback.h"
 #include "base/process/process.h"
 #include "crFiles/crfiles_network.mojom.h"
@@ -17,6 +19,8 @@ namespace ui { class Event; class KeyEvent; }
 namespace crfiles {
 inline constexpr char kSmbProcessSwitch[] = "crfiles-smb-process";
 inline constexpr char kSmbDiscoverySwitch[] = "crfiles-smb-discover";
+inline constexpr uint64_t kSmbPreviewLimit = uint64_t{2} << 30;
+inline constexpr uint64_t kSmbNearbyFileLimit = uint64_t{2} << 30;
 int RunSmbProcess();
 int RunSmbDiscovery();
 struct SmbLocation {
@@ -40,15 +44,20 @@ struct NetworkFooterState {
   std::u16string text;
   mojom::SmbWriteAccess write_access = mojom::SmbWriteAccess::kUnknown;
 };
-class SmbConnection {
+class SmbConnection : private mojom::SmbTransferProgress {
  public:
   SmbConnection();
-  ~SmbConnection();
+  ~SmbConnection() override;
   bool Start(base::OnceClosure disconnected);
   void TakeOver(SmbConnection& other, base::OnceClosure disconnected);
   void Stop();
+  mojo::PendingAssociatedRemote<mojom::SmbTransferProgress> ObserveTransfer(
+      base::RepeatingCallback<void(uint64_t, uint64_t)> progress);
   mojom::SmbService* service() { return service_.get(); }
  private:
+  void Advanced(uint64_t bytes, uint64_t total) override;
+  mojo::AssociatedReceiver<mojom::SmbTransferProgress> receiver_{this};
+  base::RepeatingCallback<void(uint64_t, uint64_t)> progress_;
   base::Process process_;
   mojo::Remote<mojom::SmbService> service_;
 };
@@ -66,7 +75,7 @@ std::unique_ptr<views::View> CreateNetworkPage(base::RepeatingCallback<void(base
 std::unique_ptr<views::View> CreateNetworkDevicesView(const std::vector<mojom::SmbServerPtr>& servers,
     bool icons, int icon_size, const gfx::ImageSkia& image, base::RepeatingCallback<void(std::string)> open);
 void SetNetworkDevicesImage(views::View* contents, const gfx::ImageSkia& image);
-std::unique_ptr<views::View> CreateNetworkFilesView(const std::vector<mojom::SmbEntryPtr>& entries,
+std::unique_ptr<views::View> CreateNetworkFilesView(base::span<const mojom::SmbEntryPtr> entries,
     bool icons, int icon_size, NetworkColumns columns, views::ContextMenuController* menu,
     base::RepeatingCallback<void(size_t, bool, const ui::Event&)> select);
 std::optional<size_t> NetworkFileIndex(views::View* contents, views::View* source);

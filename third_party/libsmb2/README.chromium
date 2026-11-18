@@ -9,7 +9,9 @@ Security Critical: yes
 Shipped: yes
 
 Local changes: GN build and desktop config.h; omitted examples, tests,
-utilities and console-platform build directories. Library sources unchanged.
+utilities and console-platform build directories. The client error decoder
+accepts COPYCHUNK failures with an IOCTL response body (MS-SMB2 3.3.5.15.6)
+so the worker can handle the server status and retry smaller ranges.
 Non-Windows builds use GNU C11 for upstream typeof/statement expressions in
 alloc.c and dcerpc.c. Windows retains the upstream _MSC_VER fallback.
 The library target opts out of Chromium's unsafe-buffers Clang plugin for

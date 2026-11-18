@@ -46,7 +46,16 @@ void SmbConnection::TakeOver(SmbConnection& other, base::OnceClosure disconnecte
   service_ = std::move(other.service_);
   service_.set_disconnect_handler(std::move(disconnected));
 }
+mojo::PendingAssociatedRemote<mojom::SmbTransferProgress> SmbConnection::ObserveTransfer(
+    base::RepeatingCallback<void(uint64_t, uint64_t)> progress) {
+  receiver_.reset();
+  progress_ = std::move(progress);
+  return receiver_.BindNewEndpointAndPassRemote();
+}
+void SmbConnection::Advanced(uint64_t bytes, uint64_t total) { progress_.Run(bytes, total); }
 void SmbConnection::Stop() {
+  receiver_.reset();
+  progress_.Reset();
   service_.reset();
   if (process_.IsValid()) {
     // Cancel also interrupts a blocked name lookup or a stuck library call.
