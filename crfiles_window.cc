@@ -17,6 +17,7 @@
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/cursor/cursor.h"
+#include "ui/base/hit_test.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "ui/shell_dialogs/selected_file_info.h"
@@ -71,7 +72,6 @@
 #include "base/timer/timer.h"
 #include "build/build_config.h"
 #if BUILDFLAG(IS_LINUX)
-#include "ui/base/hit_test.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"

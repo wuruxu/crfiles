@@ -428,6 +428,7 @@ executable("crFiles") {
       "//third_party/zlib/google:zip",
       "//ui/accessibility",
       "//ui/base",
+      "//ui/base:data_exchange",
       "//ui/base/ime/init",
       "//ui/color",
       "//ui/compositor",

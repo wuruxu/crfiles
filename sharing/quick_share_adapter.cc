@@ -255,17 +255,10 @@ class QuickShareAdapter final : public ShareService {
       return !item.name.empty() && PeerKey(item) == address;
     });
     if (peer == peers.end()) return reject("peer_not_found_or_unnamed");
-    const auto selected_at = base::TimeTicks::Now();
     LOG(INFO) << "crQuickShare: Send route selected; endpoint_id=" << base::HexEncode(peer->id)
               << "; medium=" << (peer->ble_only ? "BLUETOOTH" : "WIFI_LAN")
               << "; cache_id=" << peer->discovery_cache_id << "; interface=" << peer->discovery_interface
               << "; endpoint_info_bytes=" << peer->endpoint_info.size()
-              << "; record_age_ms=" << (peer->discovery_record_received.is_null() ? -1 :
-                  (selected_at - peer->discovery_record_received).InMilliseconds())
-              << "; bluetooth_candidate_checked=" << peer->bluetooth_candidate_checked
-              << "; bluetooth_candidate_available=" << !peer->bluetooth_candidate_seen.is_null()
-              << "; bluetooth_candidate_age_ms=" << (peer->bluetooth_candidate_seen.is_null() ? -1 :
-                  (selected_at - peer->bluetooth_candidate_seen).InMilliseconds())
               << "; automatic_bluetooth_fallback=0";
     std::vector<std::string> names;
     for (const auto& path : paths) names.push_back(path.BaseName().AsUTF8Unsafe());
