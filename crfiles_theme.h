@@ -39,6 +39,9 @@ bool SetSplitSelectionStyle(SplitSelectionStyle style);
 // macOS titlebar preference, applied when the main window is created.
 bool GetWindowsTitlebarStyleEnabled();
 bool SetWindowsTitlebarStyleEnabled(bool enabled);
+bool GetSmbEnabledPreference();
+bool SetSmbEnabledPreference(bool enabled);
+bool IsSmbEnabledForSession();
 bool GetSystemTrayEnabled();
 bool SetSystemTrayEnabled(bool enabled);
 struct FileViewPreferences {

@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_network.h"
 #include "crFiles/crfiles_file_access.h"
+#include "crFiles/crfiles_theme.h"
 #include <algorithm>
 #include "base/command_line.h"
 #include "base/process/kill.h"
@@ -65,6 +66,7 @@ void SmbConnection::Stop() {
 }
 bool SmbConnection::Start(base::OnceClosure disconnected) {
   Stop();
+  if (!IsSmbEnabledForSession()) return false;
   base::FilePath executable;
   if (!GetCrFilesHelperExecutable(&executable)) return false;
   base::CommandLine command(executable);

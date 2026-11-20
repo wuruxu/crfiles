@@ -591,8 +591,8 @@ that operation from starting when recording for that type is enabled. Disabling
 a History type suppresses new journal rows without blocking the operation. A successful copy with failed source removal is
 reported explicitly. Network sharing remains send/receive, not a destructive move.
 
-Settings uses General, Nearby sharing, History and About pages with the crPlayer
-navigation layout. General contains language and theme controls, along with
+Settings uses the crPlayer navigation layout. The Experimental page follows History.
+General contains language and theme controls, along with
 checkboxes for toolbar hiding, folder animations, hover image previews and
 single-click folder navigation.
 Nearby sharing groups device avatars, name, receive directory with a folder picker,
@@ -1359,6 +1359,11 @@ and two-device validation.
 
 ## SMB network browsing
 
+Samba (SMB) support is off by default. Enable it in **Settings → Experimental**
+and restart crFiles to use **Network** and `smb://` addresses. Disabling it also
+takes effect on restart. Existing network panes then open the home directory,
+and saved SMB receive targets stay inactive.
+
 **Network**, above **Trash**, opens an independent network tab. It discovers
 IPv4 SMB servers advertising `_smb._tcp.local` on local private interfaces.
 Discovery depends on the server publishing DNS-SD and multicast being allowed;
@@ -1557,7 +1562,8 @@ empty-result timer. Refresh inside a share reloads its current directory.
 
 For command-line diagnostics, run `crFiles --crfiles-smb-discover`. It uses the
 same mDNS implementation for twelve seconds, prints server names, addresses and
-ports, and exits without opening a window, reading preferences or authenticating.
+ports, and exits without opening a window or authenticating. The saved SMB
+setting must be enabled, otherwise the command exits with code 1.
 Exit code 0 means at least one service was found; 2 means none was found.
 Interface enumeration and socket errors are also logged. An advertised service
 is a discovery hint, not proof that TCP 445 is reachable or that login will work.

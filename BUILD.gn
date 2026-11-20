@@ -407,6 +407,7 @@ executable("crFiles") {
       "//components/vector_icons",
       "//crypto",
       "//libcr",
+      "//libcr:svg",
       "//libcr:viz",
       "//media",
       "//mojo/core/embedder",

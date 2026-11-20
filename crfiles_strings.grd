@@ -503,6 +503,9 @@
       <message name="IDS_CRFILES_NETWORK_PREVIEW_LIMIT" desc="SMB directory and file operation status.">This file exceeds the 2 GiB preview limit. You can still copy it.</message>
       <message name="IDS_CRFILES_NETWORK_TREE_LIMIT" desc="SMB directory and file operation status.">The operation exceeds the entry count or path length limit.</message>
       <message name="IDS_CRFILES_NETWORK_DELETED_COUNT" desc="SMB directory and file operation status.">Confirmed deletions: <ph name="COUNT">$1<ex>25</ex></ph></message>
+      <message name="IDS_CRFILES_EXPERIMENTAL" desc="Settings navigation page for experimental features.">Experimental</message>
+      <message name="IDS_CRFILES_ENABLE_SMB" desc="Checkbox for SMB network browsing and file operations.">Enable Samba (SMB) support</message>
+      <message name="IDS_CRFILES_SMB_RESTART" desc="Shown when the saved SMB preference differs from the running session.">Restart crFiles to apply this change.</message>
 </messages>
   </release>
 </grit>

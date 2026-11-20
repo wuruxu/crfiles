@@ -38,9 +38,7 @@
 #include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSamplingOptions.h"
-#include "third_party/skia/include/core/SkStream.h"
-#include "third_party/skia/modules/svg/include/SkSVGDOM.h"
-#include "third_party/skia/modules/svg/include/SkSVGSVG.h"
+#include "libcr/svg/svg_decoder.h"
 namespace crfiles {
 namespace {
 // crFiles owns its PDFium instance. All PDF handles, including destruction,
@@ -216,6 +214,13 @@ gfx::ImageSkia LoadImagePreview(const base::FilePath& path, int maximum_edge) {
 }
 gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled) {
+  return LoadImagePreviewWithAnimation(path, maximum_edge, canceled, nullptr);
+}
+
+gfx::ImageSkia LoadImagePreviewWithAnimation(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled,
+    std::unique_ptr<libcr::SvgDecoder>* animation) {
+  if (animation) animation->reset();
   auto stopped = [&] { return canceled && canceled->load(std::memory_order_relaxed); };
   if (stopped()) return {};
   if (maximum_edge <= 0 || maximum_edge > 2048) return {};
@@ -239,31 +244,17 @@ gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximu
   if (IsHeicThumbnailPath(path)) {
     result = DecodeHeicThumbnail(encoded, maximum_edge, canceled);
     if (result.drawsNothing()) return {};
-  } else if (path.MatchesExtension(FILE_PATH_LITERAL(".svg"))) {
-    SkMemoryStream stream(encoded.data(), encoded.size(), false);
-    auto dom = SkSVGDOM::MakeFromStream(stream);
-    if (!dom || !dom->getRoot()) return {};
-    auto size = dom->containerSize();
-    if (size.isEmpty() && dom->getRoot()->getViewBox()) {
-      const auto& box = *dom->getRoot()->getViewBox();
-      size = SkSize::Make(box.width(), box.height());
-    }
-    if (size.isEmpty()) size = SkSize::Make(300, 150);
-    if (!std::isfinite(size.width()) || !std::isfinite(size.height())) return {};
-    const float scale = maximum_edge / std::max(size.width(), size.height());
-    if (!std::isfinite(scale)) return {};
-    const int width = std::max(1, static_cast<int>(std::round(size.width() * scale)));
-    const int height = std::max(1, static_cast<int>(std::round(size.height() * scale)));
-    DecodeMemory memory(static_cast<size_t>(width) * height * 4, canceled);
+  } else if (libcr::IsSvgPath(path)) {
+    // Reserve the output and the decoder's embedded image allowance together.
+    const size_t pixels = static_cast<size_t>(maximum_edge) * maximum_edge;
+    DecodeMemory memory((pixels + libcr::kSvgEmbeddedPixelLimit) * 4, canceled);
     if (!memory.acquired() || stopped()) return {};
-    if (!result.tryAllocN32Pixels(width, height)) return {};
-    result.eraseColor(SK_ColorTRANSPARENT);
-    SkCanvas canvas(result);
-    canvas.scale(scale, scale);
-    // Resolve percentage dimensions against the document's viewport.
-    dom->setContainerSize(size);
-    if (stopped()) return {};
-    dom->render(&canvas);
+    auto svg = libcr::SvgDecoder::LoadBytes(base::as_byte_span(encoded), canceled.get());
+    if (!svg || stopped()) return {};
+    result = svg->Render(base::TimeDelta(), maximum_edge);
+    if (result.drawsNothing() || stopped()) return {};
+    if (animation && svg->animated() && !svg->FinishedAt(base::TimeDelta()))
+      *animation = std::move(svg);
   } else {
     // The codec and its data are destroyed before the encoded string.
     auto data = SkData::MakeWithoutCopy(encoded.data(), encoded.size());

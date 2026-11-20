@@ -710,7 +710,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
         IDS_CRFILES_QUICK_SHARE,
 #endif
-        IDS_CRFILES_HISTORY, IDS_CRFILES_ABOUT};
+        IDS_CRFILES_HISTORY, IDS_CRFILES_EXPERIMENTAL, IDS_CRFILES_ABOUT};
     for (size_t i = 0; i < titles.size(); ++i)
       navigation_[i] = navigation->AddChildView(std::make_unique<NavigationButton>(
           base::BindRepeating(&Settings::SelectPage, base::Unretained(this), i), Text(titles[i])));
@@ -731,7 +731,14 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     pages_[3] = host->AddChildView(QuickSharePage());
 #endif
-    pages_[pages_.size() - 2] = host->AddChildView(HistoryPage());
+    pages_[pages_.size() - 3] = host->AddChildView(HistoryPage());
+    auto experimental = Page(IDS_CRFILES_EXPERIMENTAL);
+    smb_enabled_ = experimental->AddChildView(std::make_unique<views::Checkbox>(Text(IDS_CRFILES_ENABLE_SMB)));
+    smb_enabled_->SetChecked(GetSmbEnabledPreference());
+    smb_enabled_->SetCallback(base::BindRepeating(&Settings::SmbChanged, base::Unretained(this)));
+    smb_restart_ = Label(experimental.get(), Text(IDS_CRFILES_SMB_RESTART));
+    smb_restart_->SetVisible(smb_enabled_->GetChecked() != IsSmbEnabledForSession());
+    pages_[pages_.size() - 2] = host->AddChildView(std::move(experimental));
     auto about = Page(IDS_CRFILES_ABOUT); about->AddChildView(AboutBody(false));
     pages_[pages_.size() - 1] = host->AddChildView(std::move(about));
     scroll->SetContents(std::move(host));
@@ -947,6 +954,12 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
     error_->SetVisible(!saved);
     if (!saved)
       windows_titlebar_style_->SetChecked(GetWindowsTitlebarStyleEnabled());
+  }
+  void SmbChanged() {
+    const bool saved = SetSmbEnabledPreference(smb_enabled_->GetChecked());
+    if (!saved) smb_enabled_->SetChecked(GetSmbEnabledPreference());
+    error_->SetVisible(!saved);
+    smb_restart_->SetVisible(smb_enabled_->GetChecked() != IsSmbEnabledForSession());
   }
   void SystemTrayChanged() {
     const bool saved = SetSystemTrayEnabled(system_tray_->GetChecked());
@@ -1456,7 +1469,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   }
   void Close() { GetWidget()->Close(); }
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-  static constexpr size_t kPageCount = 6;
+  static constexpr size_t kPageCount = 7;
 #if BUILDFLAG(IS_LINUX)
   raw_ptr<views::Combobox> quick_interface_ = nullptr;
   raw_ptr<views::Checkbox> quick_direct_ = nullptr;
@@ -1473,7 +1486,7 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   raw_ptr<views::ImageButton> quick_folder_ = nullptr;
   bool choosing_quick_folder_ = false;
 #else
-  static constexpr size_t kPageCount = 5;
+  static constexpr size_t kPageCount = 6;
 #endif
   std::array<raw_ptr<views::View>, kPageCount> pages_ = {};
   std::array<raw_ptr<NavigationButton>, kPageCount> navigation_ = {};
@@ -1487,6 +1500,8 @@ class Settings : public views::DialogDelegate, public ui::SelectFileDialog::List
   raw_ptr<views::Checkbox> auto_hide_toolbar_ = nullptr, animate_folders_ = nullptr, hover_image_preview_ = nullptr;
   raw_ptr<views::Checkbox> single_click_folders_ = nullptr;
   raw_ptr<views::Checkbox> windows_titlebar_style_ = nullptr;
+  raw_ptr<views::Checkbox> smb_enabled_ = nullptr;
+  raw_ptr<views::Label> smb_restart_ = nullptr;
   raw_ptr<views::Checkbox> system_tray_ = nullptr;
   raw_ptr<views::Checkbox> discovery_ = nullptr, auto_accept_ = nullptr;
   raw_ptr<views::MdTextButton> apply_ = nullptr;

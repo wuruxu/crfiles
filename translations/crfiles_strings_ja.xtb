@@ -454,4 +454,7 @@
   <translation id="2442903374287519332">このファイルはプレビューの上限（2 GiB）を超えています。コピーは可能です。</translation>
   <translation id="1746476945685933831">項目数またはパスの長さが上限を超えています。</translation>
   <translation id="3190156050551317351">削除を確認した項目数: <ph name="COUNT"/></translation>
+  <translation id="8091655032047076676">試験運用中の機能</translation>
+  <translation id="3231408719509913432">Samba（SMB）サポートを有効にする</translation>
+  <translation id="261587587435311301">この変更を適用するには、crFiles を再起動してください。</translation>
 </translationbundle>

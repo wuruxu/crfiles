@@ -14,18 +14,23 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/threading/sequence_bound.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "crFiles/crfiles_context_actions.h"
+#include "crFiles/crfiles_decode_memory.h"
 #include "crFiles/crfiles_dialog.h"
 #include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_history.h"
 #include "crFiles/crfiles_image_preview.h"
 #include "crFiles/grit/crfiles_strings.h"
+#include "libcr/svg/svg_decoder.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -34,6 +39,7 @@
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/compositor/compositor.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/gfx/animation/animation_delegate.h"
@@ -50,27 +56,58 @@
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace crfiles {
 namespace {
 std::u16string Text(int id) { return l10n_util::GetStringUTF16(id); }
 
-gfx::ImageSkia ReadPreview(const base::FilePath& path,
-                          const std::shared_ptr<std::atomic_bool>& canceled) {
-  if (canceled->load()) return {};
-  FileOperationLog log("open_file", "preview", path.AsUTF8Unsafe(), {});
-  if (!log.valid()) return {};
-  auto access = ResolveFileAccessBookmark(CreateFileAccessBookmark(path));
-  base::File::Info before, after;
-  if (!base::GetFileInfo(path, &before) || before.is_directory) return {};
-  auto image = LoadImagePreviewCancelable(path, 2048, canceled);
-  if (canceled->load()) { log.Cancel(); return {}; }
-  if (image.isNull() || !base::GetFileInfo(path, &after) ||
-      before.size != after.size || before.last_modified != after.last_modified) return {};
-  log.Succeed();
-  return image;
-}
+constexpr int kPreviewEdge = 2048;
+struct PreviewFrame {
+  gfx::ImageSkia image;
+  bool has_more = false;
+};
+
+// A viewer owns one worker-side decoder for the selected file.
+class ViewerDecoder {
+ public:
+  explicit ViewerDecoder(std::shared_ptr<std::atomic_bool> canceled)
+      : canceled_(std::move(canceled)) {}
+
+  PreviewFrame Open(const base::FilePath& path) {
+    if (canceled_->load()) return {};
+    FileOperationLog log("open_file", "preview", path.AsUTF8Unsafe(), {});
+    if (!log.valid()) return {};
+    auto access = ResolveFileAccessBookmark(CreateFileAccessBookmark(path));
+    base::File::Info before, after;
+    if (!base::GetFileInfo(path, &before) || before.is_directory) return {};
+    auto image = LoadImagePreviewWithAnimation(path, kPreviewEdge, canceled_, &svg_);
+    if (canceled_->load()) { log.Cancel(); return {}; }
+    if (image.isNull() || !base::GetFileInfo(path, &after) ||
+        before.size != after.size || before.last_modified != after.last_modified) return {};
+    log.Succeed();
+    return {std::move(image), svg_ != nullptr};
+  }
+
+  PreviewFrame FrameAt(base::TimeDelta elapsed, int edge) {
+    if (canceled_->load() || !svg_) return {};
+    const bool finished = svg_->FinishedAt(elapsed);
+    if (finished) edge = kPreviewEdge;
+    const size_t pixels = static_cast<size_t>(edge) * edge;
+    DecodeMemory memory((pixels + libcr::kSvgEmbeddedPixelLimit) * 4, canceled_);
+    if (!memory.acquired() || canceled_->load()) return {};
+    auto bitmap = svg_->Render(elapsed, edge);
+    if (bitmap.drawsNothing() || canceled_->load()) return {};
+    auto image = gfx::ImageSkia::CreateFromBitmap(bitmap, 1.f);
+    image.MakeThreadSafe();
+    return {std::move(image), !finished};
+  }
+
+ private:
+  std::shared_ptr<std::atomic_bool> canceled_;
+  std::unique_ptr<libcr::SvgDecoder> svg_;
+};
 
 class ImageCanvas : public views::View {
   METADATA_HEADER(ImageCanvas, views::View)
@@ -85,9 +122,20 @@ class ImageCanvas : public views::View {
   void SetImageOpacity(float opacity) { image_opacity_ = opacity; SchedulePaint(); }
   void SetInteractionEnabled(bool enabled) { dragging_ = false; interaction_enabled_ = enabled; }
   void SetImage(gfx::ImageSkia image) {
+    logical_size_ = image.size();
     image_ = std::move(image);
     dragging_ = false;
     Fit();
+  }
+  void SetFrame(gfx::ImageSkia image) {
+    image_ = std::move(image);
+    SchedulePaint();
+  }
+  int FrameEdge() const {
+    const auto* compositor = GetWidget()->GetCompositor();
+    const float dpi = compositor ? compositor->device_scale_factor() : 1.f;
+    return std::clamp(static_cast<int>(std::ceil(
+        std::max(logical_size_.width(), logical_size_.height()) * Scale() * dpi)), 1, kPreviewEdge);
   }
   void Fit() { fit_to_window_ = true; pan_ = {}; SchedulePaint(); }
   void Zoom(float factor) { ZoomAt(factor, gfx::PointF(width() / 2.f, height() / 2.f)); }
@@ -102,14 +150,14 @@ class ImageCanvas : public views::View {
  private:
   float FitScale() const {
     if (empty()) return 1.f;
-    return std::min({1.f, std::max(1, width()) / static_cast<float>(image_.width()),
-        std::max(1, height()) / static_cast<float>(image_.height())});
+    return std::min({1.f, std::max(1, width()) / static_cast<float>(logical_size_.width()),
+        std::max(1, height()) / static_cast<float>(logical_size_.height())});
   }
   float Scale() const { return fit_to_window_ ? FitScale() : manual_scale_; }
   void ClampPan() {
     if (empty()) { pan_ = {}; return; }
-    const float x = std::max(0.f, (image_.width() * Scale() - width()) / 2.f);
-    const float y = std::max(0.f, (image_.height() * Scale() - height()) / 2.f);
+    const float x = std::max(0.f, (logical_size_.width() * Scale() - width()) / 2.f);
+    const float y = std::max(0.f, (logical_size_.height() * Scale() - height()) / 2.f);
     pan_ = gfx::Vector2dF(std::clamp(pan_.x(), -x, x), std::clamp(pan_.y(), -y, y));
   }
   void ZoomAt(float factor, gfx::PointF anchor) {
@@ -134,6 +182,7 @@ class ImageCanvas : public views::View {
     ClampPan(); SchedulePaint();
   }
   gfx::ImageSkia image_;
+  gfx::Size logical_size_;
   float image_opacity_ = 1.f;
   bool fit_to_window_ = true;
   float manual_scale_ = 1.f;
@@ -146,8 +195,8 @@ void ImageCanvas::OnPaint(gfx::Canvas* canvas) {
   views::View::OnPaint(canvas);
   if (empty() || image_opacity_ <= 0.f) return;
   const float scale = Scale();
-  const int w = std::max(1, static_cast<int>(std::round(image_.width() * scale)));
-  const int h = std::max(1, static_cast<int>(std::round(image_.height() * scale)));
+  const int w = std::max(1, static_cast<int>(std::round(logical_size_.width() * scale)));
+  const int h = std::max(1, static_cast<int>(std::round(logical_size_.height() * scale)));
   const int x = static_cast<int>(std::round((width() - w) / 2.f + pan_.x()));
   const int y = static_cast<int>(std::round((height() - h) / 2.f + pan_.y()));
   if (image_opacity_ < 1.f)
@@ -198,7 +247,7 @@ void ImageCanvas::OnBoundsChanged(const gfx::Rect& previous) {
 BEGIN_METADATA(ImageCanvas)
 END_METADATA
 
-class ImageViewer : public views::View, public gfx::AnimationDelegate {
+class ImageViewer : public views::View, public gfx::AnimationDelegate, public views::WidgetObserver {
   METADATA_HEADER(ImageViewer, views::View)
  public:
   ImageViewer(std::vector<base::FilePath> paths, size_t index)
@@ -272,6 +321,67 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
                             int label, base::RepeatingClosure action) {
     return parent->AddChildView(views::ImageButton::CreateIconButton(std::move(action), icon, Text(label)));
   }
+  void AddedToWidget() override {
+    views::View::AddedToWidget();
+    observation_.Observe(GetWidget());
+    UpdatePlayback(GetWidget()->IsVisible());
+  }
+
+  void RemovedFromWidget() override {
+    UpdatePlayback(false);
+    observation_.Reset();
+    views::View::RemovedFromWidget();
+  }
+
+  void OnWidgetVisibilityChanged(views::Widget*, bool visible) override {
+    UpdatePlayback(visible);
+  }
+  void OnWidgetShowStateChanged(views::Widget* widget) override {
+    UpdatePlayback(widget->IsVisible());
+  }
+  void OnWidgetClosing(views::Widget*) override {
+    canceled_->store(true);
+    UpdatePlayback(false);
+  }
+  void OnWidgetDestroying(views::Widget*) override {
+    canceled_->store(true);
+    UpdatePlayback(false);
+    observation_.Reset();
+  }
+
+  void UpdatePlayback(bool visible) {
+    if (!visible || !has_more_frames_ || loading_ || canceled_->load() ||
+        !GetWidget() || GetWidget()->IsClosed() || GetWidget()->IsMinimized()) {
+      if (frame_timer_.IsRunning()) {
+        elapsed_ += base::TimeTicks::Now() - play_start_;
+        frame_timer_.Stop();
+      }
+      return;
+    }
+    if (frame_timer_.IsRunning()) return;
+    play_start_ = base::TimeTicks::Now();
+    frame_timer_.Start(FROM_HERE, base::Hertz(30), this, &ImageViewer::RequestFrame);
+  }
+
+  void RequestFrame() {
+    if (frame_pending_) return;
+    frame_pending_ = true;
+    const auto time = elapsed_ + (base::TimeTicks::Now() - play_start_);
+    decoder_.AsyncCall(&ViewerDecoder::FrameAt).WithArgs(time, canvas_->FrameEdge())
+        .Then(base::BindOnce(&ImageViewer::ShowFrame, weak_.GetWeakPtr(), generation_));
+  }
+
+  void ShowFrame(uint64_t generation, PreviewFrame frame) {
+    if (generation != generation_ || canceled_->load()) return;
+    frame_pending_ = false;
+    if (!frame.image.isNull()) canvas_->SetFrame(std::move(frame.image));
+    if (!frame.has_more) {
+      has_more_frames_ = false;
+      frame_timer_.Stop();
+      decoder_.Reset();
+    }
+  }
+
   void Zoom(float factor) { if (!loading_) canvas_->Zoom(factor); }
   void Fit() { if (!loading_) canvas_->Fit(); }
   void StartFade(float target) {
@@ -303,6 +413,7 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
     canvas_->SetInteractionEnabled(true);
     status_->SetText(ok ? std::u16string() : Text(IDS_CRFILES_OPEN_ERROR)); status_->SetVisible(!ok);
     if (ok) StartFade(1.f);
+    UpdatePlayback(GetWidget() && GetWidget()->IsVisible());
   }
   void Step(int direction) {
     if ((direction < 0 && index_ == 0) || (direction > 0 && index_ + 1 == paths_.size())) return;
@@ -310,6 +421,10 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
     Load();
   }
   void Load() {
+    frame_timer_.Stop();
+    frame_pending_ = false;
+    has_more_frames_ = false;
+    elapsed_ = {};
     canceled_->store(true);
     canceled_ = std::make_shared<std::atomic_bool>(false);
     const auto generation = ++generation_;
@@ -330,12 +445,15 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
       GetWidget()->widget_delegate()->SetTitle(paths_[index_].DirName().AsUTF16Unsafe());
       GetWidget()->UpdateWindowTitle();
     }
-    runner_->PostTaskAndReplyWithResult(FROM_HERE, base::BindOnce(&ReadPreview, paths_[index_], canceled_),
-        base::BindOnce(&ImageViewer::Loaded, weak_.GetWeakPtr(), generation));
+    decoder_.emplace(runner_, canceled_);
+    decoder_.AsyncCall(&ViewerDecoder::Open).WithArgs(paths_[index_])
+        .Then(base::BindOnce(&ImageViewer::Loaded, weak_.GetWeakPtr(), generation));
   }
-  void Loaded(uint64_t generation, gfx::ImageSkia image) {
+  void Loaded(uint64_t generation, PreviewFrame frame) {
     if (generation != generation_ || canceled_->load()) return;
-    pending_image_ = std::move(image);
+    has_more_frames_ = frame.has_more;
+    if (!has_more_frames_) decoder_.Reset();
+    pending_image_ = std::move(frame.image);
     preview_ready_ = true;
     if (!fading_out_) PresentPreview();
   }
@@ -362,6 +480,13 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
   raw_ptr<views::ImageButton> external_ = nullptr;
   std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);
   scoped_refptr<base::SequencedTaskRunner> runner_;
+  base::SequenceBound<ViewerDecoder> decoder_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+  base::RepeatingTimer frame_timer_;
+  base::TimeTicks play_start_;
+  base::TimeDelta elapsed_;
+  bool frame_pending_ = false;
+  bool has_more_frames_ = false;
   gfx::ImageSkia pending_image_;
   bool preview_ready_ = false;
   bool loading_ = false;
@@ -370,7 +495,7 @@ class ImageViewer : public views::View, public gfx::AnimationDelegate {
   gfx::LinearAnimation fade_{base::Milliseconds(160), gfx::LinearAnimation::kDefaultFrameRate, this};
   base::WeakPtrFactory<ImageViewer> weak_{this};
 };
-ImageViewer::~ImageViewer() { canceled_->store(true); fade_.Stop(); }
+ImageViewer::~ImageViewer() { canceled_->store(true); frame_timer_.Stop(); fade_.Stop(); }
 void ImageViewer::AnimationProgressed(const gfx::Animation* animation) {
   const float progress = static_cast<float>(animation->GetCurrentValue());
   const float eased = progress * progress * (3.f - 2.f * progress);

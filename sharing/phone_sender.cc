@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "crFiles/sharing/phone_sender.h"
+#include "libcr/svg/svg_decoder.h"
 #include "crFiles/crfiles_history.h"
 
 #include <algorithm>
@@ -38,7 +39,7 @@ struct SendFile {
 std::string Mime(const base::FilePath& path) {
   const std::pair<const char*, const char*> types[] = {
       {"jpg", "image/jpeg"}, {"jpeg", "image/jpeg"}, {"png", "image/png"},
-      {"webp", "image/webp"}, {"gif", "image/gif"}, {"heic", "image/heic"},
+      {"svg", "image/svg+xml"}, {"webp", "image/webp"}, {"gif", "image/gif"}, {"heic", "image/heic"},
       {"heif", "image/heif"}, {"avif", "image/avif"}, {"mp4", "video/mp4"},
       {"mov", "video/quicktime"}, {"m4v", "video/mp4"}, {"webm", "video/webm"},
       {"mkv", "video/x-matroska"}, {"3gp", "video/3gpp"}};
@@ -64,6 +65,7 @@ std::optional<std::vector<SendFile>> Prepare(std::vector<base::FilePath> paths,
     base::File::Info before, after;
     if (!file.IsValid() || !file.GetInfo(&before) || before.is_directory || before.size <= 0 ||
         before.size > INT64_C(16) * 1024 * 1024 * 1024) return std::nullopt;
+    if (libcr::IsSvgPath(path) && !libcr::ValidateSvgFile(file, before.size)) return std::nullopt;
     total += before.size;
     if (total > INT64_C(64) * 1024 * 1024 * 1024) return std::nullopt;
     crypto::hash::Hasher hash(crypto::hash::kSha256);

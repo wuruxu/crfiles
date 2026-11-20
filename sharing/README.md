@@ -101,7 +101,11 @@ Catalog reads are limited to 32 KiB and 128 targets. Catalog results are hints;
 TLS pairing and receive consent remain mandatory unless existing local trust
 preferences explicitly authorize auto-acceptance.
 
-The paired `hello` also advertises `folder_transfer` and the current target list.
+The paired `hello` also advertises `folder_transfer`, `svg_media`, and the current target list.
+A plain media offer accepts a nonempty SVG up to 8 MiB. The sender checks the XML
+document before offering it, and the receiver checks the staged file before committing
+it. crFiles uses a tree offer for older folder-capable peers without `svg_media`
+and for general SVG files outside the media limits. Phone uploads use `image/svg+xml`.
 An offer may include `target`, a stable receiver-issued UUID. Missing, withdrawn
 or changed target registrations are rejected before writing; withdrawal cancels
 an in-flight receive. Without a target, the legacy default receive directory is

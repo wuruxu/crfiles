@@ -62,9 +62,10 @@ class PinnedDirectory {
   std::vector<base::win::ScopedHandle> handles_;
 };
 
-inline base::File OpenRegularFile(const base::FilePath& path, bool create) {
+inline base::File OpenRegularFile(const base::FilePath& path, bool create,
+                                  bool read_back = false) {
   base::win::ScopedHandle handle(CreateFileW(path.value().c_str(),
-      create ? GENERIC_WRITE : GENERIC_READ, FILE_SHARE_READ, nullptr,
+      create ? GENERIC_WRITE | (read_back ? GENERIC_READ : 0) : GENERIC_READ, FILE_SHARE_READ, nullptr,
       create ? CREATE_NEW : OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   if (!handle.is_valid() || !IsRegularHandle(handle.get(), false)) return {};
   return base::File(handle.release());

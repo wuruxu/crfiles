@@ -8,6 +8,8 @@
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "ui/gfx/image/image_skia.h"
+namespace libcr { class SvgDecoder; }
+
 namespace crfiles {
 // Images/SVG/HEIC/HEIF, PDF first pages, and static video frames (up to 128 px).
 // Video decode runs in a time-limited child; decoding calls are worker-only.
@@ -35,5 +37,10 @@ gfx::ImageSkia LoadCachedThumbnail(const base::FilePath& path, int maximum_edge,
 // checks cancellation and a time budget; PDF loading/parsing cannot be interrupted.
 gfx::ImageSkia LoadImagePreviewCancelable(const base::FilePath& path, int maximum_edge,
     const std::shared_ptr<std::atomic_bool>& canceled);
+// A viewer may retain the parsed scene to render subsequent frames on the same
+// worker sequence. Other preview consumers only request the initial image.
+gfx::ImageSkia LoadImagePreviewWithAnimation(const base::FilePath& path, int maximum_edge,
+    const std::shared_ptr<std::atomic_bool>& canceled,
+    std::unique_ptr<libcr::SvgDecoder>* animation);
 }
 #endif

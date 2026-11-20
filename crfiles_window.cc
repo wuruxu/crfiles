@@ -5319,6 +5319,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     add_place(vector_icons::kFolderOpenIcon, IDS_CRFILES_RECEIVED, base::BindRepeating(&FilesView::Received, base::Unretained(this)));
     sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetVisible(false);
     add_place(vector_icons::kDevicesIcon, IDS_CRFILES_NETWORK, base::BindRepeating(&FilesView::ShowNetworkTab, base::Unretained(this)));
+    sidebar_buttons_.at(IDS_CRFILES_NETWORK)->SetVisible(IsSmbEnabledForSession());
     add_place(kDeleteIcon, IDS_CRFILES_TRASH, base::BindRepeating(&FilesView::Trash, base::Unretained(this)));
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce([] { return std::array{LoadTrashIcon(), LoadTrashIcon(kTabIconSize), LoadNetworkWorkgroupIcon(kTabIconSize), LoadNetworkWorkgroupIcon(20)}; }),
@@ -5868,6 +5869,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr(), token, request));
   }
   void ShowNetworkTab() {
+    if (!IsSmbEnabledForSession()) return;
     if (root_) { root_->ShowNetworkTab(); return; }
     EndAddressEditing();
     for (const auto& tab : tabs_) if (tab.active_pane && tab.active_pane->network_view_ &&
@@ -5879,6 +5881,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     ConnectNetworkPage(ActivePane()->network_view_, std::move(credentials));
   }
   bool NavigateNetworkAddress(std::string address) {
+    if (!IsSmbEnabledForSession()) return false;
     auto* pane = ActivePane();
     if (pane->network_view_ && NavigateNetworkPage(pane->network_view_, address)) return true;
     if (address.starts_with('/') && pane->network_view_) {
@@ -6388,7 +6391,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     sharing_folders_dialog_.SetView(ShowSharingFoldersDialog(GetWidget(),
         base::BindRepeating([](base::WeakPtr<FilesView> shell) {
-          return shell ? shell->shared_directories_ : std::vector<NearbySharing::SharedTarget>();
+          auto targets = shell ? shell->shared_directories_ : std::vector<NearbySharing::SharedTarget>();
+          if (!IsSmbEnabledForSession()) std::erase_if(targets, [](const auto& target) { return !target.network_url.empty(); });
+          return targets;
         }, weak_.GetWeakPtr()),
         base::BindRepeating([](base::WeakPtr<FilesView> shell, NearbySharing::SharedTarget target) {
           if (!shell) return;
@@ -7881,15 +7886,28 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (!shell->Current().active_pane || pane->pane_id_ == id) shell->Current().active_pane = pane;
     }, base::Unretained(this), selected));
   }
+  // Older workspaces can contain Network panes even without an SMB preference.
+  // Replace just those leaves so pinned tabs, splits and their active pane survive.
+  void RestoreNetworkPanesAsHome(base::DictValue& tree) {
+    if (auto* first = tree.FindDict("first")) {
+      RestoreNetworkPanesAsHome(*first);
+      RestoreNetworkPanesAsHome(*tree.FindDict("second"));
+    } else if (tree.FindBool("network_page").value_or(false)) {
+      tree.Remove("network_page"); tree.Remove("history_page");
+      tree.Remove("name"); tree.Remove("scroll");
+      tree.Set("path", Home().AsUTF8Unsafe());
+    }
+  }
   bool RestoreWorkspace() {
     auto workspace = GetCrFilesWorkspace();
-    const auto* saved = workspace.FindList("tabs");
+    auto* saved = workspace.FindList("tabs");
     if (workspace.FindInt("version") != 1 || !saved || saved->empty() || saved->size() > 64) return false;
     restoring_workspace_ = true;
     size_t leaves = 0; std::set<std::string> ids;
-    for (const auto& value : *saved) {
-      const auto* item = value.GetIfDict(); const auto* tree = item ? item->FindDict("tree") : nullptr;
+    for (auto& value : *saved) {
+      auto* item = value.GetIfDict(); auto* tree = item ? item->FindDict("tree") : nullptr;
       if (!tree || !ValidateSavedTree(*tree, 0, leaves, ids)) continue;
+      if (!IsSmbEnabledForSession()) RestoreNetworkPanesAsHome(*tree);
       tabs_.push_back(Tab{.id = next_id_++}); active_ = tabs_.size() - 1;
       auto* host = split_host_->AddChildView(std::make_unique<views::View>());
       host->SetLayoutManager(std::make_unique<views::FillLayout>()); host->SetVisible(false);

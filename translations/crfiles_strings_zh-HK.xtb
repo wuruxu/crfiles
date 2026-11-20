@@ -454,4 +454,7 @@
   <translation id="2442903374287519332">檔案超過 2 GiB 的預覽上限，仍可複製。</translation>
   <translation id="1746476945685933831">項目數量或路徑長度超過上限。</translation>
   <translation id="3190156050551317351">已確認刪除 <ph name="COUNT"/> 項</translation>
+  <translation id="8091655032047076676">實驗性</translation>
+  <translation id="3231408719509913432">啟用 Samba（SMB）支援</translation>
+  <translation id="261587587435311301">重新啟動 crFiles 後，變更便會生效。</translation>
 </translationbundle>

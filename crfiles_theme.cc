@@ -233,6 +233,25 @@ bool GetWindowsTitlebarStyleEnabled() {
   base::AutoLock lock(SettingsLock());
   return Settings().FindBool("windows_titlebar_style").value_or(true);
 }
+bool GetSmbEnabledPreference() {
+  base::AutoLock lock(SettingsLock());
+  return Settings().FindBool("smb_enabled").value_or(false);
+}
+bool IsSmbEnabledForSession() {
+  // The window reads this before opening Settings. Keep ongoing transfers on
+  // the same policy for the lifetime of the process.
+  static const bool enabled = GetSmbEnabledPreference();
+  return enabled;
+}
+bool SetSmbEnabledPreference(bool enabled) {
+  base::AutoLock lock(SettingsLock());
+  auto previous = Settings().FindBool("smb_enabled");
+  Settings().Set("smb_enabled", enabled);
+  if (Save()) return true;
+  if (previous) Settings().Set("smb_enabled", *previous);
+  else Settings().Remove("smb_enabled");
+  return false;
+}
 bool GetSystemTrayEnabled() {
   base::AutoLock lock(SettingsLock());
   return Settings().FindBool("system_tray_enabled").value_or(true);

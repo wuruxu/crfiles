@@ -9,6 +9,7 @@
 #include "crFiles/crfiles_tags.h"
 #include "crFiles/grit/crfiles_strings.h"
 #include "crFiles/sharing/phone_sender.h"
+#include "libcr/svg/svg_decoder.h"
 #include "crFiles/sharing/connect_client.h"
 #include "crFiles/crfiles_theme.h"
 #include "base/base64.h"
@@ -132,6 +133,7 @@ struct NearbySharing::State {
   std::vector<SharedTarget> targets;
   std::vector<SharedTarget> peer_targets;
   bool peer_folder_transfer = false;
+  bool peer_svg_media = false;
   std::shared_ptr<SyncService> sync;
   std::string sync_id;
   std::string sync_fingerprint;
@@ -539,10 +541,10 @@ bool SafeName(std::string_view name) {
   const auto dot = name.rfind('.');
   if (dot == std::string_view::npos) return false;
   const std::string extension = base::ToLowerASCII(name.substr(dot));
-  constexpr std::array<std::string_view, 18> extensions = {
+  constexpr std::array<std::string_view, 19> extensions = {
       ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff",
       ".heic", ".heif", ".mp4", ".m4v", ".webm", ".mkv", ".mov", ".avi",
-      ".ogv", ".mpeg"};
+      ".ogv", ".mpeg", ".svg"};
   return std::ranges::find(extensions, extension) != extensions.end();
 }
 bool SafeDeviceName(std::string_view name) {
@@ -819,6 +821,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
   auto hello = Message("hello");
   hello.Set("version", 1);
   hello.Set("folder_transfer", true);
+  hello.Set("svg_media", true);
   hello.Set("sync_v1", true);
   hello.Set("sync_permissions", 2);
   hello.Set("sync_source_updates", 1);
@@ -902,6 +905,7 @@ bool Pair(Channel& channel, const std::shared_ptr<State>& state,
     state->snapshot.peer_avatar =
         avatar >= 0 && avatar < NearbySharing::kAvatarCount ? avatar : 0;
     state->peer_folder_transfer = peer->FindBool("folder_transfer").value_or(false);
+    state->peer_svg_media = peer->FindBool("svg_media").value_or(false);
     state->peer_targets = ParseTargets(*peer);
     state->peer_fingerprint = fingerprint;
     state->snapshot.code = code;
@@ -1033,7 +1037,19 @@ bool SendFiles(Channel& channel, std::vector<SendFile> files,
   }
   if (!state->outgoing_target.empty() &&
       std::ranges::find(state->peer_targets, state->outgoing_target, &NearbySharing::SharedTarget::id) == state->peer_targets.end()) return FailTransfer(failure, kFolderError);
-  const bool tree = std::ranges::any_of(files, [](const auto& file) { return file.name.find('/') != std::string::npos || !SafeName(file.name); });
+  bool tree = std::ranges::any_of(files, [](const auto& file) { return !SafeName(file.name); });
+  if (!tree) {
+    for (auto& file : files) {
+      if (IsCanceled(*state, generation)) return false;
+      if (!libcr::IsSvgPath(file.source)) continue;
+      // Older crFiles peers accept SVG only through general file transfer.
+      if ((state->peer_folder_transfer && !state->peer_svg_media) ||
+          !libcr::ValidateSvgFile(file.file, file.size)) {
+        tree = true;
+        break;
+      }
+    }
+  }
   if (tree && !state->peer_folder_transfer) return FailTransfer(failure, kProtocolError);
   auto offer = Message("offer");
   offer.Set("store_progress", true);
@@ -1255,6 +1271,8 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     if (!name || !SafeTransferName(*name, tree) || !size || size->empty() || size->size() > 20 ||
         !std::ranges::all_of(*size, [](char c) { return c >= '0' && c <= '9'; }) ||
         !base::StringToUint64(*size, &bytes) || bytes > kMaximumFileSize ||
+        (!tree && libcr::IsSvgPath(base::FilePath::FromUTF8Unsafe(*name)) &&
+         (bytes == 0 || bytes > libcr::kSvgByteLimit)) ||
         (name->ends_with("/") && bytes != 0) ||
         !names.insert(base::ToLowerASCII(name->ends_with("/") ? name->substr(0, name->size() - 1) : *name)).second) {
       LOG(ERROR) << "[crPhotos nearby offer] receive: invalid name, size or duplicate at index="
@@ -1464,6 +1482,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
         batch.Append(base::FilePath::FromUTF8Unsafe(name)).AsUTF8Unsafe());
     if (!log.valid()) return FailTransfer(failure, kHistoryError);
     const bool is_directory = tree && name.ends_with("/");
+    const bool validate_svg = !tree && libcr::IsSvgPath(base::FilePath::FromUTF8Unsafe(name));
     auto parts = base::SplitString(name, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     const auto& leaf = parts.back();
     const size_t parents = is_directory ? parts.size() : parts.size() - 1;
@@ -1480,7 +1499,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
       pins.push_back(std::move(pin));
     }
     const auto temporary_path = parent_path.AppendASCII(temporary);
-    if (!is_directory) output = OpenRegularFile(temporary_path, true);
+    if (!is_directory) output = OpenRegularFile(temporary_path, true, validate_svg);
 #else
     base::ScopedFD parent_fd(openat(directory.get(), ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (!parent_fd.is_valid()) return FailFileOperation(failure, kFolderError);
@@ -1492,7 +1511,7 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     }
     if (!is_directory) {
       base::ScopedFD fd(openat(parent_fd.get(), temporary.c_str(),
-          O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+          (validate_svg ? O_RDWR : O_WRONLY) | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
       if (!fd.is_valid()) return FailFileOperation(failure, kWriteError);
       output = base::File(fd.release());
     }
@@ -1528,6 +1547,10 @@ bool ReceiveFiles(Channel& channel, const std::shared_ptr<State>& state,
     if (ok && !expected) ok = FailTransfer(failure, kProtocolError);
     if (ok && *expected != base::HexEncode(hash)) ok = FailTransfer(failure, kChecksumError);
     if (ok && !is_directory && !output.Flush()) ok = FailFileOperation(failure, kFlushError);
+    if (ok && validate_svg) {
+      if (!libcr::ValidateSvgFile(output, size)) ok = FailTransfer(failure, kProtocolError);
+      if (IsCanceled(*state, generation)) ok = false;
+    }
     output.Close();
 #if BUILDFLAG(IS_WIN)
     const auto destination = parent_path.Append(base::FilePath::FromUTF8Unsafe(leaf));

@@ -1,6 +1,7 @@
 // Copyright 2026 The Chromium Authors
 #include "crFiles/crfiles_network.h"
 #include "crFiles/crfiles_network_discovery.h"
+#include "crFiles/crfiles_theme.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -907,12 +908,15 @@ class Service : public mojom::SmbService {
 };
 }
 int RunSmbDiscovery() {
+  if (!IsSmbEnabledForSession()) {
+    fprintf(stderr, "Enable Samba (SMB) support in Settings > Experimental to run discovery.\n");
+    return 1;
+  }
 #if BUILDFLAG(IS_WIN)
   WSADATA data;
   if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 1;
 #endif
-  // Exercise the same implementation as Network without a window, IPC or
-  // persisted preferences. This command only discovers; it never authenticates.
+  // Exercise the same discovery implementation as the Network page without a window or IPC.
   base::SingleThreadTaskExecutor executor(base::MessagePumpType::IO);
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("crFilesSMBDiscovery");
   auto peers = std::make_shared<std::vector<SmbPeer>>();
