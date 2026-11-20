@@ -121,6 +121,8 @@
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_targeter.h"
 #include "ui/views/animation/animation_delegate_views.h"
+#include "ui/views/animation/bounds_animator.h"
+#include "ui/views/animation/bounds_animator_observer.h"
 #include "ui/views/controls/button/button_controller.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/repeat_controller.h"
@@ -4290,9 +4292,12 @@ END_METADATA
 // completion instead of relying on the continued existence of the source row.
 class FileDragCursorObserver : public views::WidgetObserver {
  public:
-  explicit FileDragCursorObserver(views::Widget* widget) : widget_(widget->GetWeakPtr()) {
+  FileDragCursorObserver(views::Widget* widget, base::FilePath folder)
+      : widget_(widget->GetWeakPtr()), folder_(std::move(folder)) {
     widget->AddObserver(this);
   }
+  const base::FilePath& folder() const { return folder_; }
+  void SetPreviewCleanup(base::OnceClosure cleanup) { preview_cleanup_ = std::move(cleanup); }
   ~FileDragCursorObserver() override {
     if (widget_) widget_->RemoveObserver(this);
   }
@@ -4300,10 +4305,13 @@ class FileDragCursorObserver : public views::WidgetObserver {
     weak_.InvalidateWeakPtrs();
   }
   void OnWidgetDragDropCompleted(views::Widget*) override {
+    folder_.clear();
+    if (preview_cleanup_) std::move(preview_cleanup_).Run();
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
         base::BindOnce(&FileDragCursorObserver::Restore, weak_.GetWeakPtr()));
   }
   void OnWidgetDestroying(views::Widget* widget) override {
+    folder_.clear();
     widget->RemoveObserver(this);
     widget_.reset();
     weak_.InvalidateWeakPtrs();
@@ -4332,6 +4340,8 @@ class FileDragCursorObserver : public views::WidgetObserver {
     widget_->SetCursor(cursor);
   }
   base::WeakPtr<views::Widget> widget_;
+  base::FilePath folder_;
+  base::OnceClosure preview_cleanup_;
   base::WeakPtrFactory<FileDragCursorObserver> weak_{this};
 };
 
@@ -4595,12 +4605,42 @@ BEGIN_METADATA(SplitResizeGrip)
 END_METADATA
 
 constexpr int kSplitResizeWidth = 2;
+constexpr double kNewPaneRatio = 0.382;
+
+double InitialSplitRatio(bool new_first) {
+  return new_first ? kNewPaneRatio : 1.0 - kNewPaneRatio;
+}
+
+int SplitMinimumExtent(int available, bool vertical) {
+  return std::min(vertical ? 100 : 180, available / 2);
+}
+
+int SplitFirstExtent(int available, bool vertical, double ratio) {
+  const int minimum = SplitMinimumExtent(available, vertical);
+  return std::clamp(static_cast<int>(std::lround(available * ratio)), minimum, available - minimum);
+}
+
+gfx::Rect SplitAxisBounds(gfx::Size size, bool vertical, int start, int extent) {
+  return vertical ? gfx::Rect(0, start, size.width(), extent) : gfx::Rect(start, 0, extent, size.height());
+}
+
+struct SplitBounds {
+  gfx::Rect first, second;
+};
+
+SplitBounds CalculateSplitBounds(gfx::Size size, bool vertical, double ratio) {
+  const int available = std::max(0, (vertical ? size.height() : size.width()) - kSplitResizeWidth);
+  const int first = SplitFirstExtent(available, vertical, ratio);
+  return {SplitAxisBounds(size, vertical, 0, first),
+          SplitAxisBounds(size, vertical, first + kSplitResizeWidth, available - first)};
+}
+
 // A binary split retains its children while the divider moves.
-class PaneSplit : public views::View, public views::ResizeAreaDelegate {
+class PaneSplit : public views::View, public views::ResizeAreaDelegate, public views::AnimationDelegateViews {
   METADATA_HEADER(PaneSplit, views::View)
  public:
   PaneSplit(bool vertical, std::unique_ptr<views::View> first, std::unique_ptr<views::View> second)
-      : vertical_(vertical) {
+      : views::AnimationDelegateViews(this), vertical_(vertical) {
     first_ = AddChildView(std::move(first)); second_ = AddChildView(std::move(second));
     divider_ = AddChildView(std::make_unique<SplitResizeGrip>(this, vertical));
     divider_->SetAccessibleName(Text(IDS_CRFILES_RESIZE_SPLIT));
@@ -4616,19 +4656,31 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
   void SetChangedCallback(base::RepeatingClosure callback) { changed_ = std::move(callback); }
   void SetResizeCallback(base::RepeatingCallback<void(bool)> callback) { resizing_ = std::move(callback); }
   views::View* Sibling(views::View* child) { return child == first_ ? second_.get() : first_.get(); }
+  void PrepareOpening(bool new_first, std::optional<gfx::Rect> preview_bounds) {
+    SetRatio(InitialSplitRatio(new_first));
+    opening_from_ = preview_bounds;
+    if (gfx::Animation::ShouldRenderRichAnimation() && !gfx::Animation::PrefersReducedMotion())
+      opening_pane_ = new_first ? first_ : second_;
+  }
+  void FinishOpening() {
+    if (opening_.is_animating()) opening_.End();
+    opening_pane_ = nullptr;
+  }
   void Replace(views::View* old, views::View* replacement) {
+    if (opening_pane_ == old) opening_pane_ = replacement;
     if (first_ == old) first_ = replacement; else second_ = replacement;
   }
   void OnResize(int amount, bool done) override {
     const int available = std::max(1, (vertical_ ? height() : width()) - kSplitResizeWidth);
     if (!drag_start_) {
-      drag_start_ = ratio_ * available;
+      drag_start_ = vertical_ ? divider_->y() : divider_->x();
+      FinishOpening();
       if (resizing_) resizing_.Run(true);
     }
-    const int minimum = std::min(vertical_ ? 100 : 180, available / 2);
+    const int minimum = SplitMinimumExtent(available, vertical_);
     const int position = std::clamp(*drag_start_ + amount, minimum, available - minimum);
     const int snapped_position = SnapResizePosition(position, available / 2, snapped_);
-    pending_ratio_ = static_cast<float>(snapped_position) / available;
+    pending_ratio_ = static_cast<double>(snapped_position) / available;
     if (done) {
       resize_timer_.Stop();
       FlushResize();
@@ -4642,33 +4694,77 @@ class PaneSplit : public views::View, public views::ResizeAreaDelegate {
   }
   void FlushResize() {
     const int available = std::max(0, (vertical_ ? height() : width()) - kSplitResizeWidth);
-    const bool moved = static_cast<int>(available * ratio_) != static_cast<int>(available * pending_ratio_);
+    const bool moved = SplitFirstExtent(available, vertical_, ratio_) != SplitFirstExtent(available, vertical_, pending_ratio_);
     ratio_ = pending_ratio_;
     if (moved) InvalidateLayout();
   }
   void Layout(PassKey) override {
-    const int available = std::max(0, (vertical_ ? height() : width()) - kSplitResizeWidth);
-    const int extent = std::clamp(static_cast<int>(available * ratio_), 0, available);
-    if (vertical_) {
-      first_->SetBounds(0, 0, width(), extent); divider_->SetBounds(0, extent, width(), kSplitResizeWidth);
-      second_->SetBounds(0, extent + kSplitResizeWidth, width(), available - extent);
-    } else {
-      first_->SetBounds(0, 0, extent, height()); divider_->SetBounds(extent, 0, kSplitResizeWidth, height());
-      second_->SetBounds(extent + kSplitResizeWidth, 0, available - extent, height());
+    if (opening_pane_ && !opening_.is_animating()) {
+      if (size().IsEmpty()) return;
+      if (IsDrawn() && GetWidget()) {
+        const auto bounds = CalculateSplitBounds(size(), vertical_, ratio_);
+        const auto& target = opening_pane_ == first_ ? bounds.second : bounds.first;
+        const auto from = opening_from_.value_or(GetLocalBounds());
+        if (from == target) {
+          opening_pane_ = nullptr;
+        } else {
+          const int remaining = std::max({std::abs(from.x() - target.x()), std::abs(from.right() - target.right()),
+                                          std::abs(from.y() - target.y()), std::abs(from.bottom() - target.bottom())});
+          const int travel = vertical_ ? height() - target.height() : width() - target.width();
+          opening_.SetDuration(base::Milliseconds(180) * std::min(1.0, static_cast<double>(remaining) / std::max(1, travel)));
+          SetPaintToLayer();
+          layer()->SetFillsBoundsOpaquely(false);
+          layer()->SetMasksToBounds(true);
+          opening_.Start();
+        }
+      } else {
+        opening_pane_ = nullptr;
+      }
     }
+    PositionPanes();
     LayoutSuperclass<views::View>(this);
   }
  private:
+  void PositionPanes() {
+    auto [first, second] = CalculateSplitBounds(size(), vertical_, ratio_);
+    int divider = vertical_ ? first.height() : first.width();
+    if (opening_.is_animating()) {
+      const bool new_first = opening_pane_ == first_;
+      const double progress = gfx::Tween::CalculateValue(gfx::Tween::EASE_OUT, opening_.GetCurrentValue());
+      auto& original = new_first ? second : first;
+      original = gfx::Tween::RectValueBetween(progress, opening_from_.value_or(GetLocalBounds()), original);
+      if (new_first) {
+        divider = (vertical_ ? original.y() : original.x()) - kSplitResizeWidth;
+        const int extent = vertical_ ? first.height() : first.width();
+        first = SplitAxisBounds(size(), vertical_, divider - extent, extent);
+      } else {
+        divider = vertical_ ? original.bottom() : original.right();
+        second = SplitAxisBounds(size(), vertical_, divider + kSplitResizeWidth, vertical_ ? second.height() : second.width());
+      }
+    }
+    first_->SetBoundsRect(first);
+    second_->SetBoundsRect(second);
+    divider_->SetBoundsRect(SplitAxisBounds(size(), vertical_, divider, kSplitResizeWidth));
+  }
+  void AnimationProgressed(const gfx::Animation*) override { PositionPanes(); }
+  void AnimationEnded(const gfx::Animation*) override {
+    opening_pane_ = nullptr;
+    PositionPanes();
+    DestroyLayer();
+  }
   base::RepeatingClosure changed_;
   base::RepeatingCallback<void(bool)> resizing_;
   base::OneShotTimer resize_timer_;
-  float pending_ratio_ = 0.5f;
+  double pending_ratio_ = 0.5;
   bool snapped_ = false;
   bool vertical_;
-  float ratio_ = 0.5f;
+  double ratio_ = 0.5;
   std::optional<int> drag_start_;
   raw_ptr<views::View> first_, second_;
   raw_ptr<views::ResizeArea> divider_;
+  raw_ptr<views::View> opening_pane_ = nullptr;
+  std::optional<gfx::Rect> opening_from_;
+  gfx::LinearAnimation opening_{base::Milliseconds(180), gfx::LinearAnimation::kDefaultFrameRate, this};
 };
 BEGIN_METADATA(PaneSplit)
 END_METADATA
@@ -5169,7 +5265,7 @@ struct Tab {
 };
 // The shell owns shared navigation, tabs and sharing. Each leaf has its own
 // controller and file state; hidden leaf chrome is never registered for shortcuts.
-class FilesView : public views::View, public views::TextfieldController, public views::ResizeAreaDelegate, public views::DragController, public ui::SimpleMenuModel::Delegate, public views::ContextMenuController, public ui::SelectFileDialog::Listener {
+class FilesView : public views::View, public views::TextfieldController, public views::ResizeAreaDelegate, public views::DragController, public ui::SimpleMenuModel::Delegate, public views::ContextMenuController, public ui::SelectFileDialog::Listener, public views::BoundsAnimatorObserver {
   METADATA_HEADER(FilesView, views::View)
  public:
   void NewTabFromTitlebar() { NewCurrentTab(); }
@@ -5285,6 +5381,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     options_button_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
     }
     auto* body = AddChildView(std::make_unique<views::View>());
+    if (root_) pane_body_ = body;
     auto* body_layout = body->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal));
     layout->SetFlexForView(body, 1);
@@ -5996,8 +6093,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     outside_click_handler_.reset();
     views::View::RemovedFromWidget();
   }
+  bool HasNavigationChrome() const {
+    return !history_page_ || network_page_ || tag_id_ >= 0;
+  }
   void OnResize(int amount, bool done) override {
-    if (!sidebar_viewport_ || !ActivePane() || (ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0)) return;
+    auto* pane = ActivePane();
+    if (!sidebar_viewport_ || !pane || !pane->HasNavigationChrome()) return;
     if (!sidebar_drag_start_) {
       sidebar_animation_timer_.Stop();
       sidebar_drag_start_ = sidebar_display_width_;
@@ -6015,12 +6116,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateSidebarPresentation() {
     if (!sidebar_viewport_) return;
-    const bool history = ActivePane() && ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0;
+    const auto* pane = ActivePane();
+    const bool available = !pane || pane->HasNavigationChrome();
     sidebar_viewport_->SetPreferredSize(gfx::Size(sidebar_display_width_, 0));
-    sidebar_viewport_->SetVisible(!history && sidebar_display_width_ > 0);
-    sidebar_resize_->SetVisible(!history);
+    sidebar_viewport_->SetVisible(available && sidebar_display_width_ > 0);
+    sidebar_resize_->SetVisible(available);
     sidebar_resize_->SetCollapsed(sidebar_display_width_ == 0);
-    if (!root_) SidebarObservers().Notify(!history && sidebar_visible_);
+    if (!root_) SidebarObservers().Notify(available && sidebar_visible_);
     InvalidateLayout();
   }
   void AnimateSidebarTo(int target) {
@@ -6042,13 +6144,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateSidebarPresentation();
   }
   void RestoreSidebar() {
-    if (!ActivePane() || (ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0)) return;
+    auto* pane = ActivePane();
+    if (!pane || !pane->HasNavigationChrome()) return;
     sidebar_drag_start_.reset();
     AnimateSidebarTo(sidebar_width_);
     ActivePane()->DefaultFocusView()->RequestFocus();
   }
-  void Layout(PassKey) override {
-    LayoutSuperclass<views::View>(this);
+  void LayoutPaneFooter() {
     if (root_ && footer_) {
       const auto area = footer_->parent()->GetContentsBounds();
       const bool trash = Current().path == TrashRoot();
@@ -6072,6 +6174,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (footer_->GetVisible()) footer_->DeprecatedLayoutImmediately();
       if (IsDrawn() && area.width() > 0) footer_restore_pending_ = false;
     }
+  }
+  void Layout(PassKey) override {
+    LayoutSuperclass<views::View>(this);
+    LayoutPaneFooter();
     if (drop_highlight_) drop_highlight_->SetBoundsRect(drop_highlight_bounds_);
     if (root_) return;
     fullscreen_exit_->SetBounds((width() - kFullscreenExitSize) / 2,
@@ -6431,7 +6537,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ToggleSidebarFromTitlebar() { ToggleSidebar(); }
   bool SidebarVisible() {
-    return sidebar_visible_ && !(ActivePane() && ActivePane()->history_page_ && !ActivePane()->network_page_ && ActivePane()->tag_id_ < 0);
+    const auto* pane = ActivePane();
+    return sidebar_visible_ && (!pane || pane->HasNavigationChrome());
   }
   void ShowMoreMenu() {
     if (!root_ || (more_menu_runner_ && more_menu_runner_->IsRunning())) return;
@@ -6476,9 +6583,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!root_) return false;
     *formats = ui::OSExchangeData::FILE_NAME; return true;
   }
+  bool AcceptsLocalDrop() {
+    return root_ && !history_page_ && !IsTagListing() && !root_->local_operation_busy_ && !Current().loading &&
+        !Current().error && !IsDrivesLocation(Current().path) && Current().path != TrashRoot() && !TrashRoot().IsParent(Current().path);
+  }
   bool CanDrop(const ui::OSExchangeData& data) override {
-    if (!root_ || history_page_ || IsTagListing() || root_->local_operation_busy_ || Current().loading || Current().error ||
-        IsDrivesLocation(Current().path) || Current().path == TrashRoot() || TrashRoot().IsParent(Current().path)) return false;
+    if (!AcceptsLocalDrop()) return false;
     const auto files = data.GetFilenames();
     if (!files || files->empty() || files->size() > 4096) return false;
     for (const auto& file : *files)
@@ -6489,7 +6599,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!root_ || !files_->contents()) return {};
     auto point = event.location();
     views::View::ConvertPointToTarget(this, files_, &point);
-    if (!files_->HitTestPoint(point)) return {};
+    if (!files_->HitTestPoint(point)) {
+      // Empty space uncovered while the body expands is folder background.
+      const gfx::Point pane_point(GetMirroredXWithWidthInView(event.x(), 1), event.y());
+      if (!split_preview_shown_ && split_hit_area_ && split_hit_area_->Contains(pane_point)) return Current().path;
+      return {};
+    }
     if (footer_shown_) {
       auto footer_point = event.location();
       views::View::ConvertPointToTarget(this, footer_, &footer_point);
@@ -6512,7 +6627,65 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (file.path == destination || file.path.IsParent(destination) || file.path.DirName() == destination) return false;
     return true;
   }
+  struct FolderSplitDrop {
+    base::FilePath folder;
+    int direction;
+    gfx::Rect hit_area, original, preview;
+    ui::mojom::DragOperation operation;
+  };
+  std::optional<FolderSplitDrop> FolderSplitAt(const ui::DropTargetEvent& event) {
+    if (!root_ || !root_->file_drag_cursor_observer_ || !files_->contents()) return std::nullopt;
+    const auto& folder = root_->file_drag_cursor_observer_->folder();
+    if (folder.empty() || !AcceptsLocalDrop()) return std::nullopt;
+
+    const gfx::Rect area = split_hit_area_ ? *split_hit_area_ : SplitDropHitArea();
+    // Use the pre-preview viewport even while scrollbars or the footer move.
+    const gfx::Point point(GetMirroredXWithWidthInView(event.x(), 1), event.y());
+    if (!area.Contains(point)) return std::nullopt;
+    const std::array distances = {point.x() - area.x(), area.right() - 1 - point.x(),
+                                  point.y() - area.y(), area.bottom() - 1 - point.y()};
+    const auto nearest = std::ranges::min_element(distances);
+    if (*nearest >= std::min({32, area.width() / 4, area.height() / 4})) return std::nullopt;
+    const auto filenames = event.data().GetFilenames();
+    if (!filenames || filenames->size() != 1 || filenames->front().path != folder) return std::nullopt;
+    const int direction = nearest - distances.begin();  // Left, right, top, bottom.
+    const bool new_first = direction == 0 || direction == 2;
+    const auto bounds = CalculateSplitBounds(size(), direction >= 2, InitialSplitRatio(new_first));
+    const auto& preview = new_first ? bounds.first : bounds.second;
+    if (!preview.Intersects(area)) return std::nullopt;
+    // Wayland can expose only COPY for a source offering both COPY and LINK.
+    auto operation = ui::mojom::DragOperation::kLink;
+    if (!(event.source_operations() & ui::DragDropTypes::DRAG_LINK)) {
+      if (!(event.source_operations() & ui::DragDropTypes::DRAG_COPY)) return std::nullopt;
+      operation = ui::mojom::DragOperation::kCopy;
+    }
+    return FolderSplitDrop{folder, direction, area, new_first ? bounds.second : bounds.first, preview, operation};
+  }
+  gfx::Rect SplitDropHitArea() {
+    const auto bounds_in_pane = [this](views::View* view) {
+      return GetMirroredRect(views::View::ConvertRectToTarget(view, this, view->GetLocalBounds()));
+    };
+    gfx::Rect area = bounds_in_pane(files_->contents()->parent());
+    auto* vertical = files_->vertical_scroll_bar();
+    if (vertical->GetVisible()) {
+      const auto bar = bounds_in_pane(vertical);
+      area.Subtract(gfx::Rect(bar.x(), area.y(), bar.width(), area.height()));
+    }
+    int bottom = area.bottom();
+    if (files_->horizontal_scroll_bar()->GetVisible())
+      bottom = std::min(bottom, bounds_in_pane(files_->horizontal_scroll_bar()).y());
+    if (footer_shown_) bottom = std::min(bottom, bounds_in_pane(footer_).y());
+    area.set_height(std::max(0, bottom - area.y()));
+
+    return area;
+  }
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    if (auto split = FolderSplitAt(event)) {
+      SetDropHighlight(false);
+      ShowSplitPreview(*split);
+      return static_cast<int>(split->operation);
+    }
+    HideSplitPreview();
     const auto destination = DropDirectoryAt(event);
     if (!ValidDropDestination(event.data(), destination)) { OnDragExited(); return ui::DragDropTypes::DRAG_NONE; }
     const int operation = ui::DragDropTypes::DRAG_COPY;
@@ -6530,9 +6703,44 @@ class FilesView : public views::View, public views::TextfieldController, public 
     SetDropHighlight(true, highlight);
     return operation;
   }
-  void OnDragExited() override { SetDropHighlight(false); if (root_) root_->UpdatePaneControls(); }
+  void OnDragExited() override {
+    HideSplitPreview(); SetDropHighlight(false);
+    if (root_) root_->UpdatePaneControls();
+  }
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
+    if (auto split = FolderSplitAt(event)) {
+      return base::BindOnce(&FilesView::DropFolderInSplit, weak_.GetWeakPtr(), Current().path, std::move(*split));
+    }
+    // If the displayed split target disappeared at release, cancel the drop.
+    // In particular, Wayland's COPY result must not start a file transfer here.
+    if (split_preview_shown_) {
+      OnDragExited();
+      return base::DoNothing();
+    }
     return base::BindOnce(&FilesView::DropFiles, weak_.GetWeakPtr(), Current().path, DropDirectoryAt(event));
+  }
+  void DropFolderInSplit(base::FilePath target_directory, FolderSplitDrop split, const ui::DropTargetEvent& event,
+                         ui::mojom::DragOperation& operation, std::unique_ptr<ui::LayerTreeOwner>) {
+    operation = ui::mojom::DragOperation::kNone;
+    if (Current().path != target_directory || !CanDrop(event.data())) { OnDragExited(); return; }
+    operation = split.operation;
+    std::optional<gfx::Rect> original;
+    if (split_hit_area_) {
+      original = pane_body_->bounds();
+      split_preview_animator_->Cancel();
+      if (root_->file_drag_cursor_observer_) root_->file_drag_cursor_observer_->SetPreviewCleanup({});
+    }
+    // Reparent the target after the native drop callback has unwound.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, base::BindOnce(
+        [](base::WeakPtr<FilesView> pane, base::FilePath previous, int direction, base::FilePath folder,
+           std::optional<gfx::Rect> original) {
+          if (!pane) return;
+          if (pane->Current().path != previous || !pane->root_->Current().pane_host->Contains(pane.get())) {
+            pane->OnDragExited(); return;
+          }
+          pane->ResetSplitPreview();
+          pane->root_->SplitPane(pane.get(), direction, std::move(folder), std::nullopt, original);
+        }, weak_.GetWeakPtr(), std::move(target_directory), split.direction, std::move(split.folder), original));
   }
   void DropFiles(base::FilePath source_view_directory, base::FilePath destination, const ui::DropTargetEvent& event,
                  ui::mojom::DragOperation& operation, std::unique_ptr<ui::LayerTreeOwner>) {
@@ -7566,22 +7774,105 @@ class FilesView : public views::View, public views::TextfieldController, public 
     layer->SetTransform(offset); layer->SetOpacity(show ? 1.f : 0.f);
     // The overlay never participates in file viewport layout.
   }
+  views::View* CreateDropOverlay() {
+    auto* overlay = AddChildView(std::make_unique<views::View>());
+    overlay->SetProperty(views::kViewIgnoredByLayoutKey, true);
+    overlay->SetCanProcessEventsWithinSubtree(false);
+    overlay->SetBorder(views::CreateSolidBorder(2, ui::kColorSysPrimary));
+    overlay->SetPaintToLayer(); overlay->layer()->SetFillsBoundsOpaquely(false);
+    overlay->layer()->SetOpacity(0.f);
+    return overlay;
+  }
+  void ShowSplitPreview(const FolderSplitDrop& split) {
+    if (!split_preview_) {
+      split_preview_ = CreateDropOverlay();
+      split_preview_->SetBackground(std::make_unique<SelectionMarqueeBackground>());
+      split_preview_animator_ = std::make_unique<views::BoundsAnimator>(this);
+      split_preview_animator_->AddObserver(this);
+      split_preview_animator_->SetAnimationDuration(base::Milliseconds(160));
+      split_preview_animator_->set_tween_type(gfx::Tween::EASE_OUT);
+    }
+    const bool animate = gfx::Animation::ShouldRenderRichAnimation() && !gfx::Animation::PrefersReducedMotion();
+    if (split_preview_shown_ && split_preview_animator_->GetTargetBounds(split_preview_) == split.preview &&
+        (animate || !split_preview_animator_->IsAnimating(split_preview_))) return;
+    if (!split_preview_shown_)
+      root_->file_drag_cursor_observer_->SetPreviewCleanup(base::BindOnce(&FilesView::HideSplitPreview, weak_.GetWeakPtr()));
+    if (!split_hit_area_) {
+      split_hit_area_ = split.hit_area;
+      // The FilesView remains the full-size drop target while the body reflows.
+      pane_body_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+      if (animate) {
+        // View bounds use the same mirrored layout coordinates as SplitPane.
+        gfx::Rect strip = split.preview;
+        if (split.direction < 2) {
+          if (split.direction == 1) strip.set_x(strip.right() - 2);
+          strip.set_width(2);
+        } else {
+          if (split.direction == 3) strip.set_y(strip.bottom() - 2);
+          strip.set_height(2);
+        }
+        split_preview_->SetBoundsRect(strip);
+      }
+    }
+    split_preview_shown_ = true;
+    split_preview_->layer()->GetAnimator()->StopAnimating();
+    split_preview_->layer()->SetOpacity(1.f);
+    if (animate) {
+      // On an edge change, continue from the currently displayed rectangle.
+      split_preview_animator_->AnimateViewTo(split_preview_, split.preview);
+      split_preview_animator_->AnimateViewTo(pane_body_, split.original);
+    } else {
+      split_preview_animator_->Cancel();
+      split_preview_->SetBoundsRect(split.preview);
+      pane_body_->SetBoundsRect(split.original);
+      LayoutPaneFooter();
+    }
+  }
+  void HideSplitPreview() {
+    if (!split_preview_shown_) return;
+    split_preview_shown_ = false;
+    split_preview_animator_->StopAnimatingView(split_preview_);
+    auto* layer = split_preview_->layer();
+    ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
+    const bool animate = gfx::Animation::ShouldRenderRichAnimation() && !gfx::Animation::PrefersReducedMotion();
+    settings.SetTransitionDuration(animate ? base::Milliseconds(90) : base::TimeDelta());
+    settings.SetTweenType(gfx::Tween::EASE_OUT);
+    layer->SetOpacity(0.f);
+    if (animate) split_preview_animator_->AnimateViewTo(pane_body_, GetLocalBounds());
+    else ResetSplitPreview();
+  }
+  void OnBoundsAnimatorProgressed(views::BoundsAnimator*) override {
+    if (split_hit_area_) LayoutPaneFooter();
+  }
+  void OnBoundsAnimatorDone(views::BoundsAnimator*) override {
+    if (!split_preview_shown_ && split_hit_area_) {
+      split_hit_area_.reset();
+      pane_body_->SetProperty(views::kViewIgnoredByLayoutKey, false);
+    }
+  }
+  void ResetSplitPreview() {
+    if (!split_preview_) return;
+    split_hit_area_.reset();
+    split_preview_shown_ = false;
+    split_preview_animator_->Cancel();
+    split_preview_->layer()->GetAnimator()->StopAnimating();
+    split_preview_->layer()->SetOpacity(0.f);
+    pane_body_->SetProperty(views::kViewIgnoredByLayoutKey, false);
+    InvalidateLayout();
+  }
+  void OnBoundsChanged(const gfx::Rect& previous) override {
+    if (split_hit_area_ && previous.size() != size()) ResetSplitPreview();
+  }
   void SetDropHighlight(bool show, gfx::Rect bounds = {}) {
     if (!root_) return;
     if (show) {
       drop_highlight_bounds_ = bounds;
       if (drop_highlight_) drop_highlight_->SetBoundsRect(bounds);
     }
+    if (!show && !drop_highlight_shown_) return;
+    if (!drop_highlight_) drop_highlight_ = CreateDropOverlay();
     if (show == drop_highlight_shown_) return;
     drop_highlight_shown_ = show;
-    if (!drop_highlight_) {
-      drop_highlight_ = AddChildView(std::make_unique<views::View>());
-      drop_highlight_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-      drop_highlight_->SetCanProcessEventsWithinSubtree(false);
-      drop_highlight_->SetBorder(views::CreateSolidBorder(2, ui::kColorSysPrimary));
-      drop_highlight_->SetPaintToLayer(); drop_highlight_->layer()->SetFillsBoundsOpaquely(false);
-      drop_highlight_->layer()->SetOpacity(0.f);
-    }
     drop_highlight_->SetBoundsRect(drop_highlight_bounds_);
     auto* layer = drop_highlight_->layer(); layer->GetAnimator()->StopAnimating();
     ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
@@ -7627,7 +7918,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void StartFileDrag() {
     FinishFileDrag();
-    file_drag_cursor_observer_ = std::make_unique<FileDragCursorObserver>(GetWidget());
+    base::FilePath folder;
+    if (Current().selected.size() == 1 && !IsTagListing() && Current().path != TrashRoot() &&
+        !TrashRoot().IsParent(Current().path)) {
+      const auto& path = *Current().selected.begin();
+      const auto entry = std::ranges::find(Current().entries, path, &Entry::path);
+      if (entry != Current().entries.end() && entry->directory && !entry->package && !Current().removed.contains(path))
+        folder = path;
+    }
+    root_->file_drag_cursor_observer_ = std::make_unique<FileDragCursorObserver>(GetWidget(), std::move(folder));
     for (const auto& path : Current().selected) {
       auto found = row_views_.find(path); if (found == row_views_.end()) continue;
       auto* row = found->second.get();
@@ -8280,10 +8579,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (selected) {
         const auto style = GetSplitSelectionStyle();
         if (!pane->pane_border_active_ || pane->pane_border_style_ != style)
-          pane->SetBorder(std::make_unique<ActivePaneBorder>(pane, surface, style));
+          pane->pane_body_->SetBorder(std::make_unique<ActivePaneBorder>(pane->pane_body_, surface, style));
         pane->pane_border_style_ = style;
       } else {
-        pane->SetBorder(views::CreateSolidBorder(multiple ? 4 : 1, surface));
+        pane->pane_body_->SetBorder(views::CreateSolidBorder(multiple ? 4 : 1, surface));
       }
       pane->pane_border_active_ = selected;
       const bool trash = pane->trash_footer_actions_->GetVisible();
@@ -8425,7 +8724,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void RequestSplit(int direction) {
     if (root_) root_->SplitPane(this, direction);
   }
-  void SplitPane(FilesView* target, int direction, base::FilePath path = {}, std::optional<SmbCredentials> network = std::nullopt) {
+  void SplitPane(FilesView* target, int direction, base::FilePath path = {}, std::optional<SmbCredentials> network = std::nullopt,
+                 std::optional<gfx::Rect> preview_bounds = std::nullopt) {
     if (!Current().pane_host->Contains(target)) return;
     target->CloseNewFolder(); target->CloseViewOptions();
     if (!network && target->network_view_) network = NetworkPageCredentials(target->network_view_);
@@ -8435,11 +8735,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto* added = pane.get();
     auto* parent = target->parent();
     auto* outer = views::AsViewClass<PaneSplit>(parent);
+    if (outer) outer->FinishOpening();
     auto original = parent->RemoveChildViewT(target);
     const bool before = direction == 0 || direction == 2;
     std::unique_ptr<views::View> first = before ? std::move(pane) : std::move(original);
     std::unique_ptr<views::View> second = before ? std::move(original) : std::move(pane);
     auto split = std::make_unique<PaneSplit>(direction >= 2, std::move(first), std::move(second));
+    split->PrepareOpening(before, preview_bounds);
     split->SetChangedCallback(base::BindRepeating(&FilesView::ScheduleWorkspaceSave, weak_.GetWeakPtr()));
     split->SetResizeCallback(base::BindRepeating(&FilesView::SplitResizeChanged, weak_.GetWeakPtr()));
     if (outer) outer->Replace(target, split.get());
@@ -8469,6 +8771,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!Current().pane_host->Contains(target)) return;
     auto* split = views::AsViewClass<PaneSplit>(target->parent());
     if (!split) return;
+    split->FinishOpening();
     target->CloseNewFolder(); target->CloseViewOptions();
     auto* parent = split->parent();
     auto* sibling = split->Sibling(target);
@@ -8535,8 +8838,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, weak_.GetWeakPtr()));
   }
   void ToggleSidebar() {
+    auto* pane = ActivePane();
+    if (!pane || !pane->HasNavigationChrome()) return;
     EndAddressEditing();
-    if (ActivePane()->history_page_) return;
     sidebar_drag_start_.reset();
     AnimateSidebarTo(sidebar_visible_ ? 0 : sidebar_width_);
     ActivePane()->DefaultFocusView()->RequestFocus();
@@ -9473,10 +9777,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     // The outer inset belongs to navigation chrome; each pane paints its own
     // content surface. Keep the sidebar and toolbar consistent across tabs.
     SetBackground(std::make_unique<NavigationBackground>());
-    toolbar_->SetVisible(!pane->history_page_ || pane->tag_id_ >= 0 || pane->network_page_);
+    toolbar_->SetVisible(pane->HasNavigationChrome());
     view_toggle_->SetEnabled(true);
     options_button_->SetEnabled(true);
-    if (pane->history_page_ && !pane->network_page_ && pane->tag_id_ < 0 && sidebar_drag_start_) {
+    if (!pane->HasNavigationChrome() && sidebar_drag_start_) {
       sidebar_drag_start_.reset();
       AnimateSidebarTo(sidebar_display_width_ < 110 ? 0 : std::clamp(sidebar_display_width_, 220, 360));
     }
@@ -11366,6 +11670,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
 
   gfx::Rect drop_highlight_bounds_;
+  raw_ptr<views::View> pane_body_ = nullptr;
+  std::optional<gfx::Rect> split_hit_area_;
+  raw_ptr<views::View> split_preview_ = nullptr;
+  std::unique_ptr<views::BoundsAnimator> split_preview_animator_;
+  bool split_preview_shown_ = false;
   raw_ptr<views::View> footer_ = nullptr, drop_highlight_ = nullptr;
   base::OneShotTimer footer_hide_timer_;
   base::RepeatingTimer footer_pointer_timer_;

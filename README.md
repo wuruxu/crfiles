@@ -500,9 +500,19 @@ performed, in accordance with the workspace instructions.
 
 ## Split panes
 
-Each tab retains an independent binary split layout. The four footer controls
-create a pane to the left, right, top or bottom of the clicked pane, initially
-showing the same directory and view options. Drag the divider to resize panes.
+Each tab retains an independent binary split layout. Drag a single folder from
+a local directory in crFiles to an edge of the same or another local pane.
+The target pane resizes as the highlighted space opens beside it. The new pane
+takes 38.2% of the available width or height and the original pane keeps 61.8%,
+subject to the minimum pane sizes. Other panes keep their positions.
+Moving to another edge redirects the preview. Releasing opens the folder
+from the current preview position. Moving back to the center or canceling
+restores the original pane, and the center accepts ordinary file drops.
+The folder context menu opens splits in all four directions with a 180 ms
+transition. Reduced motion applies layout changes immediately.
+Workspace restoration uses the saved divider ratio.
+The new pane inherits the target pane's view options.
+Drag the divider to resize panes.
 Clicking a pane activates it; the shared breadcrumbs, editable path, history and
 view-options controls operate on that pane. Selection, scroll position, sorting,
 column widths and directory requests remain local to each pane.

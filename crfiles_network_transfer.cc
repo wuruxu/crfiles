@@ -84,8 +84,11 @@ CopyPlan LocalPlan(const std::vector<base::FilePath>& roots) {
     item.directory = info.is_directory;
     plan.items.push_back(item);
     if (!item.directory) continue;
-    base::FileEnumerator files(item.local, false,
-        base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES | base::FileEnumerator::SHOW_SYM_LINKS,
+    int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+    types |= base::FileEnumerator::SHOW_SYM_LINKS;
+#endif
+    base::FileEnumerator files(item.local, false, types,
         base::FilePath::StringType(), base::FileEnumerator::FolderSearchPolicy::ALL,
         base::FileEnumerator::ErrorPolicy::STOP_ENUMERATION);
     for (auto path = files.Next(); !path.empty(); path = files.Next()) {
