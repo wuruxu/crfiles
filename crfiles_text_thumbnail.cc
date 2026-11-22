@@ -17,7 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#include <fontconfig/fontconfig.h>
+#include "libcr/font_fallback_linux.h"
 #endif
 #include "skia/ext/font_utils.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -34,27 +34,7 @@ bool Stopped(const std::shared_ptr<std::atomic_bool>& canceled) {
 }
 sk_sp<SkTypeface> MatchTextFallback(SkFontMgr* manager, SkUnichar character) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  // Chromium's Linux FCI font manager aborts in matchFamilyStyleCharacter().
-  // Use request-local Fontconfig objects; gfx's UI fallback caches are not
-  // synchronized for our parallel thumbnail workers.
-  std::unique_ptr<FcPattern, decltype(&FcPatternDestroy)> pattern(FcPatternCreate(), &FcPatternDestroy);
-  std::unique_ptr<FcCharSet, decltype(&FcCharSetDestroy)> charset(FcCharSetCreate(), &FcCharSetDestroy);
-  if (!pattern || !charset || !FcCharSetAddChar(charset.get(), character) ||
-      !FcPatternAddCharSet(pattern.get(), FC_CHARSET, charset.get()) ||
-      !FcConfigSubstitute(nullptr, pattern.get(), FcMatchPattern)) return {};
-  FcDefaultSubstitute(pattern.get());
-  FcResult result = FcResultNoMatch;
-  std::unique_ptr<FcPattern, decltype(&FcPatternDestroy)> match(
-      FcFontMatch(nullptr, pattern.get(), &result), &FcPatternDestroy);
-  if (!match || result != FcResultMatch) return {};
-  FcChar8* filename = nullptr;
-  int index = 0;
-  if (FcPatternGetString(match.get(), FC_FILE, 0, &filename) != FcResultMatch || !filename) return {};
-  FcPatternGetInteger(match.get(), FC_INDEX, 0, &index);
-  if (index < 0) return {};
-  auto face = manager->makeFromFile(reinterpret_cast<const char*>(filename), index);
-  if (!face || !face->unicharToGlyph(character)) return {};
-  return face;
+  return libcr::MatchFallbackTypeface(*manager, SkFontStyle(), character);
 #else
   return manager->matchFamilyStyleCharacter(nullptr, SkFontStyle(), nullptr, 0, character);
 #endif

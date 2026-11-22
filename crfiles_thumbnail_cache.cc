@@ -70,7 +70,7 @@ std::string CacheKey(const base::FilePath& path, const base::File::Info& info, i
   key.WriteInt64(info.last_modified.ToDeltaSinceWindowsEpoch().InMicroseconds());
   key.WriteInt64(info.creation_time.ToDeltaSinceWindowsEpoch().InMicroseconds());
   key.WriteInt(edge); key.WriteInt(static_cast<int>(kN32_SkColorType));
-  if (path.MatchesFinalExtension(FILE_PATH_LITERAL(".svg"))) key.WriteString("svg-v2");
+  if (path.MatchesFinalExtension(FILE_PATH_LITERAL(".svg"))) key.WriteString("svg-v3");
   return base::HexEncode(crypto::hash::Sha256(key.AsBytes())) + ".thumb";
 }
 struct DiskItem { std::string name; size_t bytes; base::Time touched; };
