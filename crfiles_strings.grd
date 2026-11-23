@@ -35,16 +35,19 @@
   <release seq="1">
     <!-- Reserve 31000-31999 for strings; keep binary assets in a separate range. -->
     <includes first_id="32000">
-      <include name="IDR_CRFILES_AVATAR_0" file="../chrome/app/theme/default_200_percent/common/profile_avatar_cat.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_1" file="../chrome/app/theme/default_200_percent/common/profile_avatar_dog.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_2" file="../chrome/app/theme/default_200_percent/common/profile_avatar_flower.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_3" file="../chrome/app/theme/default_200_percent/common/profile_avatar_horse.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_4" file="../chrome/app/theme/default_200_percent/common/profile_avatar_cupcake.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_5" file="../chrome/app/theme/default_200_percent/common/profile_avatar_awesome.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_6" file="../chrome/app/theme/default_200_percent/common/profile_avatar_soccer.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_7" file="../chrome/app/theme/default_200_percent/common/profile_avatar_ninja.png" type="BINDATA" />
-      <include name="IDR_CRFILES_AVATAR_8" file="../chrome/app/theme/default_200_percent/common/profile_avatar_sun_cloud.png" type="BINDATA" />
-      <include name="IDR_CRFILES_QUICK_SHARE_ICON" file="resources/quick_share.svg" type="BINDATA" />
+      <!-- The en-US output supplies these shared assets to crfiles_resources.pak. -->
+      <if expr="lang == 'en'">
+        <include name="IDR_CRFILES_AVATAR_0" file="../chrome/app/theme/default_200_percent/common/profile_avatar_cat.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_1" file="../chrome/app/theme/default_200_percent/common/profile_avatar_dog.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_2" file="../chrome/app/theme/default_200_percent/common/profile_avatar_flower.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_3" file="../chrome/app/theme/default_200_percent/common/profile_avatar_horse.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_4" file="../chrome/app/theme/default_200_percent/common/profile_avatar_cupcake.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_5" file="../chrome/app/theme/default_200_percent/common/profile_avatar_awesome.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_6" file="../chrome/app/theme/default_200_percent/common/profile_avatar_soccer.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_7" file="../chrome/app/theme/default_200_percent/common/profile_avatar_ninja.png" type="BINDATA" />
+        <include name="IDR_CRFILES_AVATAR_8" file="../chrome/app/theme/default_200_percent/common/profile_avatar_sun_cloud.png" type="BINDATA" />
+        <include name="IDR_CRFILES_QUICK_SHARE_ICON" file="resources/quick_share.svg" type="BINDATA" />
+      </if>
     </includes>
     <messages first_id="31000" fallback_to_english="true">
       <message name="IDS_CRFILES_ABOUT" desc="crFiles file manager interface.">About</message>

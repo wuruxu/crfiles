@@ -25,6 +25,7 @@
 #include "ui/display/screen.h"
 #include <algorithm>
 #include <deque>
+#include <functional>
 #include <atomic>
 #include <memory>
 #include <list>
@@ -65,6 +66,7 @@
 #include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/third_party/icu/icu_utf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/task/bind_post_task.h"
@@ -2161,29 +2163,52 @@ class PathCompletion {
   void Cancel() { ClosePopup(); }
   void Changed() {
     if (updating_) return;
-    ++generation_; pending_ = true; timer_.Stop();
+    ++generation_;
+    accept_on_ready_ = false;
     auto* field = Field();
     if (!field || !field->HasFocus() || field->IsIMEComposing()) { ClosePopup(); return; }
     input_ = std::u16string(field->GetText());
     if (field->GetCursorPosition() != input_.size()) { ClosePopup(); return; }
-    timer_.Start(FROM_HERE, base::Milliseconds(120), base::BindOnce(&PathCompletion::Query, weak_.GetWeakPtr()));
+    const auto split = input_.find_last_of(u"/\\");
+    if (split == std::u16string::npos) { ClosePopup(); return; }
+    auto parent = ParseNavigationPath(std::u16string_view(input_).substr(0, split + 1));
+    if (!parent || !parent->IsAbsolute()) { ClosePopup(); return; }
+    pending_ = true;
+    timer_.Start(FROM_HERE, base::Milliseconds(120),
+        base::BindOnce(&PathCompletion::Query, weak_.GetWeakPtr(), std::move(*parent), split));
+  }
+  bool CanCompleteOnTab(const ui::KeyEvent& event) {
+    if (event.type() != ui::EventType::kKeyPressed || event.key_code() != ui::VKEY_TAB ||
+        event.IsShiftDown() || event.IsControlDown() || event.IsAltDown() ||
+        event.IsAltGrDown() || event.IsCommandDown()) return false;
+    auto* field = Field();
+    return field && field->HasFocus() && !field->IsIMEComposing() && !field->HasSelection() &&
+           field->GetText() == input_ && field->GetCursorPosition() == input_.size() &&
+           (pending_ || (popup_ && popup_->IsVisible() && !matches_.empty()));
   }
   bool Key(const ui::KeyEvent& event) {
     if (event.type() != ui::EventType::kKeyPressed) return false;
+    if (event.key_code() == ui::VKEY_TAB) {
+      if (!CanCompleteOnTab(event)) return false;
+      if (pending_) {
+        accept_on_ready_ = true;
+        if (timer_.IsRunning()) timer_.FireNow();
+      } else {
+        CompleteOnTab();
+      }
+      return true;
+    }
     auto* field = Field();
     if (!field || field->IsIMEComposing()) return false;
-    if (!popup_ || !popup_->IsVisible() || matches_.empty()) return false;
     if (pending_) {
       if (event.key_code() == ui::VKEY_ESCAPE || event.key_code() == ui::VKEY_RETURN) ClosePopup();
       return false;
     }
+    if (!popup_ || !popup_->IsVisible() || matches_.empty()) return false;
     if (event.key_code() == ui::VKEY_ESCAPE) { ClosePopup(); return true; }
     if (event.key_code() == ui::VKEY_RETURN) {
       if (index_ < matches_.size()) { Choose(index_); return true; }
       ClosePopup(); return false;
-    }
-    if (event.key_code() == ui::VKEY_TAB) {
-      Choose(index_ < matches_.size() ? index_ : 0); return true;
     }
     if (event.key_code() != ui::VKEY_UP && event.key_code() != ui::VKEY_DOWN) return false;
     if (index_ >= matches_.size()) index_ = event.key_code() == ui::VKEY_UP ? matches_.size() - 1 : 0;
@@ -2194,22 +2219,32 @@ class PathCompletion {
     return true;
   }
  private:
+  struct QueryResult {
+    std::vector<std::u16string> paths;
+    std::u16string common_suffix;  // Characters shared immediately after the typed prefix.
+  };
+  static constexpr size_t kMaxVisibleMatches = 128;
   views::Textfield* Field() { return static_cast<views::Textfield*>(field_.view()); }
-  void Query() {
-    auto split = input_.find_last_of(u"/\\");
-    if (split == std::u16string::npos) { ClosePopup(); return; }
-    auto parent = ParseNavigationPath(std::u16string_view(input_).substr(0, split + 1));
-    if (!parent || !parent->IsAbsolute()) { ClosePopup(); return; }
+  void Query(base::FilePath parent, size_t split) {
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce([](base::FilePath directory, std::u16string prefix, std::u16string leaf) {
-          std::vector<std::u16string> result;
+          QueryResult result;
           auto add = [&](std::u16string name) {
 #if BUILDFLAG(IS_WIN)
-            const bool match = base::StartsWith(name, leaf, base::CompareCase::INSENSITIVE_ASCII);
+            const base::CaseInsensitiveCompareASCII<char16_t> equal;
 #else
-            const bool match = name.starts_with(leaf);
+            const std::ranges::equal_to equal;
 #endif
-            if (match) result.push_back(prefix + name + u"/");
+            const std::u16string_view candidate(name);
+            if (!std::ranges::equal(candidate.substr(0, leaf.size()), leaf, equal)) return;
+            const auto suffix = candidate.substr(leaf.size());
+            if (result.paths.empty()) {
+              result.common_suffix = suffix;
+            } else {
+              const auto end = std::ranges::mismatch(result.common_suffix, suffix, equal).in1;
+              result.common_suffix.erase(end, result.common_suffix.end());
+            }
+            if (result.paths.size() < kMaxVisibleMatches) result.paths.push_back(prefix + name + u"/");
           };
 #if BUILDFLAG(IS_WIN)
           if (IsDrivesLocation(directory)) {
@@ -2219,39 +2254,73 @@ class PathCompletion {
 #endif
           {
             base::FileEnumerator entries(directory, false, base::FileEnumerator::DIRECTORIES);
-            size_t count = 0;
-            for (auto path = entries.Next(); !path.empty() && count++ < 4096 && result.size() < 128; path = entries.Next())
+            for (auto path = entries.Next(); !path.empty(); path = entries.Next()) {
               add(path.BaseName().AsUTF16Unsafe());
+              // Undisplayed matches can still shorten a nonempty common prefix.
+              if (result.paths.size() == kMaxVisibleMatches && result.common_suffix.empty()) break;
+            }
           }
-          std::ranges::sort(result);
+          if (!result.common_suffix.empty() && CBU16_IS_LEAD(result.common_suffix.back()))
+            result.common_suffix.pop_back();
+          std::ranges::sort(result.paths);
           return result;
-        }, *parent, input_.substr(0, split + 1), input_.substr(split + 1)),
+        }, std::move(parent), input_.substr(0, split + 1), input_.substr(split + 1)),
         base::BindOnce(&PathCompletion::Ready, weak_.GetWeakPtr(), generation_));
   }
-  void Ready(uint64_t generation, std::vector<std::u16string> matches) {
+  void Ready(uint64_t generation, QueryResult result) {
     if (generation != generation_) return;
     pending_ = false;
+    const bool accept = std::exchange(accept_on_ready_, false);
     auto* field = Field();
     if (!field || !field->HasFocus() || field->IsIMEComposing() || field->GetText() != input_ ||
-        field->GetCursorPosition() != input_.size()) return;
-    const auto selected = index_ < matches_.size() ? matches_[index_] : std::u16string();
-    matches_ = std::move(matches);
-    index_ = static_cast<size_t>(std::ranges::find(matches_, selected) - matches_.begin());
+        field->GetCursorPosition() != input_.size() || field->HasSelection()) {
+      ClosePopup();
+      return;
+    }
+    matches_ = std::move(result.paths);
+    common_suffix_ = std::move(result.common_suffix);
+    index_ = matches_.size();
+    if (accept) {
+      if (matches_.empty()) {
+        ClosePopup();
+        field->GetFocusManager()->AdvanceFocus(false);
+      } else {
+        CompleteOnTab();
+      }
+      return;
+    }
     if (!matches_.empty()) ShowPopup();
     else if (popup_) popup_->Hide();
+  }
+  void CompleteOnTab() {
+    if (matches_.size() == 1 || index_ < matches_.size()) {
+      Choose(matches_.size() == 1 ? 0 : index_);
+      return;
+    }
+    if (!common_suffix_.empty()) {
+      input_.append(common_suffix_);
+      common_suffix_.clear();
+      SetFieldText(input_);
+    }
+    ShowPopup();
+  }
+  void SetFieldText(const std::u16string& text) {
+    auto* field = Field();
+    updating_ = true;
+    field->SetText(text);
+    field->SetSelectedRange(gfx::Range(text.size()));
+    updating_ = false;
   }
   void Choose(size_t index) {
     auto* field = Field(); if (!field || pending_ || index >= matches_.size()) return;
     const auto text = matches_[index];
     ClosePopup();
-    updating_ = true;
-    field->SetText(text);
-    field->SetSelectedRange(gfx::Range(text.size()));
+    SetFieldText(text);
     field->RequestFocus();
-    updating_ = false;
   }
   void ClosePopup() {
     ++generation_; pending_ = false; timer_.Stop();
+    accept_on_ready_ = false;
     visibility_timer_.Stop(); rows_.clear(); list_ = nullptr;
     if (popup_delegate_) popup_delegate_->SetAnchorView(nullptr);
     if (popup_) popup_->MakeCloseSynchronous({});
@@ -2319,6 +2388,7 @@ class PathCompletion {
   base::OneShotTimer timer_;
   std::u16string input_;
   std::vector<std::u16string> matches_;
+  std::u16string common_suffix_;
   size_t index_ = 0;
   bool updating_ = false;
   std::unique_ptr<views::BubbleDialogDelegate> popup_delegate_;
@@ -2327,6 +2397,7 @@ class PathCompletion {
   raw_ptr<views::View> list_ = nullptr;
   uint64_t generation_ = 0;
   bool pending_ = false;
+  bool accept_on_ready_ = false;
   base::RepeatingTimer visibility_timer_;
   base::WeakPtrFactory<PathCompletion> weak_{this};
 };
@@ -2371,12 +2442,17 @@ class PathTextfield : public views::Textfield {
     SetBackgroundColor(ui::kColorSysSurfaceVariant);
     views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(), 999);
   }
+  PathCompletion& completion() { return completion_; }
+  bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override {
+    return completion_.CanCompleteOnTab(event) || views::Textfield::SkipDefaultKeyEventProcessing(event);
+  }
   void OnFocus() override {
     SetBackgroundColor(ui::kColorSysBaseContainerElevated);
     views::Textfield::OnFocus();
     SchedulePaint();
   }
   void OnBlur() override {
+    completion_.Cancel();
     SetBackgroundColor(ui::kColorSysSurfaceVariant);
     views::Textfield::OnBlur();
     blur_.Run();
@@ -2399,6 +2475,7 @@ class PathTextfield : public views::Textfield {
     canvas->DrawRoundRect(bounds, bounds.height() / 2, flags);
   }
  private:
+  PathCompletion completion_{this};
   base::RepeatingClosure blur_;
 };
 BEGIN_METADATA(PathTextfield)
@@ -5354,7 +5431,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
         Deferred(base::BindRepeating(&FilesView::EndAddressEditing, weak_.GetWeakPtr()))));
     address_->SetAccessibleName(Text(IDS_CRFILES_LOCATION));
     address_->set_controller(this);
-    address_completion_ = std::make_unique<PathCompletion>(address_);
     address_->SetVisible(false);
     address_->SetPaintToLayer();
     address_->layer()->SetFillsBoundsOpaquely(false);
@@ -6289,8 +6365,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void ContentsChanged(views::Textfield* sender, const std::u16string& contents) override {
     if (sender == address_) {
       if ((!tabs_.empty() && Current().active_pane && ActivePane()->network_page_) ||
-          base::StartsWith(contents, u"smb://", base::CompareCase::INSENSITIVE_ASCII)) address_completion_->Cancel();
-      else address_completion_->Changed();
+          base::StartsWith(contents, u"smb://", base::CompareCase::INSENSITIVE_ASCII)) address_->completion().Cancel();
+      else address_->completion().Changed();
       return;
     }
     if (sender != history_search_) return;
@@ -6299,7 +6375,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     history_search_timer_.Start(FROM_HERE, base::Milliseconds(200), this, &FilesView::LoadHistory);
   }
   bool HandleKeyEvent(views::Textfield* sender, const ui::KeyEvent& event) override {
-    if (sender == address_ && address_completion_->Key(event)) return true;
+    if (sender == address_ && address_->completion().Key(event)) return true;
     if (sender == history_search_) {
       if (event.type() == ui::EventType::kKeyPressed && event.key_code() == ui::VKEY_RETURN) {
         history_search_timer_.Stop(); LoadHistory(); return true;
@@ -9591,6 +9667,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void TransitionPath(bool editing) {
     if (address_editing_ == editing) return;
+    if (!editing) address_->completion().Cancel();
     address_editing_ = editing;
     path_animation_timer_.Stop();
     views::View* incoming = editing ? static_cast<views::View*>(address_.get()) : crumbs_scroll_.get();
@@ -9793,7 +9870,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* leaf) { leaf->FileViewportChanged(); }));
     if (pane->network_view_) {
-      address_completion_->Cancel();
+      address_->completion().Cancel();
       const bool icons = pane->Current().options.icons;
       view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
           icons ? kGridViewIcon : kListAltIcon, ui::kColorSysOnSurface, 20));
@@ -11854,8 +11931,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   raw_ptr<NavigationPathView> crumbs_scroll_ = nullptr;
   raw_ptr<views::View> path_area_ = nullptr;
   raw_ptr<views::ScrollView> files_ = nullptr;
-  raw_ptr<views::Textfield> address_ = nullptr;
-  std::unique_ptr<PathCompletion> address_completion_;
+  raw_ptr<PathTextfield> address_ = nullptr;
   raw_ptr<views::LabelButton> back_ = nullptr, forward_ = nullptr;
   raw_ptr<views::Label> status_ = nullptr;
   std::shared_ptr<NearbySharing> sharing_;
