@@ -6,13 +6,24 @@ interface ArchiveProgressListener {
   OnProgress(uint64 bytes);
   OnCompressionProgress(uint64 bytes, uint64 entries, mojo_base.mojom.FilePath current_path);
 };
+struct ArchiveMember {
+  mojo_base.mojom.RelativeFilePath path;
+  uint64 size;
+  bool directory;
+  bool link;
+};
 interface ArchiveDecoder {
+  // A negative ordinal lists the archive. Otherwise only that member is
+  // written to the caller's already-open private temporary file.
+  Browse(mojo_base.mojom.ReadOnlyFile archive, string format, int32 ordinal,
+         mojo_base.mojom.RelativeFilePath member, mojo_base.mojom.File? output, string password)
+      => (bool success, bool needs_password, array<ArchiveMember> members);
   Compress(mojo_base.mojom.FilePath source_directory,
            array<mojo_base.mojom.FilePath> relative_sources,
            mojo_base.mojom.FilePath output,
            array<uint8> source_bookmark, array<uint8> output_bookmark,
            pending_remote<ArchiveProgressListener> listener) => (bool success);
-  Extract(mojo_base.mojom.ReadOnlyFile archive, string format,
+  Extract(mojo_base.mojom.ReadOnlyFile archive, string format, mojo_base.mojom.RelativeFilePath single_file_name,
           mojo_base.mojom.FilePath staging, string password,
           array<uint8> staging_bookmark,
           pending_remote<ArchiveProgressListener> listener) => (bool success, bool needs_password);

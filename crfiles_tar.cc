@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -16,6 +17,7 @@
 #include "third_party/lzma_sdk/src/C/Xz.h"
 #include "third_party/lzma_sdk/src/C/XzCrc64.h"
 #include "third_party/zlib/zlib.h"
+#include "third_party/zstd/src/lib/zstd.h"
 namespace crfiles {
 namespace {
 constexpr uint64_t kMaximumFileBytes = 16ull * 1024 * 1024 * 1024;
@@ -49,6 +51,15 @@ class TarInput {
     } while (!available_.empty());
     return ended_;
   }
+  bool WriteTo(base::File& destination, TarOutput& output) {
+    while (Fill()) {
+      if (available_.empty()) return ended_;
+      if (!output.AddBytes(available_.size()) ||
+          !destination.WriteAtCurrentPosAndCheck(available_)) return false;
+      available_ = {};
+    }
+    return false;
+  }
  private:
   bool Fill();
   bool ReadInput() {
@@ -61,13 +72,14 @@ class TarInput {
   }
   base::File file_;
   bool gzip_ = false, xz_ = false, initialized_ = false;
-  bool eof_ = false, ended_ = false, gzip_member_done_ = false;
+  bool eof_ = false, ended_ = false, frame_done_ = false;
   uint64_t decoded_ = 0;
   std::array<uint8_t, 65536> input_, buffer_;
   base::raw_span<uint8_t> encoded_, available_;
   z_stream gzip_state_{};
   CXzUnpacker xz_state_{};
   ISzAlloc allocator_{};
+  std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> zstd_{nullptr, &ZSTD_freeDCtx};
 };
 TarInput::TarInput(base::File file, std::string_view format) : file_(std::move(file)) {
   gzip_ = format == ".tar.gz" || format == ".tgz";
@@ -83,6 +95,11 @@ TarInput::TarInput(base::File file, std::string_view format) : file_(std::move(f
     XzUnpacker_Construct(&xz_state_, &allocator_);
     XzUnpacker_Init(&xz_state_);
     initialized_ = true;
+  } else if (format == ".tar.zst" || format == ".tzst" || format == ".zst") {
+    zstd_.reset(ZSTD_createDCtx());
+    // Bound the history window independently of the decompressed output limit.
+    constexpr int kMaxWindowLog = 27;  // 128 MiB
+    initialized_ = zstd_ && !ZSTD_isError(ZSTD_DCtx_setParameter(zstd_.get(), ZSTD_d_windowLogMax, kMaxWindowLog));
   } else initialized_ = format == ".tar";
 }
 TarInput::~TarInput() {
@@ -93,7 +110,7 @@ bool TarInput::Fill() {
   if (!initialized_) return false;
   if (ended_) return true;
   size_t produced = 0;
-  if (!gzip_ && !xz_) {
+  if (!gzip_ && !xz_ && !zstd_) {
     auto count = file_.ReadAtCurrentPos(buffer_);
     if (!count) return false;
     produced = *count;
@@ -102,10 +119,10 @@ bool TarInput::Fill() {
     if (!ReadInput()) return false;
     size_t consumed = 0;
     if (gzip_) {
-      if (gzip_member_done_) {
+      if (frame_done_) {
         if (eof_) { ended_ = true; break; }
         if (inflateReset2(&gzip_state_, MAX_WBITS + 16) != Z_OK) return false;
-        gzip_member_done_ = false;
+        frame_done_ = false;
       }
       gzip_state_.next_in = encoded_.data();
       gzip_state_.avail_in = static_cast<uInt>(encoded_.size());
@@ -115,7 +132,18 @@ bool TarInput::Fill() {
       consumed = encoded_.size() - gzip_state_.avail_in;
       produced = buffer_.size() - gzip_state_.avail_out;
       if (result != Z_OK && result != Z_STREAM_END && result != Z_BUF_ERROR) return false;
-      gzip_member_done_ = result == Z_STREAM_END;
+      frame_done_ = result == Z_STREAM_END;
+    } else if (zstd_) {
+      // A frame boundary is EOF only after checking for another frame. Even
+      // with no encoded bytes left the decoder may still have buffered output.
+      if (eof_ && frame_done_) { ended_ = true; break; }
+      ZSTD_inBuffer source{encoded_.data(), encoded_.size(), 0};
+      ZSTD_outBuffer target{buffer_.data(), buffer_.size(), 0};
+      const size_t result = ZSTD_decompressStream(zstd_.get(), &target, &source);
+      if (ZSTD_isError(result)) return false;
+      consumed = source.pos;
+      produced = target.pos;
+      frame_done_ = result == 0;
     } else {
       consumed = encoded_.size(); produced = buffer_.size();
       ECoderStatus status = CODER_STATUS_NOT_FINISHED;
@@ -127,7 +155,7 @@ bool TarInput::Fill() {
       }
     }
     encoded_ = encoded_.subspan(consumed);
-    if (!consumed && !produced && !ended_ && !gzip_member_done_) return false;
+    if (!consumed && !produced && !ended_ && !frame_done_) return false;
   }
   if (produced > kMaximumStreamBytes - decoded_) return false;
   decoded_ += produced;
@@ -189,6 +217,21 @@ bool Padding(TarInput& input, uint64_t size) {
   std::array<uint8_t, 512> padding;
   return input.Read(base::span(padding).first(static_cast<size_t>((512 - size % 512) % 512)));
 }
+}
+
+bool TarOutput::OpenFile(const base::FilePath& relative, uint64_t, base::File& file) {
+  const auto target = Entry(relative, false);
+  if (target.empty()) return false;
+  file.Initialize(target, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  return file.IsValid();
+}
+
+bool ExtractZstdFile(base::File file, const base::FilePath& name, TarOutput& output) {
+  const auto target = output.Entry(name, false);
+  if (target.empty()) return false;
+  base::File destination(target, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  TarInput input(std::move(file), ".zst");
+  return destination.IsValid() && input.WriteTo(destination, output);
 }
 
 bool ExtractTar(base::File file, std::string_view format, TarOutput& output) {
@@ -268,16 +311,19 @@ bool ExtractTar(base::File file, std::string_view format, TarOutput& output) {
           !output.Link(base::FilePath::FromUTF8Unsafe(normalized_name), base::FilePath::FromUTF8Unsafe(link), type == '2')) return false;
       continue;
     }
-    const auto target = output.Entry(base::FilePath::FromUTF8Unsafe(normalized_name), directory);
-    if (target.empty()) return false;
-    if (directory) continue;
-    base::File destination(target, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    if (!destination.IsValid()) return false;
+    const auto relative = base::FilePath::FromUTF8Unsafe(normalized_name);
+    if (directory) {
+      if (output.Entry(relative, true).empty()) return false;
+      continue;
+    }
+    base::File destination;
+    if (!output.OpenFile(relative, *size, destination)) return false;
     uint64_t remaining = *size;
     while (remaining) {
       const auto count = static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
       auto chunk = base::span(buffer).first(count);
-      if (!input.Read(chunk) || !output.AddBytes(count) || !destination.WriteAtCurrentPosAndCheck(chunk)) return false;
+      if (!input.Read(chunk) || !output.AddBytes(count)) return false;
+      if (destination.IsValid() && !destination.WriteAtCurrentPosAndCheck(chunk)) return false;
       remaining -= count;
     }
     if (!Padding(input, *size)) return false;

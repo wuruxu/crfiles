@@ -93,6 +93,19 @@ gfx::ImageSkia ReadIcon(std::string_view asset, int edge) {
   image.MakeThreadSafe();
   return image;
 }
+gfx::ImageSkia LoadNamedIcon(std::string_view asset, int edge) {
+  const IconKey key{std::string(asset), edge};
+  {
+    base::AutoLock guard(IconLock());
+    const auto found = IconCache().find(key);
+    if (found != IconCache().end()) return found->second;
+  }
+  auto image = ReadIcon(key.first, edge);
+  base::AutoLock guard(IconLock());
+  return IconCache().try_emplace(key, std::move(image)).first->second;
+}
+}  // namespace
+
 std::optional<gfx::ImageSkia> FindCachedBundledIcon(const std::string& mime, bool directory, int edge) {
   const IconKey key{std::string(IconAsset(mime, directory)), edge};
   base::AutoLock guard(IconLock());
@@ -109,18 +122,6 @@ gfx::ImageSkia LoadBundledIcon(const std::string& mime, bool directory, int edge
   base::AutoLock guard(IconLock());
   return IconCache().try_emplace(key, std::move(image)).first->second;
 }
-gfx::ImageSkia LoadNamedIcon(std::string_view asset, int edge) {
-  const IconKey key{std::string(asset), edge};
-  {
-    base::AutoLock guard(IconLock());
-    const auto found = IconCache().find(key);
-    if (found != IconCache().end()) return found->second;
-  }
-  auto image = ReadIcon(key.first, edge);
-  base::AutoLock guard(IconLock());
-  return IconCache().try_emplace(key, std::move(image)).first->second;
-}
-}  // namespace
 
 gfx::ImageSkia LoadNetworkServerIcon(int edge) {
   if (std::ranges::find(kFileIconSizes, edge) == kFileIconSizes.end()) return {};

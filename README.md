@@ -1139,7 +1139,22 @@ result visible until Close is clicked.
 Canceling also stops source checks and cleans up the temporary ZIP; canceled
 operations are recorded in History.
 
-Right-click a single `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, or `.tar.xz` file to **Extract here**,
+Double-click a ZIP or TAR archive (including gzip, XZ and Zstandard compressed TAR)
+to browse its folders with the current pane’s list or icon view. The location
+bar shows the full path, for example `/tmp/001.tar.zst/lib/`. Inside the
+archive, Rename, Move to Trash, Paste and other filesystem commands are disabled.
+Regular files support Copy, Share to and Quick Share, including multi-selection.
+These actions extract the selected members to private temporary files. Copy Path
+copies the displayed member path as text. Up at the root returns to the
+containing folder and selects the archive. Back and Forward also work inside the
+archive. The first visit indexes the entries in the archive helper; browsing a
+compressed TAR reads the stream without writing its contents to disk. Opening
+a regular file creates a private temporary copy of that member. Archive links
+are listed without following their targets. Edits to an opened copy apply only
+to that copy. For a traditionally encrypted ZIP entry, enter its password and
+press Enter when prompted.
+
+Right-click a single `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.zst`, `.tzst`, or `.zst` file to **Extract here**,
 **Extract to same-name folder**, or **Extract to…**. Extraction starts immediately in an anchored progress bubble showing the file
 name and extracted bytes, with cancellation support. ZIP and RAR password input
 appears only when required. The bubble changes to a completion notice when done;
@@ -1152,6 +1167,11 @@ success notices dismiss after five seconds, while errors remain for review. Oper
 - TAR.GZ / TGZ and TAR.XZ: streamed through Chromium's zlib and LZMA SDK libraries,
   without external commands or an intermediate TAR file. Compression checksums
   are validated before publishing. Standalone `.gz` and `.xz` files are not included.
+- TAR.ZST / TZST streams through Chromium's Zstandard decoder into the TAR reader.
+  A standalone `.zst` produces one file with the suffix removed, so `app.log.zst`
+  extracts to `app.log`. Concatenated frames are supported. The decoder checks any
+  frame checksums, limits the window to 128 MiB, and accepts streams that can be
+  decompressed without an external dictionary.
 - TAR symbolic links (including dangling links) and hard links are supported.
   Regular files are written first, then hard-link chains are resolved, and symbolic
   links are created last. Hard-link targets must be regular files inside the

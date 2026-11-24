@@ -189,6 +189,88 @@ bool ExtractZip(base::File file, const std::string& password, Output& output) {
   }
   return reader.ok();
 }
+// Archive browsing has no filesystem root. Only the selected regular member
+// can write, through a file handle created by the parent process.
+class BrowseOutput : public TarOutput {
+ public:
+  BrowseOutput(int ordinal, const base::FilePath& member, base::File output)
+      : ordinal_(ordinal), member_(member), output_(std::move(output)) {}
+
+  base::FilePath Entry(const base::FilePath& path, bool directory) override {
+    return Record(path, 0, directory, false) ? path : base::FilePath();
+  }
+  bool OpenFile(const base::FilePath& path, uint64_t size, base::File& file) override {
+    if (!Record(path, size, false, false)) return false;
+    if (count_ - 1 == ordinal_) {
+      file = std::move(output_);
+      selected = file.IsValid();
+      return selected;
+    }
+    return true;
+  }
+  bool Link(const base::FilePath& path, const base::FilePath&, bool) override {
+    return Record(path, 0, false, true);
+  }
+  bool FinishLinks() override { return true; }
+  bool AddBytes(uint64_t count) override {
+    if (count > kMaximumBytes - bytes_) return false;
+    bytes_ += count;
+    return true;
+  }
+  bool Zip(base::File& archive, const std::string& password) {
+    zip::ZipReader reader;
+    if (!reader.OpenFromPlatformFile(archive.GetPlatformFile())) return false;
+    reader.SetPassword(password);
+    while (const auto* entry = reader.Next()) {
+      if (entry->is_unsafe || entry->original_size < 0) return false;
+      if (!Record(entry->path, entry->original_size, entry->is_directory, entry->is_symbolic_link)) return false;
+      if (count_ - 1 != ordinal_) continue;
+      if (!output_.IsValid() || entry->is_directory || entry->is_symbolic_link || entry->uses_aes_encryption) return false;
+      if (entry->is_encrypted && password.empty()) { needs_password = true; return false; }
+      PreviewWriter writer(&output_);
+      selected = reader.ExtractCurrentEntry(&writer, kMaximumBytes);
+      needs_password = !selected && entry->is_encrypted;
+      return selected;
+    }
+    return reader.ok();
+  }
+  bool selected = false;
+  bool needs_password = false;
+  std::vector<mojom::ArchiveMemberPtr> members;
+ private:
+  class PreviewWriter : public zip::FileWriterDelegate {
+   public:
+    using FileWriterDelegate::FileWriterDelegate;
+    void SetPosixFilePermissions(int) override {}
+  };
+  bool Record(const base::FilePath& path, uint64_t size, bool directory, bool link) {
+    auto name = path.AsUTF16Unsafe();
+    std::ranges::replace(name, u'\\', u'/');
+    if (name.empty() || name.front() == u'/' || name.find(u':') != name.npos ||
+        ++count_ > static_cast<int>(kMaximumEntries) || name.size() > 4096) return false;
+    base::FilePath relative;
+    for (const auto& part : base::FilePath::FromUTF16Unsafe(name).GetComponents()) {
+      if (part == FILE_PATH_LITERAL(".")) continue;
+      base::FilePath component(part);
+      if (!IsValidEntryName(component.AsUTF16Unsafe())) return false;
+      relative = relative.Append(component);
+    }
+    if (relative.empty() || (count_ - 1 == ordinal_ && relative != member_)) return false;
+    if (ordinal_ < 0) {
+      name_units_ += name.size();
+      if (name_units_ > 4 * 1024 * 1024) return false;
+      members.push_back(mojom::ArchiveMember::New(relative, size, directory, link));
+    }
+    return true;
+  }
+  int ordinal_;
+  const base::FilePath member_;
+  int count_ = 0;
+  size_t name_units_ = 0;
+  uint64_t bytes_ = 0;
+  base::File output_;
+};
+
 class SevenZipOutput : public seven_zip::Delegate {
  public:
   explicit SevenZipOutput(Output& output);
@@ -353,6 +435,19 @@ class ArchiveDecoder : public mojom::ArchiveDecoder {
  public:
   ArchiveDecoder(mojo::PendingReceiver<mojom::ArchiveDecoder> receiver, base::OnceClosure quit);
   ~ArchiveDecoder() override;
+  void Browse(base::File archive, const std::string& format, int32_t ordinal,
+      const base::FilePath& member, base::File output, const std::string& password, BrowseCallback reply) override {
+    const bool valid = archive.IsValid() && (ordinal == -1 ? !output.IsValid() : ordinal >= 0 && output.IsValid());
+    BrowseOutput visitor(ordinal, member, std::move(output));
+    bool ok = false;
+    if (valid && format == ".zip") ok = visitor.Zip(archive, password);
+    else if (valid && (format == ".tar" || format == ".tar.gz" || format == ".tgz" ||
+             format == ".tar.xz" || format == ".tar.zst" || format == ".tzst"))
+      ok = ExtractTar(std::move(archive), format, visitor);
+    ok = ok && (ordinal < 0 || visitor.selected);
+    if (!ok) visitor.members.clear();
+    std::move(reply).Run(ok, visitor.needs_password, std::move(visitor.members));
+  }
   void Compress(const base::FilePath& source_directory,
       const std::vector<base::FilePath>& relative_sources, const base::FilePath& destination,
       const std::vector<uint8_t>& source_bookmark, const std::vector<uint8_t>& output_bookmark,
@@ -400,7 +495,7 @@ class ArchiveDecoder : public mojom::ArchiveDecoder {
             std::move(output_grant), compression_canceled_, std::move(report)),
         base::BindOnce(&ArchiveDecoder::CompressionDone, weak_.GetWeakPtr(), std::move(callback)));
   }
-  void Extract(base::File archive, const std::string& format, const base::FilePath& staging,
+  void Extract(base::File archive, const std::string& format, const base::FilePath& single_file_name, const base::FilePath& staging,
       const std::string& password, const std::vector<uint8_t>& staging_bookmark, mojo::PendingRemote<mojom::ArchiveProgressListener> listener,
       ExtractCallback callback) override {
     auto access_grant = ResolveFileAccessBookmark(staging_bookmark);
@@ -410,7 +505,11 @@ class ArchiveDecoder : public mojom::ArchiveDecoder {
       Output output(staging, std::move(listener));
       if (format == ".zip") success = ExtractZip(std::move(archive), password, output);
       else if (format == ".rar") success = ExtractRar(std::move(archive), password, output);
-      else if (format == ".tar" || format == ".tar.gz" || format == ".tgz" || format == ".tar.xz")
+      else if (format == ".zst") {
+        if (IsValidEntryName(single_file_name.AsUTF16Unsafe()))
+          success = ExtractZstdFile(std::move(archive), single_file_name, output);
+      } else if (format == ".tar" || format == ".tar.gz" || format == ".tgz" || format == ".tar.xz" ||
+                 format == ".tar.zst" || format == ".tzst")
         success = ExtractTar(std::move(archive), format, output);
       else if (format == ".7z") {
         SevenZipOutput delegate(output);

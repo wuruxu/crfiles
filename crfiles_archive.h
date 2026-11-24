@@ -2,10 +2,12 @@
 #ifndef CRFILES_ARCHIVE_H_
 #define CRFILES_ARCHIVE_H_
 #include <atomic>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
-#include "base/files/file_path.h"
+#include "base/files/file.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "crFiles/crfiles_file_operations.h"
@@ -36,6 +38,30 @@ struct ArchiveProgress {
   base::WaitableEvent conflict_resolved_;
 
 };
+struct ArchiveRow {
+  base::FilePath name;
+  int ordinal;
+  bool directory;
+  bool link;
+  uint64_t size;
+  std::string mime;
+};
+struct ArchiveListing {
+  base::File::Info source;
+  std::map<base::FilePath, std::vector<ArchiveRow>> folders;
+};
+struct ArchivePreview {
+  base::ScopedTempDir directory;
+  base::FilePath path;
+  ~ArchivePreview();
+};
+bool IsBrowsableArchive(const base::FilePath& path);
+// Worker only. Both operations run the decoder in the disposable archive helper.
+std::unique_ptr<ArchiveListing> ListArchive(const base::FilePath& archive,
+    std::shared_ptr<ArchiveProgress> progress);
+std::shared_ptr<ArchivePreview> PreviewArchiveMember(const base::FilePath& archive,
+    base::File::Info source, base::FilePath member, int ordinal, std::string password,
+    std::shared_ptr<ArchiveProgress> progress);
 bool IsExtractableArchive(const base::FilePath& path);
 std::string ArchiveFormat(const base::FilePath& path);
 base::FilePath ArchiveFolderName(const base::FilePath& path);

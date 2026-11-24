@@ -27,6 +27,9 @@ gfx::ImageSkia LoadNetworkServerIcon(int edge);
 // Bundled location icons; call on a file worker. Trash defaults to sidebar size.
 gfx::ImageSkia LoadNetworkWorkgroupIcon(int edge);
 gfx::ImageSkia LoadTrashIcon(int edge = 20);
+// Type icons for virtual entries. Lookup is memory-only; load on a file worker.
+std::optional<gfx::ImageSkia> FindCachedBundledIcon(const std::string& mime, bool directory, int edge);
+gfx::ImageSkia LoadBundledIcon(const std::string& mime, bool directory, int edge);
 // Remote names select bundled type icons without querying local paths/Shell.
 gfx::ImageSkia LoadRemoteFileIcon(const std::string& name, bool directory, int edge);
 }

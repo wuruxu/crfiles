@@ -160,6 +160,8 @@ crfiles_sources = [
   "crfiles_archive_dialog.cc",
   "crfiles_archive_dialog.h",
   "crfiles_archive_process.cc",
+  "crfiles_archive_view.cc",
+  "crfiles_archive_view.h",
   "crfiles_cache_state.cc",
   "crfiles_cache_state.h",
   "crfiles_context_actions.cc",
@@ -452,7 +454,10 @@ executable("crFiles") {
       ]
     }
   }
-  deps += [ "//crpdf:launch_options" ]
+  deps += [
+    "//crpdf:launch_options",
+    "//third_party/zstd:decompress",
+  ]
   if (is_mac) {
     deps += [ "//components/remote_cocoa/common:mojo" ]
     # Privacy prompts also need usage metadata when running the loose binary.

@@ -2,11 +2,15 @@
 #include "crFiles/crfiles_file_access.h"
 #include "crFiles/crfiles_archive.h"
 #include "crFiles/crfiles_archive.mojom.h"
+#include <algorithm>
 #include <functional>
 #include <string_view>
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
+#include "base/files/file_util.h"
+#include "base/task/thread_pool.h"
+#include "crFiles/crfiles_context_actions.h"
 #include "base/functional/bind.h"
 #include "base/path_service.h"
 #include "base/memory/raw_ref.h"
@@ -23,6 +27,7 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
+#include "net/base/mime_util.h"
 namespace crfiles {
 ArchiveProgress::ArchiveProgress() = default;
 ArchiveProgress::~ArchiveProgress() = default;
@@ -112,24 +117,124 @@ bool RunArchiveOnIO(ArchiveProgress& progress, ArchiveRequest request) {
   base::EnsureProcessTerminated(std::move(process));
   return success && !progress.canceled;
 }
+bool BrowseArchive(base::File input, const std::string& format, int ordinal, base::FilePath member, base::File output,
+    std::string password, ArchiveProgress& progress, std::vector<mojom::ArchiveMemberPtr>& members) {
+  base::Thread thread("crFilesArchiveBrowser");
+  if (!thread.StartWithOptions(base::Thread::Options(base::MessagePumpType::IO, 0))) return false;
+  base::WaitableEvent done;
+  bool success = false;
+  ArchiveRequest request = base::BindOnce(
+      [](base::File input, std::string format, int ordinal, base::FilePath member, base::File output, std::string password,
+         std::vector<mojom::ArchiveMemberPtr>& members, mojom::ArchiveDecoder* decoder,
+         mojo::PendingRemote<mojom::ArchiveProgressListener>, base::OnceCallback<void(bool, bool)> finish) {
+        decoder->Browse(std::move(input), format, ordinal, member, std::move(output), password, base::BindOnce(
+            [](std::vector<mojom::ArchiveMemberPtr>& members, base::OnceCallback<void(bool, bool)> finish,
+               bool ok, bool needs_password, std::vector<mojom::ArchiveMemberPtr> entries) {
+              members = std::move(entries);
+              std::move(finish).Run(ok, needs_password);
+            }, std::ref(members), std::move(finish)));
+      }, std::move(input), format, ordinal, std::move(member), std::move(output), std::move(password), std::ref(members));
+  if (!thread.task_runner()->PostTask(FROM_HERE, base::BindOnce(
+      [](ArchiveProgress& state, ArchiveRequest request, bool& ok, base::WaitableEvent& done) {
+        ok = RunArchiveOnIO(state, std::move(request));
+        done.Signal();
+      }, std::ref(progress), std::move(request), std::ref(success), std::ref(done)))) return false;
+  done.Wait();
+  thread.Stop();
+  return success;
+}
 bool DecodeOnIO(const base::FilePath& archive, const base::FilePath& staging,
     const std::string& password, ArchiveProgress& progress) {
   base::File input(archive, base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!input.IsValid()) return false;
+  const auto format = ArchiveFormat(archive);
+  base::FilePath single_file_name;
+  if (format == ".zst") {
+    single_file_name = ArchiveFolderName(archive);
+    if (single_file_name.empty() || single_file_name.ReferencesParent() ||
+        !base::IsStringUTF8(single_file_name.AsUTF8Unsafe())) return false;
+  }
   return RunArchiveOnIO(progress, base::BindOnce(
-      [](base::File file, std::string format, base::FilePath directory, std::string secret,
+      [](base::File file, std::string format, base::FilePath single_file_name, base::FilePath directory, std::string secret,
           mojom::ArchiveDecoder* decoder, mojo::PendingRemote<mojom::ArchiveProgressListener> listener,
           base::OnceCallback<void(bool, bool)> completed) {
-        decoder->Extract(std::move(file), format, directory, secret, CreateFileAccessBookmark(directory), std::move(listener), std::move(completed));
-      }, std::move(input), ArchiveFormat(archive), staging, password));
+        decoder->Extract(std::move(file), format, single_file_name, directory, secret, CreateFileAccessBookmark(directory),
+            std::move(listener), std::move(completed));
+      }, std::move(input), format, std::move(single_file_name), staging, password));
 }
+}
+bool IsBrowsableArchive(const base::FilePath& path) {
+  const auto format = ArchiveFormat(path);
+  return format == ".zip" || format == ".tar" || format == ".tar.gz" || format == ".tgz" ||
+         format == ".tar.xz" || format == ".tar.zst" || format == ".tzst";
+}
+std::unique_ptr<ArchiveListing> ListArchive(const base::FilePath& archive, std::shared_ptr<ArchiveProgress> progress) {
+  auto listing = std::make_unique<ArchiveListing>();
+  base::File input(archive, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  std::vector<mojom::ArchiveMemberPtr> members;
+  if (!input.IsValid() || !input.GetInfo(&listing->source) || !BrowseArchive(std::move(input), ArchiveFormat(archive), -1, {}, {}, {},
+      *progress, members)) return {};
+  auto& folders = listing->folders;
+  folders[base::FilePath()];
+  size_t directory_chars = 0;
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (progress->canceled) return {};
+    const auto& member = *members[i];
+    const auto parts = member.path.GetComponents();
+    if (parts.empty() || parts.size() > 256) return {};
+    base::FilePath parent;
+    for (size_t j = 0; j < parts.size(); ++j) {
+      base::FilePath name(parts[j]);
+      if (!IsValidEntryName(name.AsUTF16Unsafe())) return {};
+      if (j + 1 == parts.size() && !member.directory) {
+        std::string mime;
+        if (member.link) mime = "inode/symlink";
+        else if (!net::GetMimeTypeFromFile(name, &mime)) mime = "application/octet-stream";
+        folders.at(parent).push_back({name, static_cast<int>(i), false, member.link, member.size, std::move(mime)});
+        break;
+      }
+      const auto path = parent.Append(name);
+      if (folders.try_emplace(path).second) {
+        directory_chars += path.value().size();
+        if (folders.size() > 100001 || directory_chars > 16 * 1024 * 1024) return {};
+        folders.at(parent).push_back({name, -1, true, false, 0, "inode/directory"});
+      }
+      parent = path;
+    }
+  }
+  for (auto& [folder, entries] : folders)
+    std::ranges::sort(entries, [](const ArchiveRow& a, const ArchiveRow& b) {
+      return a.directory != b.directory ? a.directory > b.directory : a.name < b.name;
+    });
+  return listing;
+}
+ArchivePreview::~ArchivePreview() {
+  auto temporary = directory.Take();
+  if (!temporary.empty()) base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock()},
+      base::BindOnce([](base::FilePath path) { base::DeletePathRecursively(path); }, std::move(temporary)));
+}
+std::shared_ptr<ArchivePreview> PreviewArchiveMember(const base::FilePath& archive, base::File::Info source,
+    base::FilePath member, int ordinal, std::string password, std::shared_ptr<ArchiveProgress> progress) {
+  if (ordinal < 0 || member.empty() || member.IsAbsolute() || member.ReferencesParent() ||
+      !IsValidEntryName(member.BaseName().AsUTF16Unsafe())) return {};
+  base::File input(archive, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  base::File::Info info;
+  if (!input.IsValid() || !input.GetInfo(&info) || info.size != source.size || info.last_modified != source.last_modified) return {};
+  auto preview = std::make_shared<ArchivePreview>();
+  if (!preview->directory.CreateUniqueTempDir()) return {};
+  preview->path = preview->directory.GetPath().Append(member.BaseName());
+  base::File output(preview->path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+  std::vector<mojom::ArchiveMemberPtr> unused;
+  if (!output.IsValid() || !BrowseArchive(std::move(input), ArchiveFormat(archive), ordinal, std::move(member),
+      std::move(output), std::move(password), *progress, unused)) return {};
+  return preview;
 }
 bool IsExtractableArchive(const base::FilePath& path) {
   return !ArchiveFormat(path).empty();
 }
 std::string ArchiveFormat(const base::FilePath& path) {
   const auto name = base::ToLowerASCII(path.BaseName().AsUTF8Unsafe());
-  for (const std::string_view suffix : {".tar.gz", ".tar.xz", ".tgz", ".tar", ".zip", ".7z", ".rar"})
+  for (const std::string_view suffix : {".tar.gz", ".tar.xz", ".tar.zst", ".tgz", ".tzst", ".tar", ".zip", ".7z", ".rar", ".zst"})
     if (name.ends_with(suffix)) return std::string(suffix);
   return {};
 }

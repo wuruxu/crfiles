@@ -214,6 +214,7 @@ def package(args):
     shutil.copy2(build / 'libsmb2-LICENSE.txt', licenses / 'libsmb2-LICENSE.txt')
     shutil.copy2(PROJECT.parent / 'LICENSE', licenses / 'Chromium-LICENSE')
     shutil.copy2(PROJECT.parent / 'third_party/pdfium/LICENSE', licenses / 'PDFium-LICENSE')
+    shutil.copy2(PROJECT.parent / 'third_party/zstd/src/LICENSE', licenses / 'Zstandard-LICENSE')
     for localization in sorted((PROJECT / 'mac').glob('*.lproj')):
         shutil.copytree(localization, resources / localization.name)
     libraries = copy_libraries(build, executables, frameworks, static_angle)

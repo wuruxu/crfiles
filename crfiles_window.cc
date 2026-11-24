@@ -108,6 +108,7 @@
 #include "crFiles/crfiles_trash.h"
 #include "crFiles/crfiles_file_operations.h"
 #include "crFiles/crfiles_archive.h"
+#include "crFiles/crfiles_archive_view.h"
 #include "crFiles/crfiles_archive_dialog.h"
 #include "ui/views/drag_controller.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
@@ -5882,6 +5883,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     base::FilePath path;
   };
   void NavigateTag(TagLocation location, int history_index = -1) {
+    CloseArchive();
     if (tag_id_ == location.id && tag_directory_root_ == location.root && Current().path == location.path) { Refresh(); return; }
     SaveScroll(); CancelDirectoryWork(); CancelFileVisuals(); ClearMaterializedRows();
     ResetDirectoryAnimation(); CloseNewFolder(); CloseViewOptions();
@@ -5917,7 +5919,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::vector<Entry> entries;
   };
   void LoadTagFiles() {
-    if (!IsTagListing() || tag_loading_) return;
+    if (BrowsingArchive() || !IsTagListing() || tag_loading_) return;
     tag_loading_ = true; tag_version_ = FileTagsVersion();
     CancelDirectoryWork();
     // Metadata refresh must not invalidate thumbnail jobs for retained rows.
@@ -6069,7 +6071,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ShowSearchTab() {
     auto* pane = ActivePane();
-    if (!pane || pane->history_page_ || pane->Current().loading || pane->Current().error) return;
+    if (!pane || pane->BrowsingArchive() || pane->history_page_ || pane->Current().loading || pane->Current().error) return;
     auto* shell = root_ ? root_.get() : this;
     if (pane->tag_id_ > 0 && pane->IsTagListing()) {
       SearchScope scope;
@@ -6170,7 +6172,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     views::View::RemovedFromWidget();
   }
   bool HasNavigationChrome() const {
-    return !history_page_ || network_page_ || tag_id_ >= 0;
+    return ShowsFileList() || network_page_ || tag_id_ >= 0;
   }
   void OnResize(int amount, bool done) override {
     auto* pane = ActivePane();
@@ -6264,7 +6266,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
       fullscreen_shown_ = false;
     }
   }
-  views::View* DefaultFocusView() { return root_ ? (network_view_ ? network_view_.get() : search_view_ ? search_view_.get() : files_.get()) : ActivePane()->DefaultFocusView(); }
+  views::View* PaneContent() {
+    if (network_view_) return network_view_;
+    if (search_view_) return search_view_;
+    return files_;
+  }
+  views::View* DefaultFocusView() {
+    if (!root_) return ActivePane()->DefaultFocusView();
+    return BrowsingArchive() ? files_.get() : PaneContent();
+  }
   gfx::Size GetMinimumSize() const override { return root_ ? gfx::Size(300, 140) : gfx::Size(900, 500); }
   void PrepareToClose() {
     network_share_cancel_->store(true);
@@ -6364,7 +6374,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ContentsChanged(views::Textfield* sender, const std::u16string& contents) override {
     if (sender == address_) {
-      if ((!tabs_.empty() && Current().active_pane && ActivePane()->network_page_) ||
+      if ((!tabs_.empty() && Current().active_pane && (ActivePane()->network_page_ || ActivePane()->BrowsingArchive())) ||
           base::StartsWith(contents, u"smb://", base::CompareCase::INSENSITIVE_ASCII)) address_->completion().Cancel();
       else address_->completion().Changed();
       return;
@@ -6375,7 +6385,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     history_search_timer_.Start(FROM_HERE, base::Milliseconds(200), this, &FilesView::LoadHistory);
   }
   bool HandleKeyEvent(views::Textfield* sender, const ui::KeyEvent& event) override {
-    if (sender == address_ && address_->completion().Key(event)) return true;
+    if (sender == address_ && !ActivePane()->BrowsingArchive() && address_->completion().Key(event)) return true;
     if (sender == history_search_) {
       if (event.type() == ui::EventType::kKeyPressed && event.key_code() == ui::VKEY_RETURN) {
         history_search_timer_.Stop(); LoadHistory(); return true;
@@ -6386,7 +6396,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (event.key_code() == ui::VKEY_RETURN) {
       const auto address = base::UTF16ToUTF8(address_->GetText());
       if (base::StartsWith(address, "smb://", base::CompareCase::INSENSITIVE_ASCII) ||
-          (ActivePane()->network_view_ && address.starts_with('/'))) {
+          (!ActivePane()->BrowsingArchive() && ActivePane()->network_view_ && address.starts_with('/'))) {
         const bool valid = NavigateNetworkAddress(address);
         address_->SetInvalid(!valid);
         if (valid) EndAddressEditing();
@@ -6394,6 +6404,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       auto path = ParseNavigationPath(address_->GetText());
       if (!path) { address_->SetInvalid(true); return true; }
+      if (auto valid = ActivePane()->NavigateArchiveAddress(*path)) {
+        address_->SetInvalid(!*valid);
+        if (*valid) EndAddressEditing();
+        return true;
+      }
       address_->SetInvalid(false);
       Navigate(*path);
       EndAddressEditing();
@@ -6408,6 +6423,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (a.key_code() == ui::VKEY_C || a.key_code() == ui::VKEY_X || a.key_code() == ui::VKEY_V) {
       auto* pane = ActivePane();
       auto* focused = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
+      if (pane && pane->BrowsingArchive() && focused && pane->files_->Contains(focused)) {
+        if (a.key_code() == ui::VKEY_C) pane->CopySelection(false);
+        return true;
+      }
       if (pane && pane->network_view_ && focused && pane->network_view_->Contains(focused)) {
         for (auto* view = focused; view; view = view->parent())
           if (views::AsViewClass<views::Textfield>(view)) return false;
@@ -6424,7 +6443,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       case ui::VKEY_C: ActivePane()->CopySelection(false); break;
       case ui::VKEY_X: ActivePane()->CopySelection(true); break;
       case ui::VKEY_V: ActivePane()->PasteSelection(a.IsAltDown()); break;
-      case ui::VKEY_T: NewTab(ActivePane()->Current().path); break;
+      case ui::VKEY_T: NewCurrentTab(); break;
       case ui::VKEY_W:
         Deferred(base::BindRepeating(&FilesView::CloseActivePaneOrTab,
                                      weak_.GetWeakPtr())).Run();
@@ -6456,7 +6475,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   bool IsCommandIdChecked(int id) const override {
     if (id >= kContextSortFirst && id < kContextSortFirst + static_cast<int>(kSortMenuLabels.size()))
-      return !tabs_.empty() && static_cast<int>(tabs_[active_].options.sort) == id - kContextSortFirst;
+      return !tabs_.empty() && static_cast<int>(Current().options.sort) == id - kContextSortFirst;
     return history_page_ && !history_filter_.empty() && history_filter_ == HistoryFilterAction(id);
   }
   void ClearHistoryFilter() {
@@ -6480,6 +6499,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (command_id == IDS_CRFILES_OPEN_NEW_TAB || command_id == IDS_CRFILES_PROPERTIES)
       return !sidebar_context_path_.empty();
     if (command_id >= kContextOpen && command_id < kContextApplication + 1000) {
+      if (BrowsingArchive()) {
+        if (command_id == kContextOpen && context_paths_.size() == 1) {
+          const auto& entries = Current().entries;
+          const auto it = std::ranges::find(entries, context_paths_.front(), &Entry::path);
+          return it != entries.end() && it->mime != "inode/symlink";
+        }
+        if (command_id == kContextCopy) return !context_archive_indices_.empty();
+        if (command_id == kContextShare) return !context_archive_indices_.empty() && !root_->SharingBusy();
+        if (command_id == kContextQuickShare) return !context_archive_indices_.empty() && !root_->QuickShareBusy();
+        if (command_id == kContextPath) return !context_paths_.empty();
+        if (command_id == kContextSelectAll) return !order_pending_ && !displayed_entries_.empty();
+        return command_id == kContextSortBy ||
+            (command_id >= kContextSortFirst && command_id < kContextSortFirst + static_cast<int>(kSortMenuLabels.size()));
+      }
       if (!root_ || history_page_ || root_->local_operation_busy_ || trash_busy_ || Current().loading) return false;
       if (command_id == kContextSortBy ||
           (command_id >= kContextSortFirst && command_id < kContextSortFirst + static_cast<int>(kSortMenuLabels.size()))) return true;
@@ -6519,7 +6552,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       case IDS_CRFILES_RENAME_PANE: return true;
       case IDS_CRFILES_CLOSE_PANE: return pane_can_close_;
       case IDS_CRFILES_MOVE_TRASH:
-        return tag_id_ != 0 && !trash_busy_ && !tab.loading && !tab.selected.empty() && tab.path != TrashRoot() && !TrashRoot().IsParent(tab.path);
+        return !BrowsingArchive() && tag_id_ != 0 && !trash_busy_ && !tab.loading && !tab.selected.empty() && tab.path != TrashRoot() && !TrashRoot().IsParent(tab.path);
       default: return false;
     }
   }
@@ -6635,12 +6668,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
         views::MenuAnchorPosition::kBubbleBottomRight, ui::mojom::MenuSourceType::kMouse);
   }
   int GetDragOperationsForView(views::View*, const gfx::Point&) override {
-    return root_ && !history_page_ && tag_id_ != 0 && !IsDrivesLocation(Current().path) && !Current().loading ? (ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK) : ui::DragDropTypes::DRAG_NONE;
+    return root_ && !BrowsingArchive() && !history_page_ && tag_id_ != 0 && !IsDrivesLocation(Current().path) && !Current().loading ? (ui::DragDropTypes::DRAG_COPY | ui::DragDropTypes::DRAG_LINK) : ui::DragDropTypes::DRAG_NONE;
   }
   bool CanStartDragForView(views::View*, const gfx::Point& start, const gfx::Point& point) override {
     return views::View::ExceededDragThreshold(point - start);
   }
   void WriteDragDataForView(views::View* sender, const gfx::Point&, ui::OSExchangeData* data) override {
+    if (BrowsingArchive()) return;
     if (tag_id_ == 0) return;
     if (IsDrivesLocation(Current().path)) return;
     for (const auto& [path, row] : row_views_) if (row->Contains(sender)) {
@@ -6660,7 +6694,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     *formats = ui::OSExchangeData::FILE_NAME; return true;
   }
   bool AcceptsLocalDrop() {
-    return root_ && !history_page_ && !IsTagListing() && !root_->local_operation_busy_ && !Current().loading &&
+    return !BrowsingArchive() && root_ && !history_page_ && !IsTagListing() && !root_->local_operation_busy_ && !Current().loading &&
         !Current().error && !IsDrivesLocation(Current().path) && Current().path != TrashRoot() && !TrashRoot().IsParent(Current().path);
   }
   bool CanDrop(const ui::OSExchangeData& data) override {
@@ -6880,7 +6914,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
 
   std::vector<base::FilePath> SelectionPaths() const {
-    if (!root_ || history_page_ || tag_id_ == 0 || tabs_.empty()) return {};
+    if (!root_ || BrowsingArchive() || history_page_ || tag_id_ == 0 || tabs_.empty()) return {};
     const auto& selected = tabs_[active_].selected;
     return {selected.begin(), selected.end()};
   }
@@ -6917,7 +6951,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
                                 views::MenuAnchorPosition::kTopLeft, type);
       return;
     }
-    if (!root_ || history_page_ || Current().loading || root_->local_operation_busy_) return;
+    if (!root_ || !ShowsFileList() || Current().loading || root_->local_operation_busy_) return;
     if (context_runner_ && context_runner_->IsRunning()) return;
     ActivateSelf(); context_paths_.clear(); context_apps_.clear(); context_directory_ = false;
     for (const auto& [path, row] : row_views_) if (row->Contains(source)) {
@@ -6942,13 +6976,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
         context_directory_ = entry != Current().entries.end() && entry->directory;
       }
     }
+    context_archive_indices_ = BrowsingArchive() ? ArchiveFileIndices(context_paths_) : std::vector<size_t>();
     const uint64_t generation = ++context_generation_;
     context_package_ = false;
     if (context_paths_.size() == 1) {
       const auto entry = std::ranges::find(Current().entries, context_paths_.front(), &Entry::path);
       context_package_ = entry != Current().entries.end() && entry->package;
     }
-    if (context_paths_.size() == 1 && (!context_directory_ || context_package_)) {
+    if (!BrowsingArchive() && context_paths_.size() == 1 && (!context_directory_ || context_package_)) {
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
           base::BindOnce(&FileApplications, context_paths_.front()),
           base::BindOnce(&FilesView::ContextApplicationsLoaded, weak_.GetWeakPtr(), generation, Current().request, point, type));
@@ -7000,6 +7035,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       add(kContextDeleteTag, IDS_CRFILES_TAG_DELETE, &kDeleteIcon);
     } else {
       if (context_paths_.size() == 1 && context_directory_ && !context_package_) {
+        if (BrowsingArchive()) add(kContextOpen, IDS_CRFILES_OPEN, &vector_icons::kFolderOpenIcon);
         add(kContextNewTab, IDS_CRFILES_OPEN_NEW_TAB, &kOpenInNewIcon);
         const std::array labels = {IDS_CRFILES_SPLIT_LEFT, IDS_CRFILES_SPLIT_RIGHT, IDS_CRFILES_SPLIT_TOP, IDS_CRFILES_SPLIT_BOTTOM};
         const std::array<const gfx::VectorIcon*, 4> icons = {&kSplitSceneLeftIcon, &kSplitSceneRightIcon, &kSplitSceneUpIcon, &kSplitSceneDownIcon};
@@ -7052,10 +7088,73 @@ class FilesView : public views::View, public views::TextfieldController, public 
     context_runner_ = std::make_unique<views::MenuRunner>(context_menu_.get(), views::MenuRunner::CONTEXT_MENU);
     context_runner_->RunMenuAt(GetWidget(), nullptr, gfx::Rect(point, gfx::Size(1, 1)), views::MenuAnchorPosition::kTopLeft, type);
   }
+  std::vector<size_t> ArchiveFileIndices(const std::vector<base::FilePath>& paths) const {
+    std::vector<size_t> indices;
+    indices.reserve(paths.size());
+    const auto& entries = Current().entries;
+    for (const auto& key : paths) {
+      // ArchiveFolderChanged keys rows by their index and original name.
+      size_t index;
+      if (!base::StringToSizeT(key.DirName().AsUTF8Unsafe(), &index) || index >= entries.size()) return {};
+      const auto& entry = entries[index];
+      if (entry.path != key || entry.directory || entry.mime == "inode/symlink") return {};
+      indices.push_back(index);
+    }
+    return indices;
+  }
+  struct PendingArchiveCopy {
+    ui::ClipboardSequenceNumberToken sequence;
+    base::OnceClosure paste_when_ready;
+  };
+  void ExportArchiveSelection(int command, std::vector<size_t> indices) {
+    if (!BrowsingArchive() || indices.empty()) return;
+    std::shared_ptr<PendingArchiveCopy> copy;
+    if (command == kContextCopy) {
+      copy = std::make_shared<PendingArchiveCopy>();
+      copy->sequence = ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
+      root_->pending_archive_copy_ = copy;
+    }
+    archive_view_->ExportFiles(std::move(indices), base::BindOnce(
+        [](base::WeakPtr<FilesView> shell, base::WeakPtr<FilesView> pane, int command,
+           std::shared_ptr<PendingArchiveCopy> copy, ArchiveView::Files files) {
+          if (!shell) return;
+          if (files.empty()) {
+            auto* target = shell->ActivePane();
+            if (target && !target->BrowsingArchive()) target->status_->SetText(Text(IDS_CRFILES_EXTRACT_ERROR));
+            return;
+          }
+          std::vector<base::FilePath> paths;
+          paths.reserve(files.size());
+          for (const auto& file : files) paths.push_back(file->path);
+          if (command == kContextCopy) {
+            if (shell->pending_archive_copy_.lock() != copy || copy->sequence !=
+                ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste)) return;
+            shell->WriteFileClipboard(std::move(paths), false, std::move(files));
+            if (copy->paste_when_ready) std::move(copy->paste_when_ready).Run();
+          } else if (command == kContextShare && !shell->SharingBusy()) {
+            shell->ShowSharing(std::move(paths));
+            shell->share_archive_files_ = std::move(files);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+          } else if (command == kContextQuickShare && !shell->QuickShareBusy()) {
+            shell->ShowQuickSharing(std::move(paths));
+            shell->quick_share_archive_files_ = std::move(files);
+#endif
+          } else if (pane) pane->ReportFileOpenError();
+        }, root_->weak_.GetWeakPtr(), weak_.GetWeakPtr(), command, std::move(copy)));
+  }
   void CopySelection(bool cut) {
+    if (BrowsingArchive()) {
+      const auto& selection = Current().selected;
+      if (!cut) ExportArchiveSelection(kContextCopy, ArchiveFileIndices({selection.begin(), selection.end()}));
+      return;
+    }
     if (IsDrivesLocation(Current().path)) return;
-    auto paths = SelectionPaths(); if (paths.empty()) return;
-    root_->clipboard_paths_ = paths; root_->clipboard_move_ = cut;
+    auto paths = SelectionPaths();
+    if (paths.empty()) return;
+    root_->WriteFileClipboard(std::move(paths), cut, {});
+  }
+  void WriteFileClipboard(std::vector<base::FilePath> paths, bool cut, ArchiveView::Files files) {
+    pending_archive_copy_.reset();
     std::string uris;
     for (const auto& path : paths) uris += net::FilePathToFileURL(path).spec() + "\r\n";
     {
@@ -7065,10 +7164,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #if BUILDFLAG(IS_WIN)
     SetWindowsClipboardMove(cut);
 #endif
-    root_->clipboard_sequence_ = ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
+    clipboard_paths_ = std::move(paths);
+    clipboard_move_ = cut;
+    clipboard_archive_files_ = std::move(files);
+    clipboard_sequence_ = ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
     NetworkFileClipboard();
   }
+  std::shared_ptr<PendingArchiveCopy> PendingClipboardCopy() const {
+    auto copy = root_ ? root_->pending_archive_copy_.lock() : nullptr;
+    if (copy && copy->sequence == ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste))
+      return copy;
+    return {};
+  }
   bool HasFileClipboard() const {
+    if (PendingClipboardCopy()) return true;
     if (NetworkFileClipboard()) return true;
 #if BUILDFLAG(IS_MAC)
     if (HasFileClipboardMac()) return true;
@@ -7080,10 +7189,18 @@ class FilesView : public views::View, public views::TextfieldController, public 
         *root_->clipboard_sequence_ == ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste);
   }
   void PasteSelection(bool force_move = false) {
+    if (BrowsingArchive()) return;
     if (network_view_) { PasteNetworkPage(network_view_); return; }
     if (IsTagListing()) return;
     if (IsDrivesLocation(Current().path)) return;
     if (!root_ || history_page_ || Current().loading || root_->local_operation_busy_ || !HasFileClipboard()) return;
+    if (auto copy = PendingClipboardCopy()) {
+      // A user may leave the archive and paste before decompression finishes.
+      copy->paste_when_ready = base::BindOnce([](base::WeakPtr<FilesView> pane, int id, base::FilePath destination) {
+        if (pane && pane->Current().id == id && pane->Current().path == destination) pane->PasteSelection();
+      }, weak_.GetWeakPtr(), Current().id, Current().path);
+      return;
+    }
     if (auto source = NetworkFileClipboard()) {
       const auto destination = Current().path;
       EnsureDirectoryAccess(GetWidget(), destination, true, base::BindOnce(
@@ -7119,22 +7236,31 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
   }
   void StartMenuTransfer(std::vector<base::FilePath> paths, base::FilePath destination, bool move) {
+    ArchiveView::Files clipboard_files;
+    if (!root_->clipboard_archive_files_.empty() && root_->clipboard_paths_ == paths) {
+      clipboard_files = root_->clipboard_archive_files_;
+      move = false;
+    }
     EnsureDirectoryAccess(GetWidget(), destination, true, base::BindOnce(
-        [](base::WeakPtr<FilesView> pane, std::vector<base::FilePath> paths,
+        [](base::WeakPtr<FilesView> pane, ArchiveView::Files files, std::vector<base::FilePath> paths,
            base::FilePath destination, bool move, bool allowed) {
           if (!pane) return;
-          if (allowed) pane->StartMenuTransferAuthorized(std::move(paths), std::move(destination), move);
+          if (allowed) pane->StartMenuTransferAuthorized(std::move(paths), std::move(destination), move, std::move(files));
           else pane->status_->SetText(Text(IDS_CRFILES_READ_ERROR));
-        }, weak_.GetWeakPtr(), std::move(paths), destination, move));
+        }, weak_.GetWeakPtr(), std::move(clipboard_files), std::move(paths), destination, move));
   }
-  void StartMenuTransferAuthorized(std::vector<base::FilePath> paths, base::FilePath destination, bool move) {
+  void StartMenuTransferAuthorized(std::vector<base::FilePath> paths, base::FilePath destination,
+                                   bool move, ArchiveView::Files files) {
     if (root_->local_operation_busy_ || paths.empty() || IsDrivesLocation(destination) ||
         std::ranges::any_of(paths, IsDriveRoot)) return;
     std::set<base::FilePath> affected{destination};
     for (const auto& path : paths) affected.insert(path.DirName());
     root_->local_operation_busy_ = true;
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(&TransferLocalFiles, std::move(paths), destination, move, std::string("menu")),
+        base::BindOnce([](ArchiveView::Files keep_alive, std::vector<base::FilePath> paths,
+                          base::FilePath destination, bool move) {
+          return TransferLocalFiles(std::move(paths), destination, move, "menu");
+        }, std::move(files), std::move(paths), destination, move),
         base::BindOnce(&FilesView::LocalTransferFinished, root_->weak_.GetWeakPtr(), std::move(affected)));
   }
   void FileSelected(const ui::SelectedFileInfo& file, int) override {
@@ -7269,6 +7395,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       files_->RequestFocus();
       return;
     }
+    if (BrowsingArchive() && (command == kContextCopy || command == kContextShare || command == kContextQuickShare)) {
+      ExportArchiveSelection(command, context_archive_indices_);
+      return;
+    }
     if (context_paths_.empty() && command == kContextProperties) {
       ShowFolderProperties(GetWidget(), Current().path, TagOpener());
       return;
@@ -7329,7 +7459,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
             base::BindOnce(&OpenFolderTerminal, context_directory_ ? path : path.DirName()),
             base::BindOnce(&FilesView::ContextLaunchFinished, weak_.GetWeakPtr())); break;
       case kContextPath: {
-        std::u16string text; for (const auto& item : context_paths_) { if (!text.empty()) text += u"\n"; text += item.AsUTF16Unsafe(); }
+        std::u16string text;
+        for (const auto& item : context_paths_) {
+          if (!text.empty()) text += u"\n";
+          text += BrowsingArchive() ? NavigationPath(DisplayPath().Append(item.BaseName())) : item.AsUTF16Unsafe();
+        }
         ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste).WriteText(text); break;
       }
       case kContextProperties: ShowEntryProperties(); break;
@@ -7405,6 +7539,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ContextLaunchFinished(bool ok) { if (!ok) status_->SetText(Text(IDS_CRFILES_OPEN_ERROR)); }
   void ShowEntryName(bool compress) {
+    if (BrowsingArchive()) return;
     auto dialog = std::make_unique<views::DialogDelegate>(); dialog->SetTitle(Text(compress ? IDS_CRFILES_COMPRESS : IDS_CRFILES_RENAME));
     auto contents = std::make_unique<views::View>();
     contents->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 8));
@@ -7481,7 +7616,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     base::FilePath path;
     if (GetWidget() && GetWidget()->IsActive()) VisitPanes(Current().pane_host,
         base::BindRepeating([](gfx::Point point, FilesView** owner, base::FilePath* path, FilesView* pane) {
-          if (*owner || pane->history_page_ || !pane->IsDrawn() || pane->LiveUpdateBusy() ||
+          if (*owner || pane->BrowsingArchive() || pane->history_page_ || !pane->IsDrawn() || pane->LiveUpdateBusy() ||
               !pane->files_->GetBoundsInScreen().Contains(point) ||
               (pane->footer_shown_ && pane->footer_->GetBoundsInScreen().Contains(point))) return;
           for (const auto& [entry, button] : pane->visible_buttons_) {
@@ -7585,7 +7720,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     std::set<base::FilePath> paths;
     VisitPanes(Current().pane_host, base::BindRepeating([](bool activated,
                                                         std::set<base::FilePath>* paths, FilesView* pane) {
-      if (pane->history_page_ || pane->IsTagListing() || pane->tabs_.empty()) return;
+      if (pane->BrowsingArchive() || pane->history_page_ || pane->IsTagListing() || pane->tabs_.empty()) return;
       const auto& path = pane->Current().path;
       const bool visible = pane->IsDrawn() && pane->GetWidget()->IsVisible() &&
           !pane->GetWidget()->IsMinimized() && path.IsAbsolute() && !IsDrivesLocation(path)
@@ -7623,7 +7758,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     last_file_scroll_ = {};
   }
   void QueueLiveRead() {
-    if (IsTagListing()) return;
+    if (BrowsingArchive() || IsTagListing()) return;
     if (live_dirty_since_.is_null()) live_dirty_since_ = base::TimeTicks::Now();
     live_dirty_ = true;
     if (!live_read_pending_ && !live_read_timer_.IsRunning())
@@ -7636,7 +7771,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         std::ranges::any_of(row_views_, [](const auto& item) { return item.second->GetState() == views::Button::STATE_PRESSED; });
   }
   void ReadLiveDirectory() {
-    if (!root_ || history_page_ || !IsDrawn() || !files_->contents()) return;
+    if (BrowsingArchive() || !root_ || history_page_ || !IsDrawn() || !files_->contents()) return;
     if (LiveUpdateBusy()) {
       live_read_timer_.Start(FROM_HERE, base::Milliseconds(200), this, &FilesView::ReadLiveDirectory);
       return;
@@ -7796,6 +7931,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateFooterVisibility() {
     if (!root_ || !footer_) return;
+    if (BrowsingArchive() && history_page_) { footer_->SetVisible(false); return; }
     if (network_page_) {
       footer_hide_timer_.Stop(); footer_expired_ = false;
       footer_shown_ = network_footer_visible_; footer_restore_pending_ = false;
@@ -8027,9 +8163,35 @@ class FilesView : public views::View, public views::TextfieldController, public 
     FileViewportChanged();
   }
 
-  Tab& Current() { return tabs_[active_]; }
-  const Tab& Current() const { return tabs_[active_]; }
+  Tab& Current() { return archive_tab_ ? *archive_tab_ : tabs_[active_]; }
+  const Tab& SourceTab() const { return tabs_[active_]; }
+  const Tab& Current() const { return archive_tab_ ? *archive_tab_ : SourceTab(); }
+  bool ShowsFileList() const { return BrowsingArchive() || !history_page_; }
+  base::FilePath DisplayPath() const {
+    if (!BrowsingArchive()) return Current().path;
+    return archive_view_->folder().empty() ? archive_view_->archive() :
+        archive_view_->archive().Append(archive_view_->folder());
+  }
+  // A path inside the current archive is resolved exclusively in its index.
+  std::optional<bool> NavigateArchiveAddress(const base::FilePath& path) {
+    if (!BrowsingArchive()) return std::nullopt;
+    const auto target = path.StripTrailingSeparators();
+    if (!target.IsAbsolute() && !IsDrivesLocation(target)) {
+      if (target.empty() || target.ReferencesParent()) return false;
+      return archive_view_->Navigate(archive_view_->folder().Append(target));
+    }
+    base::FilePath folder;
+    if (target != archive_view_->archive() && !archive_view_->archive().AppendRelativePath(target, &folder))
+      return std::nullopt;
+    return archive_view_->Navigate(folder);
+  }
+  void NavigateBreadcrumb(base::FilePath path) {
+    if (NavigateArchiveAddress(path).has_value()) return;
+    if (history_page_) root_->Navigate(path);
+    else Navigate(path);
+  }
   std::string PaneName() const {
+    if (BrowsingArchive()) return (archive_view_->folder().empty() ? archive_view_->archive() : archive_view_->folder()).BaseName().AsUTF8Unsafe();
     if (network_page_) {
       const auto location = network_view_ ? ParseSmbLocation(NetworkPageUrl(network_view_)) : std::nullopt;
       return location ? location->server : base::UTF16ToUTF8(Text(IDS_CRFILES_NETWORK));
@@ -8056,7 +8218,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       result.Set("first", SerializePane(split->first())); result.Set("second", SerializePane(split->second()));
     } else if (auto* pane = views::AsViewClass<FilesView>(view)) {
       pane->SaveScroll();
-      const auto& tab = pane->Current(); const auto& options = tab.options;
+      const auto& tab = pane->SourceTab(); const auto& options = tab.options;
       if (pane->tag_id_ >= 0) { result.Set("tag_id", base::NumberToString(pane->tag_id_)); result.Set("tag_name", pane->tag_name_); result.Set("tag_root", pane->tag_directory_root_.AsUTF8Unsafe()); }
       if (pane->search_scope_.tag_id > 0) {
         result.Set("search_tag", base::NumberToString(pane->search_scope_.tag_id));
@@ -8434,6 +8596,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void UpdateShareButton() {
     if (network_view_) { UpdateNetworkShareButton(); return; }
     if (!share_button_ || tabs_.empty()) return;
+    if (BrowsingArchive()) { share_button_->SetEnabled(false); return; }
     const bool tag_target = tag_id_ > 0 && IsTagListing();
     const bool shared = tag_target ? std::ranges::any_of(root_->shared_directories_,
         [&](const auto& target) { return target.tag_id == tag_id_; }) : IsDirectoryShared(Current().path);
@@ -8453,6 +8616,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     SyncSharedTargets(); ScheduleWorkspaceSave();
   }
   void TogglePaneShare() {
+    if (BrowsingArchive()) return;
     if (network_view_) { ToggleNetworkShare(); return; }
     if (tag_id_ == 0) return;
     if (IsTagListing()) {
@@ -8686,7 +8850,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     root_->EndAddressEditing();
     root_->Current().active_pane = this;
-    files_->RequestFocus();
+    DefaultFocusView()->RequestFocus();
     root_->ScheduleWorkspaceSave();
     root_->UpdatePaneControls();
     // Keep the originating event's target alive until dispatch completes.
@@ -8749,6 +8913,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       Current().pane_host->DeprecatedLayoutImmediately();
     } else Current().pane_host->SetVisible(true);
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* pane) {
+      if (pane->BrowsingArchive()) { pane->RenderFiles(); return; }
       if (pane->history_page_) return;
       if (pane->pending_navigation_) {
         const auto pending = *pane->pending_navigation_;
@@ -9072,6 +9237,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         }, root_->weak_.GetWeakPtr(), weak_.GetWeakPtr()));
   }
   void ChangeTrash(bool restore) {
+    if (BrowsingArchive()) return;
     if (tag_id_ == 0 || IsDrivesLocation(Current().path) || Current().selected.empty() || trash_busy_ || root_->local_operation_busy_) return;
     trash_busy_ = true;
     trash_error_ = false;
@@ -9133,6 +9299,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateStatus();
   }
   void Up() {
+    if (auto* pane = ActivePane(); pane->BrowsingArchive()) {
+      if (!pane->archive_view_->Up()) pane->LeaveArchive();
+      return;
+    }
     if (auto* pane = ActivePane(); pane->network_view_) {
       auto location = ParseSmbLocation(NetworkPageUrl(pane->network_view_));
       if (!location) return;
@@ -9161,7 +9331,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     Navigate(prefs.directory.empty() ? NearbySharing::DefaultReceiveDirectory() :
         base::FilePath::FromUTF8Unsafe(prefs.directory));
   }
-  void NewCurrentTab() { NewTab(ActivePane()->Current().path); }
+  void NewCurrentTab() { NewTab(ActivePane()->SourceTab().path); }
   void RubberBand(gfx::Rect rect, bool additive, bool begin, bool end) {
     if (order_pending_ || displayed_entries_.empty()) return;
     if (begin) { drag_selection_ = Current().selected; return; }
@@ -9197,7 +9367,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
         (event.IsMouseEvent() && event.AsMouseEvent()->GetClickCount() == 2) ||
         (event.IsKeyEvent() && event.AsKeyEvent()->key_code() == ui::VKEY_RETURN)) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
-          base::BindOnce(&FilesView::Open, weak_.GetWeakPtr(), path, directory));
+          base::BindOnce([](base::WeakPtr<FilesView> pane, uint64_t generation, base::FilePath path, bool directory) {
+            if (pane && pane->virtual_model_generation_ == generation) pane->Open(std::move(path), directory);
+          }, weak_.GetWeakPtr(), virtual_model_generation_, path, directory));
       return;
     }
     auto& selected = Current().selected;
@@ -9252,6 +9424,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     file_surface_->layer()->SetTransform(gfx::Transform());
   }
   void Navigate(base::FilePath path, int history_index = -1, bool refresh = false) {
+    if (BrowsingArchive() && refresh) return;
+    if (root_ && !refresh) CloseArchive();
     if (root_ && tag_id_ >= 0 && !refresh) {
       if (tag_id_ == 0) {
         auto entry = std::ranges::find(Current().entries, path, &Entry::path);
@@ -9426,6 +9600,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
     } else RenderTabs();
   }
   void History(int delta) {
+    auto* pane = ActivePane();
+    if (pane->BrowsingArchive()) {
+      if (!pane->archive_view_->Go(delta) && delta < 0) pane->LeaveArchive();
+      return;
+    }
+    if (delta > 0 && pane->archive_view_) { pane->DisplayArchive(); return; }
     if (ActivePane()->network_view_) { NetworkPageGo(ActivePane()->network_view_, delta); return; }
     if (ActivePane()->history_page_) return;
     if (!root_) { ActivePane()->History(delta); return; }
@@ -9437,10 +9617,18 @@ class FilesView : public views::View, public views::TextfieldController, public 
     int index = Current().history_index + delta;
     if (index >= 0 && index < static_cast<int>(Current().history.size())) Navigate(Current().history[index], index);
   }
-  void Refresh() { if (ActivePane()->network_view_) { RefreshNetworkPage(ActivePane()->network_view_); return; } if (ActivePane()->IsTagListing()) { ActivePane()->LoadTagFiles(); return; } if (ActivePane()->search_view_) RefreshSearchPage(ActivePane()->search_view_); else if (ActivePane()->history_page_) ActivePane()->LoadHistory(); else Navigate(ActivePane()->Current().path, -1, true); }
+  void Refresh() {
+    auto* pane = ActivePane();
+    if (pane->BrowsingArchive()) pane->archive_view_->Refresh();
+    else if (pane->network_view_) RefreshNetworkPage(pane->network_view_);
+    else if (pane->IsTagListing()) pane->LoadTagFiles();
+    else if (pane->search_view_) RefreshSearchPage(pane->search_view_);
+    else if (pane->history_page_) pane->LoadHistory();
+    else Navigate(pane->Current().path, -1, true);
+  }
   void ToggleViewMode() {
     if (!root_) { ActivePane()->ToggleViewMode(); return; }
-    if (network_view_) {
+    if (network_view_ && !BrowsingArchive()) {
       CloseViewOptions();
       Current().options.icons = !Current().options.icons;
       SetNetworkPageLayout(network_view_, Current().options.icons, kFileIconSizes[Current().options.icon_index],
@@ -9466,6 +9654,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ResizeOptions() { if (options_widget_) options_delegate_->SizeToContents(); }
   void ViewOptionsChanged(int id, FileViewOptions options) {
+    if (BrowsingArchive() && Current().id == id) {
+      SaveScroll();
+      Current().options = options;
+      if (!options.show_hidden) for (const auto& entry : Current().entries)
+        if (entry.hidden) Current().selected.erase(entry.path);
+      RenderFiles();
+      return;
+    }
     auto found = std::ranges::find(tabs_, id, &Tab::id);
     if (found == tabs_.end()) return;
     if (network_view_) {
@@ -9488,7 +9684,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   bool AdjustIconSize(int delta) {
     auto* pane = ActivePane();
-    if (!pane || (pane->history_page_ && !pane->network_view_)) return false;
+    if (!pane || (!pane->ShowsFileList() && !pane->network_view_)) return false;
     for (auto* focus = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
          focus; focus = focus->parent())
       if (views::AsViewClass<views::Textfield>(focus)) return false;
@@ -9504,7 +9700,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     return true;
   }
   void UpdateIconSize() {
-    if (network_view_) {
+    if (network_view_ && !BrowsingArchive()) {
       SetNetworkPageLayout(network_view_, Current().options.icons, kFileIconSizes[Current().options.icon_index],
           Current().options.show_hidden, Current().options.NetworkColumnOptions(), static_cast<int>(Current().options.sort));
       root_->ScheduleWorkspaceSave(); return;
@@ -9543,6 +9739,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_delegate_.reset();
   }
   void ShowNewFolder() {
+    if (BrowsingArchive()) return;
     if (network_view_) {
       if (!network_new_folder_ || !network_new_folder_->IsDrawn() || !network_new_folder_->GetEnabled()) return;
     } else {
@@ -9579,6 +9776,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     new_folder_widget_->Show(); UpdateFooterVisibility();
   }
   void CreateFolder(std::u16string name) {
+    if (BrowsingArchive()) return;
     if (network_view_) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
           base::BindOnce(&FilesView::CreateSharedFolder, weak_.GetWeakPtr(), new_folder_network_url_, new_folder_generation_, std::move(name)));
@@ -9654,7 +9852,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     options_delegate_->set_close_on_deactivate(true); options_delegate_->set_margins(gfx::Insets(8));
     options_delegate_->set_adjust_if_offscreen(true);
     auto page = ViewOptionsPage::kLocal;
-    if (network_view_) {
+    if (network_view_ && !BrowsingArchive()) {
       const auto location = ParseSmbLocation(NetworkPageUrl(network_view_));
       page = location && !location->share.empty() ? ViewOptionsPage::kNetworkDirectory : ViewOptionsPage::kNetworkRoot;
     }
@@ -9697,10 +9895,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void EndAddressEditing() { TransitionPath(false); }
   void EditAddress() {
-    if (!toolbar_ || !toolbar_->GetVisible() || ActivePane()->tag_id_ >= 0) return;
+    if (!toolbar_ || !toolbar_->GetVisible() || (ActivePane()->tag_id_ >= 0 && !ActivePane()->BrowsingArchive())) return;
     if (!address_editing_) {
       address_->SetInvalid(false);
-      address_->SetText(ActivePane()->network_view_ ? base::UTF8ToUTF16(NetworkPageUrl(ActivePane()->network_view_)) : NavigationPath(ActivePane()->Current().path));
+      if (ActivePane()->BrowsingArchive()) address_->SetText(NavigationPath(ActivePane()->DisplayPath()) + u"/");
+      else address_->SetText(ActivePane()->network_view_ ? base::UTF8ToUTF16(NetworkPageUrl(ActivePane()->network_view_)) : NavigationPath(ActivePane()->Current().path));
       TransitionPath(true);
     }
     address_->RequestFocus(); address_->SelectAll(false);
@@ -9844,13 +10043,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void PaneNavigated(FilesView* pane) {
     ScheduleWorkspaceSave();
-    for (auto& tab : tabs_) if (tab.active_pane == pane) tab.path = pane->Current().path;
+    for (auto& tab : tabs_) if (tab.active_pane == pane) tab.path = pane->SourceTab().path;
     if (ActivePane() == pane) SyncNavigation(); else RenderTabs();
   }
   void SyncNavigation() {
     if (tabs_.empty() || !Current().active_pane) return;
     auto* pane = ActivePane();
-    crumbs_scroll_->SetEditingAllowed(pane->tag_id_ < 0);
+    crumbs_scroll_->SetEditingAllowed(pane->tag_id_ < 0 || pane->BrowsingArchive());
     // The outer inset belongs to navigation chrome; each pane paints its own
     // content surface. Keep the sidebar and toolbar consistent across tabs.
     SetBackground(std::make_unique<NavigationBackground>());
@@ -9862,14 +10061,18 @@ class FilesView : public views::View, public views::TextfieldController, public 
       AnimateSidebarTo(sidebar_display_width_ < 110 ? 0 : std::clamp(sidebar_display_width_, 220, 360));
     }
     UpdateSidebarPresentation();
-    Current().path = pane->Current().path;
+    Current().path = pane->SourceTab().path;
     UpdateSidebarHighlight(); RenderTabs();
     back_->SetEnabled(pane->tag_history_.empty() ? pane->Current().history_index > 0 : pane->tag_history_index_ > 0);
     forward_->SetEnabled(pane->tag_history_.empty() ?
         pane->Current().history_index + 1 < static_cast<int>(pane->Current().history.size()) :
         pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
     VisitPanes(Current().pane_host, base::BindRepeating([](FilesView* leaf) { leaf->FileViewportChanged(); }));
-    if (pane->network_view_) {
+    if (pane->BrowsingArchive()) {
+      back_->SetEnabled(true);
+      forward_->SetEnabled(pane->archive_view_->HasForward());
+    } else if (pane->archive_view_) forward_->SetEnabled(true);
+    if (pane->network_view_ && !pane->BrowsingArchive()) {
       address_->completion().Cancel();
       const bool icons = pane->Current().options.icons;
       view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
@@ -9877,7 +10080,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       view_toggle_->SetTooltipText(Text(icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
       view_toggle_->SetAccessibleName(Text(icons ? IDS_CRFILES_LIST : IDS_CRFILES_ICONS));
       back_->SetEnabled(NetworkPageCanGo(pane->network_view_, -1));
-      forward_->SetEnabled(NetworkPageCanGo(pane->network_view_, 1));
+      forward_->SetEnabled(pane->archive_view_ || NetworkPageCanGo(pane->network_view_, 1));
       const auto url = NetworkPageUrl(pane->network_view_);
       if (rendered_network_url_ != url) pane->CloseViewOptions();
       const auto style = GetNavigationStyle();
@@ -9934,7 +10137,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     rendered_network_url_.clear();
     network_address_anchor_.SetView(nullptr);
-    if (pane->tag_id_ >= 0) {
+    if (pane->tag_id_ >= 0 && !pane->BrowsingArchive()) {
       rendered_crumb_path_ = {}; rendered_crumb_pane_.clear(); rendered_crumb_buttons_.clear();
       view_toggle_->SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel::FromVectorIcon(
           pane->Current().options.icons ? kGridViewIcon : kListAltIcon, ui::kColorSysOnSurface, 20));
@@ -9988,16 +10191,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       crumbs_scroll_->SetContents(std::move(crumbs));
       back_->SetEnabled(pane->tag_history_index_ > 0);
-      forward_->SetEnabled(pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
+      forward_->SetEnabled(pane->archive_view_ || pane->tag_history_index_ + 1 < static_cast<int>(pane->tag_history_.size()));
       return;
     }
+    const auto display_path = pane->DisplayPath();
     const auto navigation_style = GetNavigationStyle();
-    const bool path_changed = rendered_crumb_path_ != pane->Current().path;
+    const bool path_changed = rendered_crumb_path_ != display_path;
     if (!crumbs_scroll_->contents() || path_changed || rendered_navigation_style_ != navigation_style) {
       const bool animate_current = !rendered_crumb_path_.empty() && path_changed;
       rendered_crumb_buttons_.clear();
       rendered_navigation_style_ = navigation_style;
-      rendered_crumb_pane_ = pane->pane_id_; rendered_crumb_path_ = pane->Current().path;
+      rendered_crumb_pane_ = pane->pane_id_; rendered_crumb_path_ = display_path;
     auto crumbs = std::make_unique<views::View>();
     auto* crumb_layout = crumbs->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal,
@@ -10006,7 +10210,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       crumbs->SetBackground(views::CreateRoundedRectBackground(ui::kColorSysHeaderContainerInactive, 8));
     crumb_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     std::vector<base::FilePath> parents;
-    for (auto path = pane->Current().path; !path.empty();) {
+    for (auto path = display_path; !path.empty();) {
       parents.push_back(path);
       if (IsDrivesLocation(path)) break;
       if (IsDriveRoot(path)) { parents.emplace_back(FILE_PATH_LITERAL("/")); break; }
@@ -10016,7 +10220,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }
       path = path.DirName();
     }
-    if (TrashRoot() == pane->Current().path) parents = {pane->Current().path};
+    if (TrashRoot() == display_path) parents = {display_path};
     std::ranges::reverse(parents);
     for (const auto& path : parents) {
       if (navigation_style == NavigationStyle::kConnected && path != parents.front()) {
@@ -10029,14 +10233,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
         divider->SetCanProcessEventsWithinSubtree(false);
       }
       auto* crumb = crumbs->AddChildView(std::make_unique<BreadcrumbButton>(
-          Deferred(base::BindRepeating(&FilesView::Navigate, pane->weak_.GetWeakPtr(), path, -1, false)),
-          (path == TrashRoot() ? Text(IDS_CRFILES_TRASH) : BreadcrumbName(path)), path == pane->Current().path, path == parents.front(), navigation_style, animate_current));
+          Deferred(base::BindRepeating(&FilesView::NavigateBreadcrumb, pane->weak_.GetWeakPtr(), path)),
+          (path == TrashRoot() ? Text(IDS_CRFILES_TRASH) : BreadcrumbName(path)), path == display_path, path == parents.front(), navigation_style, animate_current));
       rendered_crumb_buttons_.emplace_back(path, crumb->GetWeakPtr());
       if (path != TrashRoot() && BreadcrumbName(path) == u"/") {
         crumb->SetText(std::u16string());
         crumb->SetAccessibleName(NavigationPath(path));
         const auto color = (navigation_style == NavigationStyle::kRaised ||
-                            navigation_style == NavigationStyle::kConnected) && path == pane->Current().path ?
+                            navigation_style == NavigationStyle::kConnected) && path == display_path ?
             ui::kColorSysOnPrimaryContainer : ui::kColorSysOnSurface;
         for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
                            views::Button::STATE_PRESSED, views::Button::STATE_DISABLED}) {
@@ -10052,7 +10256,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       // route subsequent clicks to the newly active pane.
       for (const auto& [path, button] : rendered_crumb_buttons_) {
         if (button) static_cast<BreadcrumbButton*>(button.get())->SetCallback(
-            Deferred(base::BindRepeating(&FilesView::Navigate, pane->weak_.GetWeakPtr(), path, -1, false)));
+            Deferred(base::BindRepeating(&FilesView::NavigateBreadcrumb, pane->weak_.GetWeakPtr(), path)));
       }
       rendered_crumb_pane_ = pane->pane_id_;
     }
@@ -10065,7 +10269,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void SplitResizeChanged(bool resizing) {
     split_resize_active_ = resizing;
     VisitPanes(Current().pane_host, base::BindRepeating([](bool active, FilesView* pane) {
-      if (pane->history_page_ || !pane->files_->contents()) return;
+      if (!pane->ShowsFileList() || !pane->files_->contents()) return;
       auto* layout = views::AsViewClass<FileLayout>(pane->files_->contents());
       if (!layout) return;
       if (active) {
@@ -10106,10 +10310,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
       // whole scroll surface from zero makes breadcrumb navigation flash.
       if (GetFileViewPreferences().animate_folders) AnimateArrival(file_surface_, 0.85f);
     }
-    if (root_ && !history_page_) FileViewportChanged();
+    if (root_ && ShowsFileList()) FileViewportChanged();
   }
   int ListMinimumWidth() const {
-    const auto& o = tabs_[active_].options;
+    const auto& o = Current().options;
     return o.column_widths[0] + (o.size_column ? o.column_widths[1] : 0) +
         (o.type_column ? o.column_widths[2] : 0) + (o.modified_column ? o.column_widths[3] : 0) +
         (o.created_column ? o.column_widths[4] : 0) + (o.permissions_column ? o.column_widths[5] : 0);
@@ -10152,8 +10356,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     files_->InvalidateLayout(); root_->ScheduleWorkspaceSave();
   }
   bool FileKeyPressed(const ui::KeyEvent& event) {
-    if (network_view_) return NetworkPageKey(network_view_, event);
-    if (history_page_ || Current().loading || order_pending_ || displayed_entries_.empty() || !files_->contents()) return false;
+    if (network_view_ && !BrowsingArchive()) return NetworkPageKey(network_view_, event);
+    if (!ShowsFileList() || Current().loading || order_pending_ || displayed_entries_.empty() || !files_->contents()) return false;
     auto* focused = GetFocusManager() ? GetFocusManager()->GetFocusedView() : nullptr;
     if (!focused || !files_->Contains(focused)) return false;
     auto* layout = static_cast<FileLayout*>(files_->contents());
@@ -10274,7 +10478,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     directory_retry_.Stop(); CancelOrdering();
   }
   void ClearMaterializedRows(bool preserve_visuals = false) {
-    if (!files_->contents() || history_page_) return;
+    if (!files_->contents() || !ShowsFileList()) return;
     std::vector<base::FilePath> paths;
     for (const auto& [path, row] : row_views_) paths.push_back(path);
     RemoveFileRows(paths, false, preserve_visuals);
@@ -10371,7 +10575,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
   }
   void FileContentsScrolled() {
-    if (history_page_) {
+    if (!ShowsFileList()) {
       if (auto* list = views::AsViewClass<HistoryList>(files_->contents())) list->ScheduleUpdate();
       return;
     }
@@ -10384,7 +10588,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     FileViewportChanged();
   }
   void FileViewportChanged() {
-    if (!root_ || history_page_ || !files_->contents()) return;
+    if (!root_ || !ShowsFileList() || !files_->contents()) return;
     auto* layout = views::AsViewClass<FileLayout>(files_->contents());
     if (!layout) return;
     const auto [first, last] = layout->ItemsInRect(files_->GetVisibleRect());
@@ -10408,7 +10612,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         std::ranges::any_of(dragging_rows_, [row](const auto& dragged) { return dragged.get() == row; });
   }
   void UpdateVirtualRows() {
-    if (!root_ || history_page_ || tabs_.empty() || order_pending_ || displayed_entries_.empty() || !files_->contents() || !IsDrawn()) return;
+    if (!root_ || !ShowsFileList() || tabs_.empty() || order_pending_ || displayed_entries_.empty() || !files_->contents() || !IsDrawn()) return;
     auto* layout = static_cast<FileLayout*>(files_->contents());
     auto viewport = files_->GetVisibleRect();
     if (viewport.IsEmpty() || layout->width() <= 0) return;
@@ -10534,7 +10738,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void RenderFiles() {
     if (root_ && root_->hover_owner_.get() == this) root_->CloseHoverPreview();
-    if (history_page_) return;
+    if (!ShowsFileList()) return;
     if (Current().sorted_mode != Current().options.sort || Current().sorted_hidden != Current().options.show_hidden) {
       RequestOrder(); return;
     }
@@ -10719,7 +10923,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void FlushRowDetails() {
     if (split_resize_active_) return;
-    if (!root_ || history_page_ || tabs_.empty() || !IsDrawn() || Current().loading || order_pending_) return;
+    if (!root_ || !ShowsFileList() || tabs_.empty() || !IsDrawn() || Current().loading || order_pending_) return;
     auto* layout = views::AsViewClass<FileLayout>(files_->contents());
     if (!layout) return;
     const auto [first, last] = layout->ItemsInRect(files_->GetVisibleRect());
@@ -10905,9 +11109,29 @@ class FilesView : public views::View, public views::TextfieldController, public 
           pane->RequestFileVisuals();
         }, weak_.GetWeakPtr()));
   }
+  void ArchiveIconLoaded(std::string mime, int edge, gfx::ImageSkia image) {
+    archive_icons_pending_.erase({mime, edge});
+    if (!BrowsingArchive() || image.isNull() || edge != kFileIconSizes[Current().options.icon_index]) return;
+    const auto icon = ui::ImageModel::FromImageSkia(image);
+    for (const auto& [entry, button] : visible_buttons_)
+      if (button && entry->mime == mime) static_cast<FileButton*>(button.get())->SetFileImage(icon);
+  }
   ui::ImageModel FileImage(const Entry& entry) {
     const auto& options = Current().options;
     const int edge = kFileIconSizes[options.icon_index];
+    if (BrowsingArchive()) {
+      if (entry.mime == "inode/symlink")
+        return ui::ImageModel::FromVectorIcon(vector_icons::kLinkIcon, ui::kColorSysOnSurfaceVariant, edge);
+      if (auto icon = FindCachedBundledIcon(entry.mime, entry.directory, edge)) {
+        if (!icon->isNull()) return ui::ImageModel::FromImageSkia(*icon);
+      } else if (archive_icons_pending_.emplace(entry.mime, edge).second) {
+        base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+            base::BindOnce(&LoadBundledIcon, entry.mime, entry.directory, edge),
+            base::BindOnce(&FilesView::ArchiveIconLoaded, weak_.GetWeakPtr(), entry.mime, edge));
+      }
+      return ui::ImageModel::FromVectorIcon(entry.directory ? vector_icons::kFolderFilledIcon :
+          vector_icons::kDescriptionIcon, ui::kColorSysOnSurfaceVariant, edge);
+    }
     if (entry.tag > 0) return ui::ImageModel::FromVectorIcon(kTagFolderIcon, ui::kColorSysPrimary, edge);
     const float display_scale = files_->layer() ? files_->layer()->device_scale_factor() : 1.f;
 #if BUILDFLAG(IS_WIN)
@@ -11112,7 +11336,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (visual_stopped_ || root_ || tabs_.empty()) return;
     std::vector<FilesView*> panes;
     VisitPanes(Current().pane_host, base::BindRepeating([](std::vector<FilesView*>* list, FilesView* pane) {
-      if (pane->history_page_) return;
+      if (pane->BrowsingArchive() || pane->history_page_) return;
       if (pane->IsDrawn()) list->push_back(pane);
       else pane->CancelOutsideVisualRange(0, 0);
     }, &panes));
@@ -11433,8 +11657,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     more_button_->SetVisible(!tag_results);
     new_folder_button_->SetTooltipText(Text(tag_id_ == 0 ? IDS_CRFILES_TAG_CREATE : IDS_CRFILES_NEW_FOLDER));
     new_folder_button_->SetAccessibleName(Text(tag_id_ == 0 ? IDS_CRFILES_TAG_CREATE : IDS_CRFILES_NEW_FOLDER));
-    new_folder_button_->SetEnabled((tag_id_ == 0 || !IsTagListing()) && !IsDrivesLocation(tab.path) && tab.path != root && !root.IsParent(tab.path) && !tab.loading);
-    search_action_->SetEnabled(!tab.loading && !tab.error &&
+    new_folder_button_->SetEnabled(!BrowsingArchive() && (tag_id_ == 0 || !IsTagListing()) && !IsDrivesLocation(tab.path) && tab.path != root && !root.IsParent(tab.path) && !tab.loading);
+    search_action_->SetEnabled(!BrowsingArchive() && !tab.loading && !tab.error &&
         ((tag_id_ > 0 && IsTagListing()) || (tab.path.IsAbsolute() && tab.path != root)));
     const bool trash = tab.path == root;
     const bool toolbar_changed = trash_footer_actions_->GetVisible() != trash;
@@ -11480,10 +11704,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (local_operation_error_) status_->SetText(Text(local_sources_retained_ ?
         IDS_CRFILES_MOVE_SOURCE_RETAINED : IDS_CRFILES_FILE_OPERATION_ERROR));
     footer_folder_name_->SetText(base::UTF8ToUTF16(PaneName()));
-    footer_folder_name_->SetTooltipText(NavigationPath(tab.path));
+    footer_folder_name_->SetTooltipText(NavigationPath(DisplayPath()));
     status_->SetText(u"· " + std::u16string(status_->GetText()));
     status_->SetTooltipText(base::UTF8ToUTF16(PaneName()) + u" " +
-        std::u16string(status_->GetText()) + u"\n" + NavigationPath(tab.path));
+        std::u16string(status_->GetText()) + u"\n" + NavigationPath(DisplayPath()));
     UpdateShareButton(); UpdateFooterVisibility();
   }
   void OpenSelected() {
@@ -11492,7 +11716,104 @@ class FilesView : public views::View, public views::TextfieldController, public 
     auto found = std::ranges::find(Current().entries, path, &Entry::path);
     if (found != Current().entries.end()) Open(path, found->directory);
   }
+  bool BrowsingArchive() const { return archive_tab_.has_value(); }
+  void ArchiveFolderChanged() {
+    if (!BrowsingArchive()) return;
+    ++virtual_model_generation_;
+    ++context_generation_;
+    context_archive_indices_.clear();
+    CancelOrdering();
+    ClearMaterializedRows();
+    auto& tab = *archive_tab_;
+    ++tab.request;
+    tab.scroll = 0;
+    tab.selected.clear();
+    tab.sorted_entries.clear();
+    tab.InvalidateOrder();
+    std::vector<Entry> entries;
+    const auto& rows = archive_view_->Rows();
+    entries.reserve(rows.size());
+    for (const auto& row : rows) {
+      // Row identities are pane-local. The index distinguishes duplicate ZIP names.
+      auto key = base::FilePath::FromASCII(base::NumberToString(entries.size())).Append(row.name);
+      entries.push_back({std::move(key), row.directory, base::saturated_cast<int64_t>(row.size), {},
+          row.mime, row.name.value().starts_with(FILE_PATH_LITERAL("."))});
+    }
+    tab.entries = std::move(entries);
+    RenderFiles();
+    if (root_->ActivePane() == this) root_->SyncNavigation();
+  }
+  void DisplayArchive() {
+    SaveScroll();
+    CloseNewFolder(); CloseViewOptions();
+    CancelDirectoryWork(); CancelFileVisuals(); ClearMaterializedRows();
+    ++access_generation_; ++Current().request;
+    tag_loading_ = false; tag_sizes_pending_ = false;
+    PaneContent()->SetVisible(false);
+    // Keep the physical directory and its selection intact. The archive model
+    // deliberately has no filesystem directory that could be used as a destination.
+    const auto options = Current().options;
+    archive_tab_.emplace(Tab{.id = next_id_++, .options = options});
+    files_->SetVisible(true);
+    footer_->SetVisible(false);
+    archive_view_->SetVisible(true);
+    archive_view_->Resume();
+    files_->RequestFocus();
+  }
+  void LeaveArchive() {
+    if (!BrowsingArchive()) return;
+    ++virtual_model_generation_;
+    ++context_generation_;
+    archive_view_->Suspend();
+    archive_view_->SetVisible(false);
+    CloseViewOptions(); CancelOrdering(); ClearMaterializedRows();
+    if (!history_page_) tabs_[active_].options = archive_tab_->options;
+    archive_tab_.reset();
+    files_->SetVisible(PaneContent() == files_.get());
+    PaneContent()->SetVisible(true);
+    if (PaneContent() == files_.get()) {
+      Current().selected = {archive_view_->archive()};
+      pending_search_selection_ = archive_view_->archive();
+      RenderFiles();
+      if (IsTagListing()) LoadTagFiles();
+      else if (pending_navigation_) {
+        const auto pending = *pending_navigation_;
+        NavigateAuthorized(pending.path, pending.history_index, pending.refresh);
+      } else QueueLiveRead();
+    }
+    UpdateFooterVisibility();
+    DefaultFocusView()->RequestFocus();
+    root_->SyncNavigation();
+  }
+  void CloseArchive() {
+    if (!archive_view_) return;
+    LeaveArchive();
+    auto* page = archive_view_.get();
+    archive_view_ = nullptr;
+    page->parent()->RemoveChildViewT(page);
+    root_->SyncNavigation();
+  }
+  void BrowseFile(const base::FilePath& path) {
+    CloseArchive();
+    root_->EndAddressEditing();
+    auto* center = files_->parent();
+    archive_view_ = center->AddChildViewAt(std::make_unique<ArchiveView>(path, base::BindRepeating(
+        &FilesView::ArchiveFolderChanged, weak_.GetWeakPtr()), base::BindRepeating(
+        [](base::WeakPtr<FilesView> pane, std::shared_ptr<ArchivePreview> preview) {
+          if (!pane || !pane->BrowsingArchive() || !pane->IsDrawn()) return;
+          auto path = preview->path;
+          pane->root_->archive_previews_.push_back(std::move(preview));
+          pane->OpenLocalFile(path, true);
+        }, weak_.GetWeakPtr())), 0);
+    DisplayArchive();
+  }
   void Open(base::FilePath path, bool directory) {
+    if (BrowsingArchive()) {
+      const auto& entries = Current().entries;
+      const auto it = std::ranges::find(entries, path, &Entry::path);
+      if (it != entries.end()) archive_view_->OpenRow(it - entries.begin());
+      return;
+    }
     if (tag_id_ == 0) { Navigate(std::move(path)); return; }
 #if BUILDFLAG(IS_MAC)
     if (directory) {
@@ -11510,14 +11831,19 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
 #endif
     if (directory) { Navigate(path); return; }
+    if (IsBrowsableArchive(path)) { BrowseFile(path); return; }
+    OpenLocalFile(path, false);
+  }
+  void OpenLocalFile(const base::FilePath& path, bool archive_preview) {
     const auto found = std::ranges::find(Current().entries, path, &Entry::path);
     if (IsPdfReaderFile(path, found == Current().entries.end() ? std::string_view() : found->mime)) {
       OpenCrFilesPdf(path, base::BindOnce([](base::WeakPtr<FilesView> view) {
-        if (view) view->status_->SetText(Text(IDS_CRFILES_OPEN_ERROR));
+        if (view) view->ReportFileOpenError();
       }, weak_.GetWeakPtr()));
       return;
     }
     if (IsImageViewerFile(path, found == Current().entries.end() ? std::string_view() : found->mime)) {
+      if (archive_preview) { ShowCrFilesImageViewer(GetWidget(), {path}, path); return; }
       std::vector<base::FilePath> images;
       for (const auto index : displayed_entries_) {
         const auto& entry = Current().entries[index];
@@ -11540,8 +11866,12 @@ class FilesView : public views::View, public views::TextfieldController, public 
       if (ok) log.Succeed();
       return ok;
     }, path), base::BindOnce([](base::WeakPtr<FilesView> view, bool ok) {
-      if (view && !ok) view->status_->SetText(Text(IDS_CRFILES_OPEN_ERROR));
+      if (view && !ok) view->ReportFileOpenError();
     }, weak_.GetWeakPtr()));
+  }
+  void ReportFileOpenError() {
+    if (BrowsingArchive()) archive_view_->ReportOpenError();
+    else status_->SetText(Text(IDS_CRFILES_OPEN_ERROR));
   }
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   void EnsureQuickSharing() {
@@ -11689,6 +12019,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     EnsureQuickSharing();
     const auto quick_state = quick_sharing_->GetSnapshot();
+    if (!quick_state.busy && !quick_state.can_reconnect_bluetooth && !quick_sharing_dialog_.view()) quick_share_archive_files_.clear();
     if (quick_state.receiving && quick_state.stage == ShareService::Stage::kComplete &&
         quick_state.session != last_quick_received_session_) {
       last_quick_received_session_ = quick_state.session;
@@ -11713,6 +12044,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
           (pane->Current().loading && !pane->tag_loading_))) pane->LoadTagFiles();
     }));
     auto s = sharing_->GetSnapshot();
+    // The sender can keep reading after its dialog or the archive pane closes.
+    if (!s.busy && !sharing_dialog_.view()) share_archive_files_.clear();
+    if (!clipboard_archive_files_.empty() && clipboard_sequence_ !=
+        ui::Clipboard::GetForCurrentThread()->GetSequenceNumber(ui::ClipboardBuffer::kCopyPaste))
+      clipboard_archive_files_.clear();
     RevealReceivedTarget(s);
     sidebar_buttons_.at(IDS_CRFILES_RECEIVED)->SetBreathing(
         visible && !widget->IsMinimized() && s.busy && s.receiving &&
@@ -11908,6 +12244,16 @@ class FilesView : public views::View, public views::TextfieldController, public 
   base::FilePath received_checked_path_;
   base::TimeTicks received_check_time_;
   raw_ptr<views::View> toolbar_ = nullptr;
+  std::set<std::pair<std::string, int>> archive_icons_pending_;
+  std::vector<size_t> context_archive_indices_;
+  std::weak_ptr<PendingArchiveCopy> pending_archive_copy_;
+  ArchiveView::Files clipboard_archive_files_, share_archive_files_;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  ArchiveView::Files quick_share_archive_files_;
+#endif
+  std::optional<Tab> archive_tab_;
+  raw_ptr<ArchiveView> archive_view_ = nullptr;
+  std::vector<std::shared_ptr<ArchivePreview>> archive_previews_;
   raw_ptr<views::View> file_surface_ = nullptr;
   bool address_editing_ = false;
   bool directory_animation_pending_ = false;
