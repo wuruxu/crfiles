@@ -246,6 +246,7 @@ class NavigationBackground : public views::Background {
 };
 
 constexpr int kFolderEdgeFadeHeight = 12;
+constexpr gfx::Size kFolderActionsSize(280, 26);
 
 class FolderEdgeFade : public views::View {
   METADATA_HEADER(FolderEdgeFade, views::View)
@@ -5495,20 +5496,15 @@ class FilesView : public views::View, public views::TextfieldController, public 
     add_place(vector_icons::kDevicesIcon, IDS_CRFILES_NETWORK, base::BindRepeating(&FilesView::ShowNetworkTab, base::Unretained(this)));
     sidebar_buttons_.at(IDS_CRFILES_NETWORK)->SetVisible(IsSmbEnabledForSession());
     add_place(kDeleteIcon, IDS_CRFILES_TRASH, base::BindRepeating(&FilesView::Trash, base::Unretained(this)));
+    trash_epoch_ = ObserveFileCachePath(TrashRoot(), true);
+    UpdateTrashIcon();
     base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-        base::BindOnce([] { return std::array{LoadTrashIcon(), LoadTrashIcon(kTabIconSize), LoadNetworkWorkgroupIcon(kTabIconSize), LoadNetworkWorkgroupIcon(20)}; }),
-        base::BindOnce([](base::WeakPtr<FilesView> view, std::array<gfx::ImageSkia, 4> images) {
+        base::BindOnce([] { return std::array{LoadNetworkWorkgroupIcon(kTabIconSize), LoadNetworkWorkgroupIcon(20)}; }),
+        base::BindOnce([](base::WeakPtr<FilesView> view, std::array<gfx::ImageSkia, 2> images) {
           if (!view) return;
-          if (!images[0].isNull()) {
-            auto* button = view->sidebar_buttons_.at(IDS_CRFILES_TRASH).get();
-            for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
-                               views::Button::STATE_PRESSED, views::Button::STATE_DISABLED})
-              button->SetImageModel(state, ui::ImageModel::FromImageSkia(images[0]));
-          }
-          if (!images[1].isNull()) view->trash_tab_icon_ = ui::ImageModel::FromImageSkia(images[1]);
-          if (!images[2].isNull()) view->network_tab_icon_ = ui::ImageModel::FromImageSkia(images[2]);
-          if (!images[3].isNull()) {
-            view->network_location_icon_ = ui::ImageModel::FromImageSkia(images[3]);
+          if (!images[0].isNull()) view->network_tab_icon_ = ui::ImageModel::FromImageSkia(images[0]);
+          if (!images[1].isNull()) {
+            view->network_location_icon_ = ui::ImageModel::FromImageSkia(images[1]);
             auto* sidebar = view->sidebar_buttons_.at(IDS_CRFILES_NETWORK).get();
             auto* breadcrumb = views::AsViewClass<BreadcrumbButton>(view->network_breadcrumb_.view());
             for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
@@ -5617,7 +5613,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     footer->layer()->SetOpacity(0.f); footer->SetCanProcessEventsWithinSubtree(false);
     footer->SetBackground(std::make_unique<FooterBackground>((history_page_ && tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor));
     footer->SetBorder(std::make_unique<FooterGlowBorder>(false));
-    auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
+    auto* footer_row = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets::VH(4, 8), 4));
     // Layer scrolling sizes the plain contents view from its preferred size.
     auto* actions_scroll = footer->AddChildView(std::make_unique<views::ScrollView>(views::ScrollView::ScrollWithLayers::kEnabled));
@@ -5626,8 +5622,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     actions_scroll->SetBackgroundColor(std::nullopt);
     actions_scroll->SetVerticalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
     actions_scroll->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kHiddenButEnabled);
-    actions_scroll->SetPreferredSize(gfx::Size(280, 26));
-    footer_layout->SetFlexForView(actions_scroll, 1);
+    actions_scroll->SetPreferredSize(kFolderActionsSize);
+    footer_row->SetFlexForView(actions_scroll, 1);
     auto* actions = actions_scroll->SetContents(std::make_unique<views::View>());
     actions->SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
     auto action = [&](const gfx::VectorIcon& icon, int label, base::RepeatingClosure callback, views::View* container = nullptr) {
@@ -5635,6 +5631,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
       button->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(3, 5)));
       button->SetPreferredSize(gfx::Size(30, 26));
       button->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+      button->SetImageModel(views::Button::STATE_DISABLED,
+          ui::ImageModel::FromVectorIcon(icon, ui::kColorSysStateDisabled, 20));
       auto* ink = views::InkDrop::Get(button->ink_drop_view());
       ink->SetHighlightOpacity(0.18f); ink->SetVisibleOpacity(0.30f);
       for (auto state : {views::Button::STATE_HOVERED, views::Button::STATE_PRESSED})
@@ -5648,7 +5646,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     new_folder_button_ = action(vector_icons::kFolderOpenIcon, IDS_CRFILES_NEW_FOLDER,
         base::BindRepeating(&FilesView::ShowNewFolder, base::Unretained(this)));
-    trash_footer_actions_ = footer->AddChildView(std::make_unique<views::View>());
+    footer_controls_ = footer->AddChildView(std::make_unique<views::View>());
+    footer_row->SetFlexForView(footer_controls_, 2);
+    auto* footer_layout = footer_controls_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+    trash_footer_actions_ = footer_controls_->AddChildView(std::make_unique<views::View>());
     footer_layout->SetFlexForView(trash_footer_actions_, 1);
     auto* trash_actions_layout = trash_footer_actions_->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
@@ -5681,24 +5683,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
         Deferred(base::BindRepeating(&FilesView::ShowSearchTab, weak_.GetWeakPtr())));
     more_button_ = action(vector_icons::kExpandMoreOldIcon, IDS_CRFILES_MORE,
         base::BindRepeating(&FilesView::ShowMoreMenu, base::Unretained(this)));
-    footer_status_ = footer->AddChildView(std::make_unique<views::View>());
+    footer_status_ = footer_controls_->AddChildView(std::make_unique<views::View>());
     footer_layout->SetFlexForView(footer_status_, 2);
-    auto* status_layout = footer_status_->SetLayoutManager(std::make_unique<views::FlexLayout>());
-    status_layout->SetOrientation(views::LayoutOrientation::kHorizontal)
-        .SetMainAxisAlignment(views::LayoutAlignment::kEnd)
-        .SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
-    const views::FlexSpecification text_flex(views::MinimumFlexSizeRule::kScaleToZero,
-                                            views::MaximumFlexSizeRule::kPreferred);
-    footer_folder_name_ = footer_status_->AddChildView(std::make_unique<views::Label>());
-    footer_folder_name_->SetEnabledColor(ui::kColorSysPrimary);
-    footer_folder_name_->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
-    footer_folder_name_->SetElideBehavior(gfx::ELIDE_TAIL);
-    footer_folder_name_->SetProperty(views::kFlexBehaviorKey, text_flex);
-    status_ = footer_status_->AddChildView(std::make_unique<views::Label>());
-    status_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    status_->SetElideBehavior(gfx::ELIDE_TAIL);
-    status_->SetProperty(views::kFlexBehaviorKey, text_flex);
-    status_->SetProperty(views::kMarginsKey, gfx::Insets::TLBR(0, 4, 0, 0));
+    CreateFooterLabels(footer_status_, footer_folder_name_, status_);
     if (!root_) for (auto accelerator : {ui::Accelerator(ui::VKEY_T, kPrimaryModifier),
              ui::Accelerator(ui::VKEY_Q, kPrimaryModifier),
              ui::Accelerator(ui::VKEY_C, kPrimaryModifier),
@@ -6237,7 +6224,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
           std::min(std::max(0, area.width() - 8), static_cast<int>(std::lround(preferred.width() * 1.12))) : std::max(0, area.width());
       const int footer_height = trash ? static_cast<int>(std::lround(preferred.height() * 1.08)) : preferred.height();
       if (auto* layout = views::AsViewClass<FileLayout>(files_->contents()))
-        layout->SetBottomPadding(tag_id_ == 0 ? 0 : footer_height + 10);
+        layout->SetBottomPadding(tag_id_ == 0 && !BrowsingArchive() ? 0 : footer_height + 10);
       if (network_view_) SetNetworkPageBottomInset(network_view_, network_footer_visible_ ? footer_height + 10 : 0);
       footer_->SetBounds(area.x() + (area.width() - footer_width) / 2,
           std::max(area.y(), area.bottom() - footer_height -
@@ -6505,6 +6492,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
           const auto it = std::ranges::find(entries, context_paths_.front(), &Entry::path);
           return it != entries.end() && it->mime != "inode/symlink";
         }
+        if (command_id == kContextOpenWith) return context_archive_indices_.size() == 1 && !context_apps_.empty();
+        if (command_id >= kContextApplication)
+          return context_archive_indices_.size() == 1 && static_cast<size_t>(command_id - kContextApplication) < context_apps_.size();
         if (command_id == kContextCopy) return !context_archive_indices_.empty();
         if (command_id == kContextShare) return !context_archive_indices_.empty() && !root_->SharingBusy();
         if (command_id == kContextQuickShare) return !context_archive_indices_.empty() && !root_->QuickShareBusy();
@@ -6545,7 +6535,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
           (command_id >= kContextSplitLeft && command_id <= kContextSplitBottom)) return single && context_directory_;
       return !root_->local_operation_busy_ && !trash_busy_ && !Current().loading;
     }
-    if (history_page_) return history_header_ && !HistoryFilterAction(command_id).empty();
+    if (!BrowsingArchive() && history_page_) return history_header_ && !HistoryFilterAction(command_id).empty();
     if (tabs_.empty()) return false;
     const auto& tab = tabs_[active_];
     switch (command_id) {
@@ -6570,7 +6560,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (command_id >= kContextOpen && command_id < kContextApplication + 1000) {
       Deferred(base::BindRepeating(&FilesView::ContextAction, weak_.GetWeakPtr(), command_id, context_generation_, Current().request)).Run(); return;
     }
-    if (history_page_ && history_header_) {
+    if (!BrowsingArchive() && history_page_ && history_header_) {
       const auto action = HistoryFilterAction(command_id);
       history_filter_ = history_filter_ == action ? std::string() : action;
       history_header_->SetFilter(history_filter_.empty() ? std::u16string() : Text(command_id));
@@ -6983,9 +6973,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
       const auto entry = std::ranges::find(Current().entries, context_paths_.front(), &Entry::path);
       context_package_ = entry != Current().entries.end() && entry->package;
     }
-    if (!BrowsingArchive() && context_paths_.size() == 1 && (!context_directory_ || context_package_)) {
+    if (context_paths_.size() == 1 && (!context_directory_ || context_package_) &&
+        (!BrowsingArchive() || context_archive_indices_.size() == 1)) {
+      auto path = context_paths_.front();
+      std::optional<std::string> member_mime;
+      if (BrowsingArchive()) {
+        const auto& member = archive_view_->Rows()[context_archive_indices_.front()];
+        path = member.name;
+        member_mime = member.mime;
+      }
       base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-          base::BindOnce(&FileApplications, context_paths_.front()),
+          base::BindOnce(&FileApplications, std::move(path), std::move(member_mime)),
           base::BindOnce(&FilesView::ContextApplicationsLoaded, weak_.GetWeakPtr(), generation, Current().request, point, type));
     } else ShowFileMenu(point, type);
   }
@@ -7029,6 +7027,11 @@ class FilesView : public views::View, public views::TextfieldController, public 
         context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
         add(kContextProperties, IDS_CRFILES_PROPERTIES, &kInfoIcon);
       }
+      if (BrowsingArchive()) {
+        context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
+        add(IDS_CRFILES_RENAME_PANE, IDS_CRFILES_RENAME_PANE, &kEditIcon);
+        if (pane_can_close_) add(IDS_CRFILES_CLOSE_PANE, IDS_CRFILES_CLOSE_PANE, &kCloseIcon);
+      }
     } else if (tag_id_ == 0) {
       add(kContextOpen, IDS_CRFILES_OPEN, &kTagFolderIcon);
       context_menu_->AddSeparator(ui::NORMAL_SEPARATOR);
@@ -7044,7 +7047,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         context_menu_->AddSubMenuWithIcon(kContextSplit, Text(IDS_CRFILES_OPEN_SPLIT), context_split_.get(), image(kSplitSceneRightIcon));
       } else if (context_paths_.size() == 1) {
         const auto preferred = std::ranges::find(context_apps_, true, &FileApplication::is_default);
-        if (preferred != context_apps_.end())
+        if (!BrowsingArchive() && preferred != context_apps_.end())
           context_menu_->AddItemWithIcon(kContextApplication + std::distance(context_apps_.begin(), preferred), Text(IDS_CRFILES_OPEN_WITH) + u" " + base::UTF8ToUTF16(preferred->name), app_image(*preferred));
         else add(kContextOpen, IDS_CRFILES_OPEN, &kOpenInNewIcon);
         for (size_t i = 0; i < context_apps_.size(); ++i)
@@ -7414,11 +7417,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (context_paths_.empty()) return;
     const auto path = context_paths_.front();
     if (command >= kContextApplication && static_cast<size_t>(command - kContextApplication) < context_apps_.size()) {
-      // macOS waits for NSWorkspace to report whether the launch succeeded.
-      base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
-          {base::MayBlock(), base::WithBaseSyncPrimitives()},
-          base::BindOnce(&OpenFileWith, path, context_apps_[command - kContextApplication].id),
-          base::BindOnce(&FilesView::ContextLaunchFinished, weak_.GetWeakPtr())); return;
+      const auto& application = context_apps_[command - kContextApplication].id;
+      if (BrowsingArchive()) {
+        archive_view_->ExportFiles(context_archive_indices_, base::BindOnce(
+            [](base::WeakPtr<FilesView> pane, std::string application, ArchiveView::Files files) {
+              if (!pane || !pane->IsDrawn() || files.size() != 1) return;
+              auto preview = std::move(files.front());
+              const auto file = preview->path;
+              pane->LaunchContextApplication(file, application, std::move(preview));
+            }, weak_.GetWeakPtr(), application), false);
+      } else LaunchContextApplication(path, application, nullptr);
+      return;
     }
     if (command >= kContextSplitLeft && command <= kContextSplitBottom) { root_->SplitPane(this, command - kContextSplitLeft, path); return; }
     switch (command) {
@@ -7536,6 +7545,17 @@ class FilesView : public views::View, public views::TextfieldController, public 
           }
           shell->ScheduleWorkspaceSave();
         }, root_->weak_.GetWeakPtr(), ids));
+  }
+  void LaunchContextApplication(const base::FilePath& path, const std::string& application,
+                                std::shared_ptr<ArchivePreview> preview) {
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE,
+        {base::MayBlock(), base::WithBaseSyncPrimitives()},
+        base::BindOnce(&OpenFileWith, path, application),
+        base::BindOnce([](base::WeakPtr<FilesView> shell, base::WeakPtr<FilesView> pane,
+                          std::shared_ptr<ArchivePreview> preview, bool ok) {
+          if (ok && preview && shell) shell->archive_previews_.push_back(std::move(preview));
+          if (!ok && pane) pane->ReportFileOpenError();
+        }, root_->weak_.GetWeakPtr(), weak_.GetWeakPtr(), std::move(preview)));
   }
   void ContextLaunchFinished(bool ok) { if (!ok) status_->SetText(Text(IDS_CRFILES_OPEN_ERROR)); }
   void ShowEntryName(bool compress) {
@@ -7717,6 +7737,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const bool active = GetWidget()->IsActive();
     const bool activated = active && !live_window_active_;
     live_window_active_ = active;
+    if (activated) trash_icon_revision_.reset();
     std::set<base::FilePath> paths;
     VisitPanes(Current().pane_host, base::BindRepeating([](bool activated,
                                                         std::set<base::FilePath>* paths, FilesView* pane) {
@@ -7919,7 +7940,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     }
     PollImageHover(cursor);
     VisitPanes(Current().pane_host, base::BindRepeating([](gfx::Point point, FilesView* pane) {
-      if (pane->history_page_ || !pane->footer_) return;
+      if ((pane->history_page_ && !pane->BrowsingArchive()) || !pane->footer_) return;
       // Hover anywhere in either an active or inactive pane reveals its footer.
       // Use the fixed pane bounds, never the animated footer or event target.
       // A button becoming visible under the cursor cannot change this region.
@@ -7931,8 +7952,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateFooterVisibility() {
     if (!root_ || !footer_) return;
-    if (BrowsingArchive() && history_page_) { footer_->SetVisible(false); return; }
-    if (network_page_) {
+    const bool archive = BrowsingArchive();
+    if (!archive && network_page_) {
       footer_hide_timer_.Stop(); footer_expired_ = false;
       footer_shown_ = network_footer_visible_; footer_restore_pending_ = false;
       footer_->SetVisible(network_footer_visible_);
@@ -7941,7 +7962,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
       layer->SetTransform(gfx::Transform()); layer->SetOpacity(network_footer_visible_ ? 1.f : 0.f);
       return;
     }
-    if (history_page_ || tag_id_ == 0) {
+    if (!archive && (history_page_ || tag_id_ == 0)) {
       footer_hide_timer_.Stop(); footer_shown_ = false; footer_restore_pending_ = true;
       footer_->SetVisible(false); return;
     }
@@ -7954,9 +7975,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
       }, weak_.GetWeakPtr()));
     }
     constexpr int kMinimumFooterWidth = 280;
-    const bool fits = footer_->parent()->width() >= kMinimumFooterWidth;
+    const bool fits = archive || footer_->parent()->width() >= kMinimumFooterWidth;
     footer_->SetVisible(fits);
-    const bool show = fits && (Current().path == TrashRoot() || !GetFileViewPreferences().auto_hide_toolbar || footer_hovered_ || (active && !footer_expired_) || new_folder_widget_ || more_menu_open_);
+    const bool show = fits && ((archive && archive_view_->NeedsFooter()) || Current().path == TrashRoot() || !GetFileViewPreferences().auto_hide_toolbar || footer_hovered_ || (active && !footer_expired_) || new_folder_widget_ || more_menu_open_);
     if (footer_shown_ == show && !footer_restore_pending_) return;
     footer_shown_ = show;
     footer_->SetCanProcessEventsWithinSubtree(show);
@@ -8596,11 +8617,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void UpdateShareButton() {
     if (network_view_) { UpdateNetworkShareButton(); return; }
     if (!share_button_ || tabs_.empty()) return;
-    if (BrowsingArchive()) { share_button_->SetEnabled(false); return; }
     const bool tag_target = tag_id_ > 0 && IsTagListing();
-    const bool shared = tag_target ? std::ranges::any_of(root_->shared_directories_,
-        [&](const auto& target) { return target.tag_id == tag_id_; }) : IsDirectoryShared(Current().path);
-    share_button_->SetEnabled(tag_id_ != 0 && (shared || !IsDrivesLocation(Current().path)));
+    const bool shared = !BrowsingArchive() && (tag_target ? std::ranges::any_of(root_->shared_directories_,
+        [&](const auto& target) { return target.tag_id == tag_id_; }) : IsDirectoryShared(Current().path));
+    share_button_->SetEnabled(!BrowsingArchive() && tag_id_ != 0 && (shared || !IsDrivesLocation(Current().path)));
     share_button_->GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
     share_button_->GetViewAccessibility().SetCheckedState(shared ? ax::mojom::CheckedState::kTrue : ax::mojom::CheckedState::kFalse);
     share_button_->SetBackground(shared ? views::CreateRoundedRectBackground(ui::kColorSysPrimaryContainer, 8) : nullptr);
@@ -8766,7 +8786,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void ShowRenamePane() {
     CloseNewFolder();
-    new_folder_delegate_ = std::make_unique<views::BubbleDialogDelegate>(more_button_, views::BubbleBorder::BOTTOM_LEFT);
+    views::View* anchor = BrowsingArchive() ? static_cast<views::View*>(archive_view_) : more_button_.get();
+    new_folder_delegate_ = std::make_unique<views::BubbleDialogDelegate>(anchor, views::BubbleBorder::BOTTOM_LEFT);
     // Visible arrows require a Views-drawn shadow, including on macOS.
     new_folder_delegate_->set_shadow(views::BubbleBorder::STANDARD_SHADOW);
     new_folder_delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
@@ -8813,8 +8834,6 @@ class FilesView : public views::View, public views::TextfieldController, public 
       pane->pane_can_close_ = multiple;
       pane->UpdateFooterVisibility();
       const bool selected = pane == active && multiple;
-      pane->footer_folder_name_->SetEnabledColor(!multiple || selected ?
-          ui::kColorSysPrimary : ui::kColorSysOnSurfaceSecondary);
       const auto surface = (pane->history_page_ && pane->tag_id_ < 0) ? ui::kColorSysBase : kFolderSurfaceColor;
       if (selected) {
         const auto style = GetSplitSelectionStyle();
@@ -8825,6 +8844,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
         pane->pane_body_->SetBorder(views::CreateSolidBorder(multiple ? 4 : 1, surface));
       }
       pane->pane_border_active_ = selected;
+      const auto name_color = pane->FooterFolderNameColor();
+      pane->footer_folder_name_->SetEnabledColor(name_color);
+      if (pane->archive_folder_name_) pane->archive_folder_name_->SetEnabledColor(name_color);
       const bool trash = pane->trash_footer_actions_->GetVisible();
       if (selected && pane->pane_border_style_ == SplitSelectionStyle::kCorners) {
         pane->footer_->SetBorder(std::make_unique<FooterGlowBorder>(trash));
@@ -10602,6 +10624,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   }
   void UpdateFileViewport() {
     UpdateVirtualRows();
+    if (BrowsingArchive()) archive_view_->UpdatePasswordAnchor();
     ScheduleRowDetails();
     RequestFileVisuals();
   }
@@ -10764,7 +10787,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     files_->SetHorizontalScrollBarMode(options.icons ? views::ScrollView::ScrollBarMode::kDisabled :
         views::ScrollView::ScrollBarMode::kEnabled);
     auto contents = std::make_unique<FileLayout>(options.icons, icon_size, minimum_width);
-    contents->SetBottomPadding(tag_id_ == 0 ? 0 : footer_->GetPreferredSize({}).height() + 10);
+    contents->SetBottomPadding(tag_id_ == 0 && !BrowsingArchive() ? 0 : footer_->GetPreferredSize({}).height() + 10);
     contents->SetSelectionCallback(base::BindRepeating(&FilesView::RubberBand, weak_.GetWeakPtr()));
     // Header follows the same column visibility and widths as the data rows.
     if (!options.icons) {
@@ -11109,12 +11132,14 @@ class FilesView : public views::View, public views::TextfieldController, public 
           pane->RequestFileVisuals();
         }, weak_.GetWeakPtr()));
   }
-  void ArchiveIconLoaded(std::string mime, int edge, gfx::ImageSkia image) {
-    archive_icons_pending_.erase({mime, edge});
+  void ArchiveIconLoaded(std::string_view asset, int edge, gfx::ImageSkia image) {
+    archive_icons_pending_.erase({asset, edge});
     if (!BrowsingArchive() || image.isNull() || edge != kFileIconSizes[Current().options.icon_index]) return;
     const auto icon = ui::ImageModel::FromImageSkia(image);
     for (const auto& [entry, button] : visible_buttons_)
-      if (button && entry->mime == mime) static_cast<FileButton*>(button.get())->SetFileImage(icon);
+      if (button && entry->mime != "inode/symlink" &&
+          BundledFileIconAsset(entry->path, entry->mime, entry->directory) == asset)
+        static_cast<FileButton*>(button.get())->SetFileImage(icon);
   }
   ui::ImageModel FileImage(const Entry& entry) {
     const auto& options = Current().options;
@@ -11122,12 +11147,13 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (BrowsingArchive()) {
       if (entry.mime == "inode/symlink")
         return ui::ImageModel::FromVectorIcon(vector_icons::kLinkIcon, ui::kColorSysOnSurfaceVariant, edge);
-      if (auto icon = FindCachedBundledIcon(entry.mime, entry.directory, edge)) {
+      const auto asset = BundledFileIconAsset(entry.path, entry.mime, entry.directory);
+      if (auto icon = FindCachedBundledIcon(asset, edge)) {
         if (!icon->isNull()) return ui::ImageModel::FromImageSkia(*icon);
-      } else if (archive_icons_pending_.emplace(entry.mime, edge).second) {
+      } else if (archive_icons_pending_.emplace(asset, edge).second) {
         base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-            base::BindOnce(&LoadBundledIcon, entry.mime, entry.directory, edge),
-            base::BindOnce(&FilesView::ArchiveIconLoaded, weak_.GetWeakPtr(), entry.mime, edge));
+            base::BindOnce(&LoadBundledIcon, asset, edge),
+            base::BindOnce(&FilesView::ArchiveIconLoaded, weak_.GetWeakPtr(), asset, edge));
       }
       return ui::ImageModel::FromVectorIcon(entry.directory ? vector_icons::kFolderFilledIcon :
           vector_icons::kDescriptionIcon, ui::kColorSysOnSurfaceVariant, edge);
@@ -11538,7 +11564,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   void ConfigureNetworkFooter() {
     normal_footer_actions_->SetVisible(false); trash_footer_actions_->SetVisible(false);
     footer_folder_name_->SetVisible(false);
-    auto* outer = static_cast<views::BoxLayout*>(footer_->GetLayoutManager());
+    auto* outer = static_cast<views::BoxLayout*>(footer_controls_->GetLayoutManager());
     outer->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
     outer->SetFlexForView(footer_status_, 1);
     // Retain the ordinary footer's labels and FlexLayout for directory stats.
@@ -11549,8 +11575,8 @@ class FilesView : public views::View, public views::TextfieldController, public 
     status_->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
     status_->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(0, 6, 0, 0)));
     status_->SetProperty(views::kMarginsKey, gfx::Insets());
-    auto* left = footer_->AddChildViewAt(std::make_unique<views::View>(), 0);
-    auto* right = footer_->AddChildView(std::make_unique<views::View>());
+    auto* left = footer_controls_->AddChildViewAt(std::make_unique<views::View>(), 0);
+    auto* right = footer_controls_->AddChildView(std::make_unique<views::View>());
     network_footer_left_ = left; network_footer_right_ = right;
     // Reserve space for actions at the toolbar edges.
     for (auto* side : {left, right}) {
@@ -11619,7 +11645,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     network_new_folder_->SetEnabled(state.connected && !state.busy);
     network_paste_->SetEnabled(state.connected && !state.busy);
     network_cancel_->SetVisible(state.show_actions && state.busy);
-    auto* outer = static_cast<views::BoxLayout*>(footer_->GetLayoutManager());
+    auto* outer = static_cast<views::BoxLayout*>(footer_controls_->GetLayoutManager());
     // Idle network pages use the same action/info flex ratio as local folders.
     // Progress and errors start at the left edge of the status area.
     outer->SetFlexForView(network_footer_left_, state.show_summary ? 1 : 0);
@@ -11648,7 +11674,68 @@ class FilesView : public views::View, public views::TextfieldController, public 
     UpdateNetworkShareButton();
     if (visibility_changed || actions_changed || summary_changed) InvalidateLayout();
   }
+  std::u16string FolderStatusText() const {
+    const auto& tab = Current();
+    const size_t visible_count = displayed_entries_.size();
+    auto summary = tab.loading ? Text(IDS_CRFILES_LOADING) : tab.error ? Text(IDS_CRFILES_READ_ERROR) :
+        visible_count == 0 ? Text(IDS_CRFILES_EMPTY) :
+        base::NumberToString16(visible_count) + u" " + Text(IDS_CRFILES_ITEMS) + u" · " +
+        base::NumberToString16(tab.selected.size()) + u" " + Text(IDS_CRFILES_SELECTED);
+    if (!tab.selected.empty()) {
+      int64_t selected_bytes = 0;
+      bool has_selected_file = false;
+      for (const auto& entry : tab.entries) {
+        if (!tab.removed.contains(entry.path) && !entry.directory && tab.selected.contains(entry.path)) {
+          has_selected_file = true;
+          if (entry.size > 0) selected_bytes += std::min(entry.size, std::numeric_limits<int64_t>::max() - selected_bytes);
+        }
+      }
+      if (has_selected_file || tab.selected.size() > 1)
+        summary += u" · " + ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(selected_bytes)));
+    }
+    return summary;
+  }
+  ui::ColorId FooterFolderNameColor() const {
+    return !pane_can_close_ || pane_border_active_ ? ui::kColorSysPrimary : ui::kColorSysOnSurfaceSecondary;
+  }
+  void CreateFooterLabels(views::View* container, raw_ptr<views::Label>& name,
+                          raw_ptr<views::Label>& details) {
+    auto* status_layout = container->SetLayoutManager(std::make_unique<views::FlexLayout>());
+    status_layout->SetOrientation(views::LayoutOrientation::kHorizontal)
+        .SetMainAxisAlignment(views::LayoutAlignment::kEnd)
+        .SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
+    const views::FlexSpecification text_flex(views::MinimumFlexSizeRule::kScaleToZero,
+                                            views::MaximumFlexSizeRule::kPreferred);
+    name = container->AddChildView(std::make_unique<views::Label>());
+    name->SetEnabledColor(FooterFolderNameColor());
+    name->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
+    name->SetElideBehavior(gfx::ELIDE_TAIL);
+    name->SetProperty(views::kFlexBehaviorKey, text_flex);
+    details = container->AddChildView(std::make_unique<views::Label>());
+    details->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    details->SetElideBehavior(gfx::ELIDE_TAIL);
+    details->SetProperty(views::kFlexBehaviorKey, text_flex);
+    details->SetProperty(views::kMarginsKey, gfx::Insets::TLBR(0, 4, 0, 0));
+  }
+  void UpdateArchiveFooter() {
+    if (!BrowsingArchive()) return;
+    const int message = archive_view_->status_resource();
+    const auto name = base::UTF8ToUTF16(PaneName());
+    const auto path = NavigationPath(DisplayPath());
+    archive_folder_name_->SetVisible(!message);
+    archive_folder_name_->SetText(name);
+    archive_folder_name_->SetTooltipText(path);
+    auto* layout = static_cast<views::FlexLayout*>(archive_view_->GetLayoutManager());
+    layout->SetMainAxisAlignment(message ? views::LayoutAlignment::kStart : views::LayoutAlignment::kEnd);
+    archive_status_->SetHorizontalAlignment(message ? gfx::ALIGN_TO_HEAD : gfx::ALIGN_LEFT);
+    archive_status_->SetProperty(views::kMarginsKey, message ? gfx::Insets() : gfx::Insets::TLBR(0, 4, 0, 0));
+    archive_status_->SetText(message ? Text(message) : u"· " + FolderStatusText());
+    archive_status_->SetTooltipText((message ? std::u16string() : name + u" ") +
+        std::u16string(archive_status_->GetText()) + u"\n" + path);
+    UpdateFooterVisibility();
+  }
   void UpdateStatus() {
+    if (BrowsingArchive()) { UpdateArchiveFooter(); return; }
     if (network_page_) { UpdateFooterVisibility(); return; }
     auto& tab = Current();
     const auto root = TrashRoot();
@@ -11683,23 +11770,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
         footer_->SetBorder(std::make_unique<FooterGlowBorder>(trash));
       InvalidateLayout();
     }
-    const size_t visible_count = displayed_entries_.size();
-    status_->SetText(tab.loading ? Text(IDS_CRFILES_LOADING) : tab.error ? Text(IDS_CRFILES_READ_ERROR) :
-        visible_count == 0 ? Text(IDS_CRFILES_EMPTY) :
-        base::NumberToString16(visible_count) + u" " + Text(IDS_CRFILES_ITEMS) + u" · " +
-        base::NumberToString16(tab.selected.size()) + u" " + Text(IDS_CRFILES_SELECTED));
-    if (!tab.selected.empty()) {
-      int64_t selected_bytes = 0;
-      bool has_selected_file = false;
-      for (const auto& entry : tab.entries) {
-        if (!tab.removed.contains(entry.path) && !entry.directory && tab.selected.contains(entry.path)) {
-          has_selected_file = true;
-          if (entry.size > 0) selected_bytes += std::min(entry.size, std::numeric_limits<int64_t>::max() - selected_bytes);
-        }
-      }
-      if (has_selected_file || tab.selected.size() > 1)
-        status_->SetText(std::u16string(status_->GetText()) + u" · " + ui::FormatBytes(base::ByteSize(static_cast<uint64_t>(selected_bytes))));
-    }
+    status_->SetText(FolderStatusText());
     if (trash_error_) status_->SetText(Text(IDS_CRFILES_TRASH_ERROR));
     if (local_operation_error_) status_->SetText(Text(local_sources_retained_ ?
         IDS_CRFILES_MOVE_SOURCE_RETAINED : IDS_CRFILES_FILE_OPERATION_ERROR));
@@ -11743,6 +11814,20 @@ class FilesView : public views::View, public views::TextfieldController, public 
     RenderFiles();
     if (root_->ActivePane() == this) root_->SyncNavigation();
   }
+  void UpdateArchiveFooterControls() {
+    const bool archive = BrowsingArchive();
+    const bool show_folder_actions = archive || !(tag_id_ > 0 && IsTagListing());
+    new_folder_button_->SetVisible(show_folder_actions);
+    more_button_->SetVisible(show_folder_actions);
+    normal_footer_actions_->SetVisible(archive || (!network_page_ && Current().path != TrashRoot()));
+    normal_footer_actions_->SetEnabled(!archive);
+    // Reserve only the width of the disabled buttons beside the archive status.
+    normal_footer_actions_->SetPreferredSize(archive ? std::nullopt : std::optional(kFolderActionsSize));
+    static_cast<views::BoxLayout*>(footer_->GetLayoutManager())->SetFlexForView(normal_footer_actions_, archive ? 0 : 1);
+    footer_controls_->SetVisible(!archive);
+    archive_view_->SetVisible(archive);
+    UpdateShareButton();
+  }
   void DisplayArchive() {
     SaveScroll();
     CloseNewFolder(); CloseViewOptions();
@@ -11755,8 +11840,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
     const auto options = Current().options;
     archive_tab_.emplace(Tab{.id = next_id_++, .options = options});
     files_->SetVisible(true);
-    footer_->SetVisible(false);
-    archive_view_->SetVisible(true);
+    UpdateArchiveFooterControls();
     archive_view_->Resume();
     files_->RequestFocus();
   }
@@ -11765,10 +11849,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
     ++virtual_model_generation_;
     ++context_generation_;
     archive_view_->Suspend();
-    archive_view_->SetVisible(false);
     CloseViewOptions(); CancelOrdering(); ClearMaterializedRows();
     if (!history_page_) tabs_[active_].options = archive_tab_->options;
     archive_tab_.reset();
+    UpdateArchiveFooterControls();
     files_->SetVisible(PaneContent() == files_.get());
     PaneContent()->SetVisible(true);
     if (PaneContent() == files_.get()) {
@@ -11789,22 +11873,47 @@ class FilesView : public views::View, public views::TextfieldController, public 
     if (!archive_view_) return;
     LeaveArchive();
     auto* page = archive_view_.get();
+    archive_folder_name_ = nullptr;
+    archive_status_ = nullptr;
     archive_view_ = nullptr;
     page->parent()->RemoveChildViewT(page);
     root_->SyncNavigation();
   }
+  views::View* ArchivePasswordAnchor(std::optional<size_t> index) {
+    if (!BrowsingArchive() || !IsDrawn()) return nullptr;
+    auto visible = [](views::View* view) {
+      return view && view->IsDrawn() && !view->GetVisibleBounds().IsEmpty();
+    };
+    if (index && *index < Current().entries.size()) {
+      auto it = file_buttons_.find(Current().entries[*index].path);
+      if (it != file_buttons_.end() && it->second) {
+        auto* name = static_cast<FileButton*>(it->second.get())->NameAnchor();
+        if (visible(name)) return name;
+      }
+    }
+    if (root_->ActivePane() == this) {
+      for (const auto& [path, crumb] : root_->rendered_crumb_buttons_)
+        if (path == archive_view_->archive() && visible(crumb.get())) return crumb.get();
+    }
+    return archive_view_;
+  }
   void BrowseFile(const base::FilePath& path) {
     CloseArchive();
     root_->EndAddressEditing();
-    auto* center = files_->parent();
-    archive_view_ = center->AddChildViewAt(std::make_unique<ArchiveView>(path, base::BindRepeating(
-        &FilesView::ArchiveFolderChanged, weak_.GetWeakPtr()), base::BindRepeating(
+    archive_view_ = footer_->AddChildView(std::make_unique<ArchiveView>(path,
+        base::BindRepeating(&FilesView::ArchiveFolderChanged, weak_.GetWeakPtr()),
+        base::BindRepeating(&FilesView::UpdateArchiveFooter, weak_.GetWeakPtr()),
+        base::BindRepeating([](base::WeakPtr<FilesView> pane, std::optional<size_t> index) {
+          return pane ? pane->ArchivePasswordAnchor(index) : nullptr;
+        }, weak_.GetWeakPtr()), base::BindRepeating(
         [](base::WeakPtr<FilesView> pane, std::shared_ptr<ArchivePreview> preview) {
           if (!pane || !pane->BrowsingArchive() || !pane->IsDrawn()) return;
           auto path = preview->path;
           pane->root_->archive_previews_.push_back(std::move(preview));
           pane->OpenLocalFile(path, true);
-        }, weak_.GetWeakPtr())), 0);
+        }, weak_.GetWeakPtr())));
+    CreateFooterLabels(archive_view_, archive_folder_name_, archive_status_);
+    static_cast<views::BoxLayout*>(footer_->GetLayoutManager())->SetFlexForView(archive_view_, 1);
     DisplayArchive();
   }
   void Open(base::FilePath path, bool directory) {
@@ -12011,6 +12120,30 @@ class FilesView : public views::View, public views::TextfieldController, public 
           if (recheck) view->CheckReceivedDirectory(true);
         }, weak_.GetWeakPtr(), path));
   }
+  void UpdateTrashIcon() {
+    const uint64_t revision = trash_epoch_->revision.load();
+    if (trash_icon_pending_ || trash_epoch_->writers.load() || trash_icon_revision_ == revision) return;
+    trash_icon_pending_ = true;
+    base::ThreadPool::PostTaskAndReplyWithResult(FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce([] {
+          const bool full = TrashHasItems();
+          return std::array{LoadTrashIcon(full, 20), LoadTrashIcon(full, kTabIconSize)};
+        }), base::BindOnce([](base::WeakPtr<FilesView> shell, uint64_t revision,
+                              std::array<gfx::ImageSkia, 2> icons) {
+          if (!shell) return;
+          shell->trash_icon_pending_ = false;
+          if (!shell->trash_epoch_->Matches(revision)) return;
+          shell->trash_icon_revision_ = revision;
+          if (!icons[0].isNull()) {
+            auto* button = shell->sidebar_buttons_.at(IDS_CRFILES_TRASH).get();
+            for (auto state : {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+                               views::Button::STATE_PRESSED, views::Button::STATE_DISABLED})
+              button->SetImageModel(state, ui::ImageModel::FromImageSkia(icons[0]));
+          }
+          if (!icons[1].isNull()) shell->trash_tab_icon_ = ui::ImageModel::FromImageSkia(icons[1]);
+          shell->UpdateTabStates();
+        }, weak_.GetWeakPtr(), revision));
+  }
   void UpdateNearby() {
     // The constructor invokes this before SetContentsView attaches the view
     // to a Widget. Initial directory checks run once the main window is shown.
@@ -12034,7 +12167,10 @@ class FilesView : public views::View, public views::TextfieldController, public 
         && !IsCrFilesApplicationHiddenMac()
 #endif
         ;
-    if (visible) CheckReceivedDirectory();
+    if (visible) {
+      CheckReceivedDirectory();
+      UpdateTrashIcon();
+    }
 #if BUILDFLAG(IS_WIN)
     if (visible) UpdateWindowsDrives();
 #endif
@@ -12169,6 +12305,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   raw_ptr<views::View> split_host_ = nullptr;
   bool pane_can_close_ = false;
   raw_ptr<views::LabelButton> more_button_ = nullptr;
+  raw_ptr<views::View> footer_controls_ = nullptr;
   raw_ptr<views::View> footer_status_ = nullptr;
   raw_ptr<views::Label> footer_folder_name_ = nullptr;
   std::unique_ptr<ui::SimpleMenuModel> more_menu_model_;
@@ -12244,7 +12381,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
   base::FilePath received_checked_path_;
   base::TimeTicks received_check_time_;
   raw_ptr<views::View> toolbar_ = nullptr;
-  std::set<std::pair<std::string, int>> archive_icons_pending_;
+  std::set<std::pair<std::string_view, int>> archive_icons_pending_;
   std::vector<size_t> context_archive_indices_;
   std::weak_ptr<PendingArchiveCopy> pending_archive_copy_;
   ArchiveView::Files clipboard_archive_files_, share_archive_files_;
@@ -12253,6 +12390,7 @@ class FilesView : public views::View, public views::TextfieldController, public 
 #endif
   std::optional<Tab> archive_tab_;
   raw_ptr<ArchiveView> archive_view_ = nullptr;
+  raw_ptr<views::Label> archive_folder_name_ = nullptr, archive_status_ = nullptr;
   std::vector<std::shared_ptr<ArchivePreview>> archive_previews_;
   raw_ptr<views::View> file_surface_ = nullptr;
   bool address_editing_ = false;
@@ -12327,6 +12465,9 @@ class FilesView : public views::View, public views::TextfieldController, public 
   base::OneShotTimer visual_icon_retry_timer_;
   size_t next_visual_pane_ = 0;
   int rendered_tab_id_ = -1;
+  std::shared_ptr<FileCacheEpoch> trash_epoch_;
+  std::optional<uint64_t> trash_icon_revision_;
+  bool trash_icon_pending_ = false;
   ui::ImageModel trash_tab_icon_, network_tab_icon_;
   ui::ImageModel network_location_icon_;
   std::vector<std::pair<int, std::u16string>> rendered_tab_titles_;

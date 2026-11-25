@@ -7,9 +7,16 @@
 #include <string_view>
 #include <utility>
 #include "build/build_config.h"
+#if BUILDFLAG(IS_LINUX)
+#include <gio/gio.h>
+#elif BUILDFLAG(IS_MAC)
+#include <sys/mount.h>
+#include "base/files/drive_info.h"
+#endif
 #include "base/base_paths.h"
 #include "base/files/file_util.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_util.h"
 #include "base/path_service.h"
 #include "base/synchronization/lock.h"
 #include "libcr/svg_icon.h"
@@ -40,25 +47,6 @@ std::map<IconKey, gfx::ImageSkia>& IconCache() {
   // Bounded by the fixed asset set times the six supported sizes.
   static base::NoDestructor<std::map<IconKey, gfx::ImageSkia>> cache;
   return *cache;
-}
-// Fixed, licensed project assets. No theme discovery or directory enumeration.
-std::string_view IconAsset(const std::string& mime, bool directory) {
-  if (directory) return "inode-directory";
-  if (mime.starts_with("image/")) return "image-x-generic";
-  if (mime.starts_with("audio/")) return "audio-x-generic";
-  if (mime.starts_with("video/")) return "video-x-generic";
-  if (mime.starts_with("font/") || mime.find("font") != std::string::npos) return "font-x-generic";
-  if (mime.find("word") != std::string::npos || mime.find("opendocument.text") != std::string::npos || mime == "application/pdf") return "x-office-document";
-  if (mime.find("spreadsheet") != std::string::npos || mime.find("excel") != std::string::npos) return "x-office-spreadsheet";
-  if (mime.find("presentation") != std::string::npos || mime.find("powerpoint") != std::string::npos) return "x-office-presentation";
-  if (mime.find("zip") != std::string::npos || mime.find("tar") != std::string::npos ||
-      mime.find("compressed") != std::string::npos || mime.find("archive") != std::string::npos) return "package-x-generic";
-  if (mime.find("html") != std::string::npos) return "text-html";
-  if (mime.find("script") != std::string::npos || mime.find("python") != std::string::npos || mime.find("shell") != std::string::npos) return "text-x-script";
-  if (mime.starts_with("text/")) return "text-x-generic";
-  if (mime.find("executable") != std::string::npos || mime.find("sharedlib") != std::string::npos) return "application-x-executable";
-  // Use Adwaita's lined document for files without a dedicated type icon.
-  return "text-x-generic";
 }
 std::map<std::string, std::string>& SvgSourceCache() {
   static base::NoDestructor<std::map<std::string, std::string>> cache;
@@ -104,23 +92,121 @@ gfx::ImageSkia LoadNamedIcon(std::string_view asset, int edge) {
   base::AutoLock guard(IconLock());
   return IconCache().try_emplace(key, std::move(image)).first->second;
 }
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+// Only probe potential volume roots on the icon worker. Ordinary folders and
+// all virtual archive/SMB rows use the memory-only bundled type lookup.
+bool MayBeVolume(const base::FilePath& path) {
+#if BUILDFLAG(IS_LINUX)
+  if (!path.value().starts_with("/media/") && !path.value().starts_with("/mnt/") &&
+      !path.value().starts_with("/run/media/") && !path.value().starts_with("/run/user/")) return false;
+#endif
+  const auto parent = path.DirName();
+#if BUILDFLAG(IS_MAC)
+  return parent.value() == "/Volumes";
+#else
+  const auto grandparent = parent.DirName();
+  return parent.value() == "/mnt" || parent.value() == "/media" ||
+      grandparent.value() == "/media" || grandparent.value() == "/run/media" ||
+      (parent.BaseName().value() == "gvfs" && grandparent.DirName().value() == "/run/user");
+#endif
+}
+std::string_view VolumeAsset(const base::FilePath& path) {
+#if BUILDFLAG(IS_LINUX)
+  g_autoptr(GFile) file = g_file_new_for_path(path.value().c_str());
+  g_autoptr(GMount) mount = g_file_find_enclosing_mount(file, nullptr, nullptr);
+  if (!mount) return {};
+  g_autoptr(GFile) root = g_mount_get_root(mount);
+  if (!g_file_equal(root, file)) {
+    // GVfs can expose the root as a device URI and the row as its FUSE path.
+    g_autofree gchar* mount_path = g_file_get_path(root);
+    if (!mount_path || path.value() != mount_path) return {};
+  }
+  if (g_file_has_uri_scheme(root, "gphoto2")) return "camera-photo";
+  g_autoptr(GIcon) icon = g_mount_get_icon(mount);
+  if (!G_IS_THEMED_ICON(icon)) return {};
+  const gchar* const* names = g_themed_icon_get_names(G_THEMED_ICON(icon));
+  auto has = [names](const char* name) { return g_strv_contains(names, name); };
+  if (has("camera-photo") || has("camera-photo-symbolic")) return "camera-photo";
+  if (has("media-flash") || has("media-flash-sd") || has("media-flash-sd-mmc") ||
+      has("drive-removable-media-flash") || has("drive-removable-media-flash-sd") ||
+      has("drive-removable-media-flash-sd-mmc")) return "media-flash";
+  if (has("drive-removable-media") || has("drive-removable-media-symbolic") ||
+      has("drive-removable-media-usb") || has("drive-harddisk-usb")) return "drive-removable-media";
+  if (has("drive-harddisk") || has("drive-harddisk-symbolic")) return "drive-harddisk";
+#else
+  struct statfs volume;
+  if (statfs(path.value().c_str(), &volume) == 0 && path.value() == volume.f_mntonname) {
+    auto info = base::GetFileDriveInfo(path);
+    if (info && info->is_removable.has_value())
+      return *info->is_removable ? "drive-removable-media" : "drive-harddisk";
+  }
+#endif
+  return {};
+}
+#endif
 }  // namespace
 
-std::optional<gfx::ImageSkia> FindCachedBundledIcon(const std::string& mime, bool directory, int edge) {
-  const IconKey key{std::string(IconAsset(mime, directory)), edge};
+// Fixed, licensed project assets. No theme discovery or directory enumeration.
+std::string_view BundledFileIconAsset(const base::FilePath& path, std::string_view mime, bool directory) {
+  if (directory) return "inode-directory";
+  const auto basename = path.BaseName().AsUTF8Unsafe();
+  const auto name = base::ToLowerASCII(basename);
+  const std::string_view filename(name);
+  const auto dot = filename.rfind('.');
+  const auto ext = dot == filename.npos ? std::string_view() : filename.substr(dot);
+  const bool doc_suffix = ext.empty() || ext == ".md" || ext == ".txt" || ext == ".rst" ||
+                          ext == ".markdown" || ext == ".adoc";
+  if (doc_suffix) {
+    const auto stem = filename.substr(0, dot);
+    if (stem == "readme") return "text-x-readme";
+    if (stem == "license" || stem == "licence" || stem == "copying") return "text-x-copying";
+    if (stem == "changelog") return "text-x-changelog";
+    if (stem == "authors" || stem == "credits") return "text-x-authors";
+    // The extensionless lowercase name is also used by the Unix install command.
+    if (stem == "install" && (!ext.empty() || basename == "INSTALL")) return "text-x-install";
+  }
+  if (ext == ".java" || mime == "text/x-java" || mime == "text/x-java-source") return "text-x-java-source";
+  if (ext == ".php" || ext == ".phtml" || mime == "application/x-php" || mime == "text/x-php" ||
+      mime == "application/x-httpd-php") return "application-x-php";
+  if (ext == ".rb" || ext == ".rake" || ext == ".gemspec" || name == "gemfile" || name == "rakefile" ||
+      mime == "application/x-ruby" || mime == "text/x-ruby") return "application-x-ruby";
+  if (ext == ".torrent" || mime == "application/x-bittorrent") return "application-x-bittorrent";
+  if (name == "makefile" || name == "gnumakefile" || ext == ".mk" || mime == "text/x-makefile")
+    return "text-x-makefile";
+  if (ext == ".diff" || ext == ".patch" || mime == "text/x-patch" || mime == "text/x-diff")
+    return "text-x-patch";
+  if (ext == ".py" || ext == ".pyi" || ext == ".pyw" || mime == "text/x-python" || mime == "application/x-python")
+    return "text-x-python";
+  if (ext == ".css" || mime == "text/css") return "gnome-mime-text-css";
+  if (ext == ".c" || ext == ".h" || ext == ".cc" || ext == ".cpp" || ext == ".cxx" ||
+      ext == ".hh" || ext == ".hpp" || ext == ".hxx" || ext == ".m" || ext == ".mm" ||
+      mime == "text/x-c" || mime == "text/x-c++src" || mime == "text/x-csrc" ||
+      mime == "text/x-chdr" || mime == "text/x-c++hdr") return "text-x-source";
+  if (mime.starts_with("image/")) return "image-x-generic";
+  if (mime.starts_with("audio/")) return "audio-x-generic";
+  if (mime.starts_with("video/")) return "video-x-generic";
+  if (mime.starts_with("font/") || mime.find("font") != std::string::npos) return "font-x-generic";
+  if (mime.find("word") != std::string::npos || mime.find("opendocument.text") != std::string::npos || mime == "application/pdf") return "x-office-document";
+  if (mime.find("spreadsheet") != std::string::npos || mime.find("excel") != std::string::npos) return "x-office-spreadsheet";
+  if (mime.find("presentation") != std::string::npos || mime.find("powerpoint") != std::string::npos) return "x-office-presentation";
+  if (mime.find("zip") != std::string::npos || mime.find("tar") != std::string::npos ||
+      mime.find("compressed") != std::string::npos || mime.find("archive") != std::string::npos) return "package-x-generic";
+  if (mime.find("html") != std::string::npos) return "text-html";
+  if (mime.find("script") != std::string::npos || mime.find("python") != std::string::npos || mime.find("shell") != std::string::npos) return "text-x-script";
+  if (mime.starts_with("text/")) return "text-x-generic";
+  if (mime.find("executable") != std::string::npos || mime.find("sharedlib") != std::string::npos) return "application-x-executable";
+  // Use Adwaita's lined document for files without a dedicated type icon.
+  return "text-x-generic";
+}
+std::optional<gfx::ImageSkia> FindCachedBundledIcon(std::string_view asset, int edge) {
   base::AutoLock guard(IconLock());
-  auto found = IconCache().find(key);
+  auto found = IconCache().find({std::string(asset), edge});
   if (found == IconCache().end()) return std::nullopt;
   return found->second;
 }
-gfx::ImageSkia LoadBundledIcon(const std::string& mime, bool directory, int edge) {
+gfx::ImageSkia LoadBundledIcon(std::string_view asset, int edge) {
   if (std::ranges::find(kFileIconSizes, edge) == kFileIconSizes.end()) return {};
-  if (auto cached = FindCachedBundledIcon(mime, directory, edge)) return *cached;
-  const IconKey key{std::string(IconAsset(mime, directory)), edge};
-  // SVG IO and rasterization never hold the shared cache lock.
-  auto image = ReadIcon(key.first, edge);
-  base::AutoLock guard(IconLock());
-  return IconCache().try_emplace(key, std::move(image)).first->second;
+  return LoadNamedIcon(asset, edge);
 }
 
 gfx::ImageSkia LoadNetworkServerIcon(int edge) {
@@ -129,13 +215,15 @@ gfx::ImageSkia LoadNetworkServerIcon(int edge) {
 }
 
 gfx::ImageSkia LoadNetworkWorkgroupIcon(int edge) { return LoadNamedIcon("network-workgroup", edge); }
-gfx::ImageSkia LoadTrashIcon(int edge) { return LoadNamedIcon("user-trash", edge); }
+gfx::ImageSkia LoadTrashIcon(bool full, int edge) { return LoadNamedIcon(full ? "user-trash-full" : "user-trash", edge); }
+gfx::ImageSkia LoadArchiveLockIcon() { return LoadNamedIcon("locked", 20); }
 gfx::ImageSkia LoadRemoteFileIcon(const std::string& name, bool directory, int edge) {
   std::string mime;
-  auto extension = base::FilePath::FromUTF8Unsafe(name).Extension();
+  const auto path = base::FilePath::FromUTF8Unsafe(name);
+  auto extension = path.Extension();
   if (!extension.empty()) extension.erase(0, 1);
   if (!directory) net::GetWellKnownMimeTypeFromExtension(extension, &mime);
-  return LoadBundledIcon(mime, directory, edge);
+  return LoadBundledIcon(BundledFileIconAsset(path, mime, directory), edge);
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -330,8 +418,10 @@ std::optional<gfx::ImageSkia> FindCachedFileIcon(const base::FilePath& path, con
   base::AutoLock guard(IconLock());
   return SystemIconCache().Get(SystemIconKey{path, directory, mime, edge});
 #else
-  (void)path;
-  return FindCachedBundledIcon(mime, directory, edge);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+  if (directory && MayBeVolume(path)) return std::nullopt;
+#endif
+  return FindCachedBundledIcon(BundledFileIconAsset(path, mime, directory), edge);
 #endif
 }
 
@@ -350,9 +440,17 @@ FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime,
   const uint64_t revision = epoch->revision.load();
   auto result = ReadSystemIcon(path, directory, edge, epoch, revision);
   const bool bundled = result.image.isNull();
-  if (bundled) result.image = LoadBundledIcon(mime, directory, edge);
+  if (bundled) {
+    auto asset = BundledFileIconAsset(path, mime, directory);
+    if (directory && IsDriveIconPath(path)) {
+      const auto type = GetDriveTypeW(path.value().c_str());
+      if (type == DRIVE_FIXED) asset = "drive-harddisk";
+      if (type == DRIVE_REMOVABLE) asset = "drive-removable-media";
+    }
+    result.image = LoadBundledIcon(asset, edge);
+  }
   if (IsDriveIconPath(path)) LOG(INFO) << "[crFiles /] load_icon_result path=" << path.AsUTF8Unsafe() << " edge=" << edge
-      << " source=" << (bundled ? "bundled-folder" : "system") << " retry=" << result.retry
+      << " source=" << (bundled ? "bundled" : "system") << " retry=" << result.retry
       << " image_empty=" << result.image.isNull() << " cached=" << !result.retry;
   // A failed Shell query must not pin the fallback in the successful cache.
   // Unknown file types are a normal fallback and do not request retries.
@@ -363,8 +461,13 @@ FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime,
   }
   return result;
 #else
-  (void)path;
-  return {LoadBundledIcon(mime, directory, edge)};
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+  if (directory && MayBeVolume(path)) {
+    auto asset = VolumeAsset(path);
+    if (!asset.empty()) return {LoadBundledIcon(asset, edge)};
+  }
+#endif
+  return {LoadBundledIcon(BundledFileIconAsset(path, mime, directory), edge)};
 #endif
 }
 }

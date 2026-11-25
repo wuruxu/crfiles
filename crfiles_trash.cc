@@ -43,6 +43,21 @@ base::FilePath TrashRoot() {
 #endif
   return root.AppendASCII("crFiles").AppendASCII("Trash");
 }
+bool TrashHasItems() {
+  const auto root = TrashRoot();
+  if (root.empty()) return false;
+  base::AutoLock lock(TrashLock());
+  base::FileEnumerator entries(root, false, base::FileEnumerator::DIRECTORIES);
+  int types = base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES;
+#if BUILDFLAG(IS_POSIX)
+  types |= base::FileEnumerator::SHOW_SYM_LINKS;
+#endif
+  for (auto entry = entries.Next(); !entry.empty(); entry = entries.Next()) {
+    base::FileEnumerator files(entry.AppendASCII("files"), false, types);
+    if (!files.Next().empty()) return true;
+  }
+  return false;
+}
 bool MoveToTrash(const base::FilePath& path) {
   ScopedFileCacheMutation mutation({path, TrashRoot()});
   FileOperationLog log("trash", "menu", path.AsUTF8Unsafe(), TrashRoot().AsUTF8Unsafe());

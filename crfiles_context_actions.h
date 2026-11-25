@@ -14,7 +14,9 @@ namespace crfiles {
 bool IsValidEntryName(std::u16string_view name);
 struct FileApplication { std::string id, name; bool is_default = false; gfx::ImageSkia icon; };
 // Worker-only system association lookup and launch.
-std::vector<FileApplication> FileApplications(const base::FilePath& path);
+// With a member MIME type, path is only a filename for type-based lookup.
+std::vector<FileApplication> FileApplications(const base::FilePath& path,
+    const std::optional<std::string>& member_mime = std::nullopt);
 // Requires MayBlock and WithBaseSyncPrimitives task traits: the macOS launcher
 // waits for /usr/bin/open to exit, with a bounded timeout.
 bool OpenFileWith(const base::FilePath& path, const std::string& application);

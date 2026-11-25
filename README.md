@@ -198,7 +198,7 @@ controls, menu, SVG renderer, themes and Viz compositor.
 - On Windows, file, folder and drive icons prefer the system Shell icon for the
   actual path, including executable icons, shortcut overlays and customized
   folders. Failed queries and generic unknown-file icons fall back to the bundled
-  Adwaita SVG selected by MIME type. Transient Shell query or conversion failures
+  SVG selected by file name and MIME type. Transient Shell query or conversion failures
   keep the fallback visible and retry up to three times, after 250 ms, 1 s and
   3 s. Successful retries update the current view without navigation. Changing
   directories cancels pending retries; generic unknown-file icons do not retry.
@@ -1143,6 +1143,8 @@ Double-click a ZIP or TAR archive (including gzip, XZ and Zstandard compressed T
 to browse its folders with the current pane’s list or icon view. The location
 bar shows the full path, for example `/tmp/001.tar.zst/lib/`. Inside the
 archive, Rename, Move to Trash, Paste and other filesystem commands are disabled.
+Open With lists associated applications for a single regular file. Choosing an
+application extracts a private copy of the file and opens it in that application.
 Regular files support Copy, Share to and Quick Share, including multi-selection.
 These actions extract the selected members to private temporary files. Copy Path
 copies the displayed member path as text. Up at the root returns to the

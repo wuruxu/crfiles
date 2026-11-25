@@ -8,6 +8,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <AVFoundation/AVFoundation.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <memory>
 #include <atomic>
@@ -301,13 +302,30 @@ bool OpenProjectURLMac(const std::string& url) {
   return target && [NSWorkspace.sharedWorkspace openURL:target];
 }
 
-std::vector<FileApplication> FileApplicationsMac(const base::FilePath& path) {
+std::vector<FileApplication> FileApplicationsMac(const base::FilePath& path,
+    const std::optional<std::string>& member_mime) {
   @autoreleasepool {
-    NSURL* file = base::apple::FilePathToNSURL(path);
     NSWorkspace* workspace = NSWorkspace.sharedWorkspace;
-    NSURL* preferred = [workspace URLForApplicationToOpenURL:file];
+    NSURL* preferred;
+    NSArray<NSURL*>* applications;
+    if (member_mime) {
+      const auto extension = path.FinalExtension();
+      UTType* type = extension.empty() ? nil :
+          [UTType typeWithFilenameExtension:base::SysUTF8ToNSString(extension.substr(1))];
+      if (!type || type.dynamic) {
+        UTType* mime_type = [UTType typeWithMIMEType:base::SysUTF8ToNSString(*member_mime)];
+        if (mime_type) type = mime_type;
+      }
+      if (!type) return {};
+      preferred = [workspace URLForApplicationToOpenContentType:type];
+      applications = [workspace URLsForApplicationsToOpenContentType:type];
+    } else {
+      NSURL* file = base::apple::FilePathToNSURL(path);
+      preferred = [workspace URLForApplicationToOpenURL:file];
+      applications = [workspace URLsForApplicationsToOpenURL:file];
+    }
     std::vector<FileApplication> result;
-    for (NSURL* app in [workspace URLsForApplicationsToOpenURL:file]) {
+    for (NSURL* app in applications) {
       NSString* name = [NSFileManager.defaultManager displayNameAtPath:app.path];
       result.push_back({base::apple::NSURLToFilePath(app).value(),
                         base::SysNSStringToUTF8(name),

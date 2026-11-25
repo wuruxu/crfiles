@@ -7,6 +7,7 @@ namespace crfiles {
 // Private crFiles trash storage on all platforms.
 base::FilePath TrashRoot();
 // Blocking operations; callers must run on a file worker.
+bool TrashHasItems();
 bool MoveToTrash(const base::FilePath& path);
 bool RestoreFromTrash(const base::FilePath& path);
 // Permanently delete crFiles-owned trash entries under the shared trash lock.

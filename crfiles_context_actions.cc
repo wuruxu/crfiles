@@ -157,35 +157,45 @@ gfx::ImageSkia ApplicationIcon(IAssocHandler* handler) {
 }
 #endif
 }
-std::vector<FileApplication> FileApplications(const base::FilePath& path) {
+std::vector<FileApplication> FileApplications(const base::FilePath& path,
+    const std::optional<std::string>& member_mime) {
   std::vector<FileApplication> apps;
 #if BUILDFLAG(IS_MAC)
-  apps = FileApplicationsMac(path);
+  apps = FileApplicationsMac(path, member_mime);
 #elif BUILDFLAG(IS_LINUX)
-  const auto icon_directories = ApplicationIconDirectories();
-  GFile* file = g_file_new_for_path(path.value().c_str());
-  GFileInfo* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
-  if (info) {
-    const char* type = g_file_info_get_content_type(info);
-    if (type) {
-      GAppInfo* preferred = g_app_info_get_default_for_type(type, false);
-      auto add = [&](GAppInfo* app, bool is_default) {
-        const char* id = g_app_info_get_id(app);
-        const char* name = g_app_info_get_display_name(app);
-        if (id && name) apps.push_back({id, name, is_default, ApplicationIcon(app, icon_directories)});
-      };
-      if (preferred) add(preferred, true);
-      GList* list = g_app_info_get_all_for_type(type);
-      for (GList* node = list; node; node = node->next) {
-        auto* app = G_APP_INFO(node->data);
-        if (!preferred || !g_app_info_equal(preferred, app)) add(app, false);
-      }
-      g_list_free_full(list, g_object_unref);
-      if (preferred) g_object_unref(preferred);
+  gchar* type = nullptr;
+  if (member_mime) {
+    if (*member_mime == "application/octet-stream")
+      type = g_content_type_guess(path.value().c_str(), nullptr, 0, nullptr);
+    else
+      type = g_content_type_from_mime_type(member_mime->c_str());
+  } else {
+    GFile* file = g_file_new_for_path(path.value().c_str());
+    GFileInfo* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
+    if (info) {
+      type = g_strdup(g_file_info_get_content_type(info));
+      g_object_unref(info);
     }
-    g_object_unref(info);
+    g_object_unref(file);
   }
-  g_object_unref(file);
+  if (type) {
+    const auto icon_directories = ApplicationIconDirectories();
+    GAppInfo* preferred = g_app_info_get_default_for_type(type, false);
+    auto add = [&](GAppInfo* app, bool is_default) {
+      const char* id = g_app_info_get_id(app);
+      const char* name = g_app_info_get_display_name(app);
+      if (id && name) apps.push_back({id, name, is_default, ApplicationIcon(app, icon_directories)});
+    };
+    if (preferred) add(preferred, true);
+    GList* list = g_app_info_get_all_for_type(type);
+    for (GList* node = list; node; node = node->next) {
+      auto* app = G_APP_INFO(node->data);
+      if (!preferred || !g_app_info_equal(preferred, app)) add(app, false);
+    }
+    g_list_free_full(list, g_object_unref);
+    if (preferred) g_object_unref(preferred);
+    g_free(type);
+  }
 #elif BUILDFLAG(IS_WIN)
   base::win::ScopedCOMInitializer com;
   if (!com.Succeeded()) return apps;
@@ -198,7 +208,9 @@ std::vector<FileApplication> FileApplications(const base::FilePath& path) {
       name.resize(length ? length - 1 : 0);
       SHFILEINFOW info{};
       gfx::ImageSkia icon;
-      if (SHGetFileInfoW(path.value().c_str(), 0, &info, sizeof(info), SHGFI_ICON | SHGFI_SMALLICON) && info.hIcon) {
+      UINT flags = SHGFI_ICON | SHGFI_SMALLICON;
+      if (member_mime) flags |= SHGFI_USEFILEATTRIBUTES;
+      if (SHGetFileInfoW(path.value().c_str(), member_mime ? FILE_ATTRIBUTE_NORMAL : 0, &info, sizeof(info), flags) && info.hIcon) {
         auto bitmap = IconUtil::CreateSkBitmapFromHICON(info.hIcon);
         DestroyIcon(info.hIcon);
         if (!bitmap.drawsNothing()) icon = MenuIcon(gfx::ImageSkia::CreateFrom1xBitmap(bitmap));
@@ -221,7 +233,8 @@ std::vector<FileApplication> FileApplications(const base::FilePath& path) {
       CoTaskMemFree(id); CoTaskMemFree(name); handler.Reset();
     }
   }
-  apps.push_back({"windows:choose", base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_CRFILES_OPEN_WITH)) + "…", false, {}});
+  if (!member_mime || !apps.empty())
+    apps.push_back({"windows:choose", base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_CRFILES_OPEN_WITH)) + "…", false, {}});
 #endif
   return apps;
 }

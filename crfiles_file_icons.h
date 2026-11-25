@@ -4,6 +4,7 @@
 #define CRFILES_FILE_ICONS_H_
 #include <array>
 #include <string>
+#include <string_view>
 #include <optional>
 #include "base/files/file_path.h"
 #include "ui/gfx/image/image_skia.h"
@@ -24,12 +25,15 @@ std::optional<gfx::ImageSkia> FindCachedFileIcon(const base::FilePath& path, con
 FileIconResult LoadFileIcon(const base::FilePath& path, const std::string& mime, bool directory, int edge);
 // Bundled network device icon on every platform; call on a file worker.
 gfx::ImageSkia LoadNetworkServerIcon(int edge);
-// Bundled location icons; call on a file worker. Trash defaults to sidebar size.
+// Bundled location and password prompt icons. Call on a file worker.
 gfx::ImageSkia LoadNetworkWorkgroupIcon(int edge);
-gfx::ImageSkia LoadTrashIcon(int edge = 20);
+gfx::ImageSkia LoadTrashIcon(bool full, int edge);
+gfx::ImageSkia LoadArchiveLockIcon();
 // Type icons for virtual entries. Lookup is memory-only; load on a file worker.
-std::optional<gfx::ImageSkia> FindCachedBundledIcon(const std::string& mime, bool directory, int edge);
-gfx::ImageSkia LoadBundledIcon(const std::string& mime, bool directory, int edge);
+// The returned asset name is a string literal, shared across equivalent file types.
+std::string_view BundledFileIconAsset(const base::FilePath& path, std::string_view mime, bool directory);
+std::optional<gfx::ImageSkia> FindCachedBundledIcon(std::string_view asset, int edge);
+gfx::ImageSkia LoadBundledIcon(std::string_view asset, int edge);
 // Remote names select bundled type icons without querying local paths/Shell.
 gfx::ImageSkia LoadRemoteFileIcon(const std::string& name, bool directory, int edge);
 }

@@ -49,7 +49,8 @@ bool IsFilePackageMac(const base::FilePath& path);
 // Worker-only native icon lookup; returns an image safe to pass to the UI.
 gfx::ImageSkia LoadApplicationIconMac(const base::FilePath& path, int edge);
 
-std::vector<FileApplication> FileApplicationsMac(const base::FilePath& path);
+std::vector<FileApplication> FileApplicationsMac(const base::FilePath& path,
+    const std::optional<std::string>& member_mime);
 // Called only inside the disposable video thumbnail helper process.
 SkBitmap DecodeVideoThumbnailMac(const base::FilePath& path, int edge);
 

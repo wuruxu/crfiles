@@ -1,17 +1,18 @@
 # File icon assets
 
-Unmodified SVG files imported from `/usr/share/icons/Adwaita/scalable/mimetypes`,
-by the GNOME Project (https://www.gnome.org).
+The generic MIME icons come from Adwaita. The project document, source code,
+storage device, camera, lock and trash icons come from GNOME-Colors. The
+GNOME-Colors files are bundled from the `mimetypes`, `devices`, `status` and
+`places` directories under `/usr/share/icons/gnome-colors-common/scalable`.
 
-Files without a dedicated MIME icon use Adwaita's `text-x-generic.svg`
-(the lined document) instead of the blank `application-x-generic.svg`.
-This is crFiles' fallback choice; the upstream SVG is unchanged. Windows
-continues to prefer registered system icons and uses this fallback for unknown
-file types or when the system icon is unavailable.
+Local folders, archive entries and SMB shares use file names and MIME types to
+select bundled file icons. Project documentation (including AUTHORS, CREDITS
+and INSTALL), Makefiles, patches, Python, CSS, C-family, Java, PHP and Ruby
+source files, and BitTorrent files have dedicated icons. The
+default file icon is Adwaita's lined document, `text-x-generic.svg`. Windows
+prefers registered Shell icons for local paths and uses the bundled set as a
+fallback. Device icons apply to recognized local mount points or drive roots.
 
-These project assets are used on every platform. Runtime code maps MIME types
-to this fixed asset set; it never scans `/usr/share/icons` or a theme directory.
-SVGs are loaded and rasterized on demand for the current icon size. Cached images
-are shared across panes. See COPYRIGHT for attribution and the upstream license
-terms, including the CC-BY-SA 3.0 license text. No PNG or other raster source
-assets are used for file type icons.
+crFiles loads the bundled SVGs on demand, rasterizes them at the requested
+size and shares the cached images across panes. See COPYRIGHT for the upstream
+attribution and license texts, including the GNOME-Colors GPL version 2 notice.

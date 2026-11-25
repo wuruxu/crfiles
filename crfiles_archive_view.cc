@@ -4,23 +4,30 @@
 #include <algorithm>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
+#include "crFiles/crfiles_dialog.h"
+#include "crFiles/crfiles_file_icons.h"
 #include "crFiles/grit/crfiles_strings.h"
+#include "crFiles/single_button_row_layout.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/events/event.h"
-#include "ui/views/controls/label.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/textfield/textfield.h"
-#include "ui/views/layout/box_layout.h"
 
 namespace crfiles {
 struct ArchiveView::ExportJob {
   base::FilePath archive, folder;
   base::File::Info source;
   std::vector<ArchiveRow> rows;
+  std::optional<size_t> anchor_index;
   Files files;
+  gfx::ImageSkia lock_icon;
   std::shared_ptr<ArchiveProgress> progress = std::make_shared<ArchiveProgress>();
   base::OnceCallback<void(Files)> ready;
   bool background = true;
@@ -30,28 +37,25 @@ struct ArchiveView::ExportJob {
     while (!progress->canceled && files.size() < rows.size()) {
       const auto& row = rows[files.size()];
       auto file = PreviewArchiveMember(archive, source, folder.Append(row.name), row.ordinal, password, progress);
-      if (!file) return;
+      if (!file) {
+        if (progress->needs_password && lock_icon.isNull()) lock_icon = LoadArchiveLockIcon();
+        return;
+      }
       files.push_back(std::move(file));
     }
   }
 };
 ArchiveView::ArchiveView(base::FilePath archive, base::RepeatingClosure changed,
+    base::RepeatingClosure status_changed, PasswordAnchor password_anchor,
     base::RepeatingCallback<void(std::shared_ptr<ArchivePreview>)> open)
-    : archive_(std::move(archive)), changed_(std::move(changed)), open_(std::move(open)) {
-  SetLayoutManager(std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical));
-  status_ = AddChildView(std::make_unique<views::Label>());
-  password_ = AddChildView(std::make_unique<views::Textfield>());
-  password_->SetTextInputType(ui::TEXT_INPUT_TYPE_PASSWORD);
-  password_->SetAccessibleName(l10n_util::GetStringUTF16(IDS_CRFILES_ARCHIVE_PASSWORD));
-  password_->set_controller(this);
-  password_->SetVisible(false);
-  status_->SetVisible(false);
-}
+    : archive_(std::move(archive)), changed_(std::move(changed)),
+      status_changed_(std::move(status_changed)), password_anchor_(std::move(password_anchor)),
+      open_(std::move(open)) {}
 ArchiveView::~ArchiveView() { CancelWork(); }
 void ArchiveView::ReportOpenError() { ShowStatus(IDS_CRFILES_OPEN_ERROR); }
 void ArchiveView::ShowStatus(int resource) {
-  status_->SetText(resource ? l10n_util::GetStringUTF16(resource) : std::u16string());
-  status_->SetVisible(resource != 0);
+  status_resource_ = resource;
+  status_changed_.Run();
 }
 void ArchiveView::CancelWork(bool allow_background) {
   if (progress_) progress_->canceled = true;
@@ -59,12 +63,11 @@ void ArchiveView::CancelWork(bool allow_background) {
   progress_.reset();
   // A clipboard or share request owns its files after navigation. A pending
   // password prompt and a preview both belong to this particular directory.
-  if (export_job_ && (!allow_background || !export_job_->background || retry_export_))
+  if (export_job_ && (!allow_background || !export_job_->background || retry_export_ || password_widget_))
     export_job_->progress->canceled = true;
   retry_export_.Reset();
   export_job_.reset();
-  password_->SetText({});
-  password_->SetVisible(false);
+  ClosePassword();
 }
 void ArchiveView::Suspend() { CancelWork(); }
 void ArchiveView::Resume() {
@@ -155,36 +158,128 @@ void ArchiveView::ExportFiles(std::vector<size_t> indices, base::OnceCallback<vo
   export_job_->archive = archive_;
   export_job_->folder = folder();
   export_job_->source = listing_->source;
+  if (indices.size() == 1) export_job_->anchor_index = indices.front();
   export_job_->rows.reserve(indices.size());
   for (auto index : indices) export_job_->rows.push_back(rows[index]);
   export_job_->ready = std::move(ready);
   RunExport(weak_.GetWeakPtr(), export_job_, {});
 }
+void ArchiveView::ShowPassword() {
+  if (!password_widget_) {
+    auto* anchor = password_anchor_.Run(export_job_->anchor_index);
+    if (!anchor) {
+      CancelPassword();
+      return;
+    }
+    password_delegate_ = std::make_unique<views::BubbleDialogDelegate>(anchor,
+        anchor == this ? views::BubbleBorder::BOTTOM_CENTER : views::BubbleBorder::TOP_CENTER);
+    password_delegate_->set_shadow(views::BubbleBorder::STANDARD_SHADOW);
+    password_delegate_->set_adjust_if_offscreen(true);
+    password_delegate_->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    password_delegate_->SetShowTitle(true);
+    password_delegate_->SetShowCloseButton(true);
+    const auto prompt = l10n_util::GetStringUTF16(IDS_CRFILES_ARCHIVE_PASSWORD_REQUIRED);
+    password_delegate_->SetTitle(prompt);
+    if (!export_job_->lock_icon.isNull()) {
+      password_delegate_->SetIcon(ui::ImageModel::FromImageSkia(export_job_->lock_icon));
+      password_delegate_->SetShowIcon(true);
+    }
+    password_delegate_->set_frame_margins({.contents = gfx::Insets::TLBR(6, 12, 10, 12),
+                                           .title = gfx::Insets::TLBR(10, 12, 0, 12)});
+    password_delegate_->set_fixed_width(std::clamp(parent()->GetContentsBounds().width() - 32, 192, 360));
+    auto contents = std::make_unique<views::View>();
+    auto* row = contents->SetLayoutManager(std::make_unique<SingleButtonRowLayout>(gfx::Insets(), 6));
+    row->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kEnd);
+    password_ = contents->AddChildView(std::make_unique<views::Textfield>());
+    row->SetFlexForView(password_, 1);
+    password_->SetTextInputType(ui::TEXT_INPUT_TYPE_PASSWORD);
+    password_->SetAccessibleName(prompt);
+    submit_password_button_ = contents->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&ArchiveView::SubmitPassword, weak_.GetWeakPtr()),
+        password_delegate_->GetDialogButtonLabel(ui::mojom::DialogButton::kOk)));
+    submit_password_button_->SetEnabled(false);
+    password_->set_controller(this);
+    password_delegate_->SetInitiallyFocusedView(password_);
+    password_delegate_->SetContentsView(std::move(contents));
+    password_widget_ = CreateCrFilesBubble(password_delegate_.get(),
+        base::IgnoreArgs<views::Widget::ClosedReason>(
+            base::BindOnce(&ArchiveView::CancelPassword, weak_.GetWeakPtr())));
+    password_delegate_->GetBubbleFrameView()->SetDisplayVisibleArrow(true);
+    password_delegate_->SizeToContents();
+    password_widget_->Show();
+  } else {
+    password_->SetReadOnly(false);
+    password_->SetInvalid(true);
+  }
+  password_->RequestFocus();
+  ShowStatus(0);
+}
+void ArchiveView::UpdatePasswordAnchor() {
+  if (!password_widget_ || !export_job_) return;
+  auto* anchor = password_anchor_.Run(export_job_->anchor_index);
+  if (anchor && anchor != password_delegate_->GetAnchorView()) {
+    password_delegate_->SetAnchorView(anchor);
+    password_delegate_->SetArrow(anchor == this ? views::BubbleBorder::BOTTOM_CENTER : views::BubbleBorder::TOP_CENTER);
+  }
+}
+void ArchiveView::CancelPassword() {
+  CancelWork(false);
+  ShowStatus(0);
+}
+void ArchiveView::ClosePassword() {
+  if (password_) password_->set_controller(nullptr);
+  submit_password_button_ = nullptr;
+  password_ = nullptr;
+  if (password_delegate_) password_delegate_->SetAnchorView(nullptr);
+  if (password_widget_) {
+    password_widget_->MakeCloseSynchronous({});
+    password_widget_.reset();
+  }
+  password_delegate_.reset();
+}
+void ArchiveView::VisibilityChanged(views::View* from, bool visible) {
+  views::View::VisibilityChanged(from, visible);
+  if (!visible && password_widget_) CancelPassword();
+}
+void ArchiveView::ContentsChanged(views::Textfield*, const std::u16string& text) {
+  submit_password_button_->SetEnabled(retry_export_ && !text.empty());
+}
+void ArchiveView::SubmitPassword() {
+  if (!retry_export_ || password_->IsIMEComposing() || password_->GetText().empty()) return;
+  auto password = base::UTF16ToUTF8(password_->GetText());
+  submit_password_button_->SetEnabled(false);
+  password_->SetText({});
+  password_->SetInvalid(false);
+  password_->SetReadOnly(true);
+  std::move(retry_export_).Run(std::move(password));
+}
 bool ArchiveView::HandleKeyEvent(views::Textfield*, const ui::KeyEvent& event) {
-  if (!retry_export_ || event.type() != ui::EventType::kKeyPressed ||
-      event.key_code() != ui::VKEY_RETURN || password_->IsIMEComposing()) return false;
-  std::move(retry_export_).Run(base::UTF16ToUTF8(password_->GetText()));
+  if (event.type() != ui::EventType::kKeyPressed || password_->IsIMEComposing()) return false;
+  if (event.key_code() == ui::VKEY_ESCAPE) {
+    export_job_->progress->canceled = true;
+    password_widget_->CloseWithReason(views::Widget::ClosedReason::kEscKeyPressed);
+    return true;
+  }
+  if (event.key_code() != ui::VKEY_RETURN || !retry_export_) return false;
+  SubmitPassword();
   return true;
 }
 void ArchiveView::RunExport(base::WeakPtr<ArchiveView> view, std::shared_ptr<ExportJob> job,
                             std::string password) {
-  view->password_->SetText({});
-  view->password_->SetVisible(false);
   view->ShowStatus(IDS_CRFILES_EXTRACTING);
   auto extract = base::BindOnce(&ExportJob::Extract, job, std::move(password));
   base::ThreadPool::PostTaskAndReply(FROM_HERE,
       {base::MayBlock(), base::WithBaseSyncPrimitives(), base::TaskPriority::USER_VISIBLE},
       std::move(extract), base::BindOnce([](base::WeakPtr<ArchiveView> view, std::shared_ptr<ExportJob> job) {
-        if (job->progress->canceled) return;
+        if (job->progress->canceled || (view && view->password_widget_ && view->password_widget_->IsClosed())) return;
         if (view && job->progress->needs_password) {
           view->retry_export_ = base::BindOnce(&ArchiveView::RunExport, view, job);
-          view->ShowStatus(IDS_CRFILES_ARCHIVE_PASSWORD_REQUIRED);
-          view->password_->SetVisible(true);
-          view->password_->RequestFocus();
+          view->ShowPassword();
           return;
         }
         const bool complete = job->files.size() == job->rows.size();
         if (view) {
+          view->ClosePassword();
           view->export_job_.reset();
           view->ShowStatus(complete ? 0 : IDS_CRFILES_EXTRACT_ERROR);
         }
